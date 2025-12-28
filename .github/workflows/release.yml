@@ -1,0 +1,84 @@
+name: release-please
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build and upload artifacts'
+        type: boolean
+        default: false
+      tag:
+        description: 'Tag to release (e.g. v0.1.0)'
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created || inputs.force_build }}
+      tag_name: ${{ steps.release.outputs.tag_name || inputs.tag }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        if: ${{ !inputs.force_build }}
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  build-freebsd:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created || inputs.force_build }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: cross-platform-actions/action@v0.32.0
+        with:
+          operating_system: freebsd
+          version: '15.0'
+          run: |
+            sudo pkg install -y curl
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            . $HOME/.cargo/env
+            cargo build --release
+            strip target/release/blackship
+            mkdir -p dist
+            cd target/release
+            tar czf blackship-freebsd-amd64.tar.gz blackship
+            mv blackship-freebsd-amd64.tar.gz ../../dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blackship-freebsd-amd64
+          path: dist/blackship-freebsd-amd64.tar.gz
+          retention-days: 1
+
+  upload-assets:
+    needs: [release-please, build-freebsd]
+    if: ${{ always() && (needs.release-please.outputs.release_created || inputs.force_build) && needs.build-freebsd.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: blackship-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz > checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: artifacts/*

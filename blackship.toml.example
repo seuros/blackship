@@ -1,0 +1,74 @@
+# Blackship Configuration Example
+# FreeBSD Jail Orchestrator with TOML-based Configuration
+
+[config]
+# Base directory for jail data
+data_dir = "/var/blackship"
+
+# Enable ZFS-backed jails
+zfs_enabled = true
+zpool = "zroot"
+dataset = "blackship"
+
+# Optional global network configuration
+[[networks]]
+name = "backend"
+subnet = "10.0.1.0/24"
+gateway = "10.0.1.1"
+
+[[networks]]
+name = "frontend"
+subnet = "10.0.2.0/24"
+
+# Database jail - no dependencies
+[[jails]]
+name = "postgres"
+path = "/jails/postgres"
+hostname = "db.local"
+
+[jails.params]
+"allow.raw_sockets" = true
+"exec.start" = "/bin/sh /etc/rc"
+"exec.stop" = "/bin/sh /etc/rc.shutdown jail"
+
+[jails.network]
+networks = ["backend"]
+ip = "10.0.1.10"
+
+# Redis cache - depends on nothing
+[[jails]]
+name = "redis"
+path = "/jails/redis"
+hostname = "cache.local"
+
+[jails.network]
+networks = ["backend"]
+ip = "10.0.1.11"
+
+# Backend API - depends on postgres and redis
+[[jails]]
+name = "api"
+path = "/jails/api"
+hostname = "api.local"
+depends_on = ["postgres", "redis"]
+
+[jails.params]
+"allow.sysvipc" = true
+
+[jails.network]
+networks = ["backend"]
+ip = "10.0.1.20"
+
+# Frontend web server - depends on api
+[[jails]]
+name = "nginx"
+path = "/jails/nginx"
+hostname = "web.local"
+depends_on = ["api"]
+
+[jails.network]
+networks = ["frontend", "backend"]
+ip = "10.0.2.10"
+
+[jails.mount]
+volumes = ["/data/static:/usr/local/www/static:ro"]

@@ -1,0 +1,18 @@
+# Blackship Configuration
+
+[config]
+data_dir = "/var/blackship"
+
+[[jails]]
+name = "database"
+release = "15.0-RELEASE"
+
+[[jails]]
+name = "backend"
+release = "15.0-RELEASE"
+depends_on = ["database"]
+
+[[jails]]
+name = "frontend"
+release = "15.0-RELEASE"
+depends_on = ["backend"]
