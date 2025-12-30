@@ -1,0 +1,187 @@
+PORTNAME=	blackship
+DISTVERSION=	0.1.1
+CATEGORIES=	sysutils
+
+MAINTAINER=	oss@seuros.com
+COMMENT=	FreeBSD jail manager with state machine control
+WWW=		https://github.com/seuros/blackship
+
+LICENSE=	BSD3CLAUSE
+LICENSE_FILE=	${WRKSRC}/LICENSE
+
+LIB_DEPENDS=	liblzma.so:archivers/xz
+
+USES=		cargo
+USE_GITHUB=	yes
+GH_ACCOUNT=	seuros
+
+CARGO_CRATES=	adler2-2.0.1 \
+		anstream-0.6.21 \
+		anstyle-1.0.13 \
+		anstyle-parse-0.2.7 \
+		anstyle-query-1.1.5 \
+		anstyle-wincon-3.0.11 \
+		base64-0.22.1 \
+		bitflags-2.10.0 \
+		block-buffer-0.10.4 \
+		breaker-machines-0.7.2 \
+		byteorder-1.5.0 \
+		bytes-1.11.0 \
+		cc-1.2.51 \
+		cfg-if-1.0.4 \
+		chrono-machines-0.2.1 \
+		chrono-machines-0.3.0 \
+		clap-4.5.53 \
+		clap_builder-4.5.53 \
+		clap_complete-4.5.62 \
+		clap_derive-4.5.49 \
+		clap_lex-0.7.6 \
+		colorchoice-1.0.4 \
+		cpufeatures-0.2.17 \
+		crc32fast-1.5.0 \
+		crossbeam-0.8.4 \
+		crossbeam-channel-0.5.15 \
+		crossbeam-deque-0.8.6 \
+		crossbeam-epoch-0.9.18 \
+		crossbeam-queue-0.3.12 \
+		crossbeam-utils-0.8.21 \
+		crypto-common-0.1.7 \
+		digest-0.10.7 \
+		equivalent-1.0.2 \
+		errno-0.3.14 \
+		filetime-0.2.26 \
+		find-msvc-tools-0.1.6 \
+		fixedbitset-0.5.7 \
+		flate2-1.1.5 \
+		foldhash-0.1.5 \
+		generic-array-0.14.7 \
+		getrandom-0.2.16 \
+		getrandom-0.3.4 \
+		hashbrown-0.15.5 \
+		hashbrown-0.16.1 \
+		heck-0.5.0 \
+		hex-0.4.3 \
+		http-1.4.0 \
+		httparse-1.10.1 \
+		indexmap-2.12.1 \
+		ipnet-2.11.0 \
+		is_terminal_polyfill-1.70.2 \
+		itoa-1.0.17 \
+		jobserver-0.1.34 \
+		libc-0.2.178 \
+		libredox-0.1.12 \
+		linux-raw-sys-0.11.0 \
+		log-0.4.29 \
+		lzma-sys-0.1.20 \
+		memchr-2.7.6 \
+		miniz_oxide-0.8.9 \
+		mio-1.1.1 \
+		nom-8.0.0 \
+		once_cell-1.21.3 \
+		once_cell_polyfill-1.70.2 \
+		percent-encoding-2.3.2 \
+		petgraph-0.8.3 \
+		pin-project-lite-0.2.16 \
+		pkg-config-0.3.32 \
+		ppv-lite86-0.2.21 \
+		proc-macro2-1.0.104 \
+		quote-1.0.42 \
+		r-efi-5.3.0 \
+		rand-0.9.2 \
+		rand_chacha-0.9.0 \
+		rand_core-0.9.3 \
+		redox_syscall-0.7.0 \
+		ring-0.17.14 \
+		rustix-1.1.3 \
+		rustls-0.23.35 \
+		rustls-pki-types-1.13.2 \
+		rustls-webpki-0.103.8 \
+		serde-1.0.228 \
+		serde_core-1.0.228 \
+		serde_derive-1.0.228 \
+		serde_json-1.0.148 \
+		serde_spanned-0.6.9 \
+		sha2-0.10.9 \
+		shlex-1.3.0 \
+		signal-hook-registry-1.4.8 \
+		simd-adler32-0.3.8 \
+		state-machines-0.6.0 \
+		state-machines-0.7.0 \
+		state-machines-core-0.6.0 \
+		state-machines-core-0.7.0 \
+		state-machines-macro-0.6.0 \
+		state-machines-macro-0.7.0 \
+		strsim-0.11.1 \
+		subtle-2.6.1 \
+		syn-2.0.111 \
+		tar-0.4.44 \
+		thiserror-2.0.17 \
+		thiserror-impl-2.0.17 \
+		throttle-machines-0.1.0 \
+		tokio-1.48.0 \
+		tokio-macros-2.6.0 \
+		toml-0.8.23 \
+		toml_datetime-0.6.11 \
+		toml_edit-0.22.27 \
+		toml_write-0.1.2 \
+		typenum-1.19.0 \
+		unicode-ident-1.0.22 \
+		untrusted-0.9.0 \
+		ureq-3.1.4 \
+		ureq-proto-0.5.3 \
+		utf-8-0.7.6 \
+		utf8parse-0.2.2 \
+		version_check-0.9.5 \
+		wasi-0.11.1+wasi-snapshot-preview1 \
+		wasip2-1.0.1+wasi-0.2.4 \
+		webpki-roots-1.0.4 \
+		windows-link-0.2.1 \
+		windows-sys-0.52.0 \
+		windows-sys-0.60.2 \
+		windows-sys-0.61.2 \
+		windows-targets-0.52.6 \
+		windows-targets-0.53.5 \
+		windows_aarch64_gnullvm-0.52.6 \
+		windows_aarch64_gnullvm-0.53.1 \
+		windows_aarch64_msvc-0.52.6 \
+		windows_aarch64_msvc-0.53.1 \
+		windows_i686_gnu-0.52.6 \
+		windows_i686_gnu-0.53.1 \
+		windows_i686_gnullvm-0.52.6 \
+		windows_i686_gnullvm-0.53.1 \
+		windows_i686_msvc-0.52.6 \
+		windows_i686_msvc-0.53.1 \
+		windows_x86_64_gnu-0.52.6 \
+		windows_x86_64_gnu-0.53.1 \
+		windows_x86_64_gnullvm-0.52.6 \
+		windows_x86_64_gnullvm-0.53.1 \
+		windows_x86_64_msvc-0.52.6 \
+		windows_x86_64_msvc-0.53.1 \
+		winnow-0.7.14 \
+		wit-bindgen-0.46.0 \
+		xattr-1.6.1 \
+		xz2-0.1.7 \
+		zerocopy-0.8.31 \
+		zerocopy-derive-0.8.31 \
+		zeroize-1.8.2 \
+		zmij-1.0.0 \
+		zstd-0.13.3 \
+		zstd-safe-7.2.4 \
+		zstd-sys-2.0.16+zstd.1.5.7
+
+SUB_FILES=	pkg-message
+SUB_LIST=	ETCDIR=${ETCDIR}
+
+PLIST_FILES=	bin/blackship \
+		"@sample ${ETCDIR}/blackship.toml.sample"
+
+PLIST_DIRS=	${ETCDIR}
+
+USE_RC_SUBR=	blackship_warden
+
+post-install:
+	${STRIP_CMD} ${STAGEDIR}${PREFIX}/bin/blackship
+	@${MKDIR} ${STAGEDIR}${ETCDIR}
+	${INSTALL_DATA} ${FILESDIR}/blackship.toml.sample ${STAGEDIR}${ETCDIR}/
+
+.include <bsd.port.mk>

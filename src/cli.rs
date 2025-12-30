@@ -79,8 +79,37 @@ pub enum Commands {
     /// Validate configuration
     Check,
 
-    /// Initialize ZFS datasets
-    Init,
+    /// System setup (PF firewall anchor, etc.)
+    Setup,
+
+    /// Initialize a new Jailfile in the current directory
+    Init {
+        /// Output file name
+        #[arg(short, long, default_value = "Jailfile")]
+        file: PathBuf,
+
+        /// Base FreeBSD release
+        #[arg(short, long)]
+        release: Option<String>,
+
+        /// Use TOML format instead of Dockerfile-like format
+        #[arg(long)]
+        toml: bool,
+
+        /// Overwrite existing file
+        #[arg(short = 'y', long)]
+        force: bool,
+    },
+
+    /// Orchestrate multiple jails (like docker-compose)
+    Armada {
+        /// Configuration files (can specify multiple, merged in order)
+        #[arg(short, long = "file", default_value = "blackship.toml")]
+        files: Vec<PathBuf>,
+
+        #[command(subcommand)]
+        action: ArmadaAction,
+    },
 
     /// Execute a command in a running jail
     Exec {
@@ -384,6 +413,77 @@ pub enum SnapshotAction {
 
         /// Snapshot name
         snapshot: String,
+    },
+}
+
+/// Actions for the armada command (docker-compose style orchestration)
+#[derive(Subcommand)]
+pub enum ArmadaAction {
+    /// Initialize a new blackship.toml
+    Init {
+        /// Output file name
+        #[arg(short, long, default_value = "blackship.toml")]
+        file: PathBuf,
+
+        /// Overwrite existing file
+        #[arg(short = 'y', long)]
+        force: bool,
+    },
+
+    /// Start all jails (auto-builds if needed)
+    Up {
+        /// Run in background (warden mode)
+        #[arg(short, long)]
+        detach: bool,
+
+        /// Only start specific jails
+        jails: Vec<String>,
+
+        /// Force rebuild even if jail exists
+        #[arg(long)]
+        build: bool,
+
+        /// Don't build, fail if jail doesn't exist
+        #[arg(long)]
+        no_build: bool,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Stop all jails
+    Down {
+        /// Only stop specific jails
+        jails: Vec<String>,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Build jail images from Jailfiles
+    Build {
+        /// Only build specific jails
+        jails: Vec<String>,
+
+        /// Show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Show status of all jails
+    Ps {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Validate and show configuration
+    Config {
+        /// Show resolved (merged) configuration
+        #[arg(long)]
+        show: bool,
     },
 }
 

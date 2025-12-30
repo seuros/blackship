@@ -6,7 +6,13 @@
 //! - Bridge configuration
 
 use crate::error::{Error, Result};
-use std::process::Command;
+use crate::network::ioctl;
+use std::ffi::CString;
+
+// FreeBSD kldload syscall - not in libc crate
+unsafe extern "C" {
+    fn kldload(file: *const libc::c_char) -> libc::c_int;
+}
 
 /// A bridge interface
 #[derive(Debug, Clone)]
@@ -26,33 +32,11 @@ impl Bridge {
         // Load required kernel modules
         Self::load_modules()?;
 
-        // Create bridge
-        let output = Command::new("ifconfig")
-            .args(["bridge", "create", "name", name])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to create bridge: {}", e)))?;
+        // Create bridge using native ioctl
+        ioctl::create_interface("bridge", Some(name))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!(
-                "Failed to create bridge {}: {}",
-                name, stderr
-            )));
-        }
-
-        // Bring interface up
-        let output = Command::new("ifconfig")
-            .args([name, "up"])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to bring up bridge: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!(
-                "Failed to bring up bridge {}: {}",
-                name, stderr
-            )));
-        }
+        // Bring interface up using native ioctl
+        ioctl::set_interface_up(name, true)?;
 
         Ok(Self {
             name: name.to_string(),
@@ -87,131 +71,111 @@ impl Bridge {
 
     /// Check if a bridge exists
     pub fn exists(name: &str) -> Result<bool> {
-        let output = Command::new("ifconfig")
-            .arg(name)
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to check interface: {}", e)))?;
-
-        Ok(output.status.success())
+        // Use native ioctl to check if interface exists
+        ioctl::interface_exists(name)
     }
 
     /// Destroy the bridge interface
     pub fn destroy(&self) -> Result<()> {
-        let output = Command::new("ifconfig")
-            .args([&self.name, "destroy"])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to destroy bridge: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!(
-                "Failed to destroy bridge {}: {}",
-                self.name, stderr
-            )));
-        }
-
-        Ok(())
+        // Use native ioctl to destroy interface
+        ioctl::destroy_interface(&self.name)
     }
 
     /// Add a member interface to the bridge (_unused: future feature)
     #[allow(dead_code)]
     pub fn add_member(&self, interface: &str) -> Result<()> {
-        let output = Command::new("ifconfig")
-            .args([&self.name, "addm", interface])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to add member: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!(
-                "Failed to add {} to bridge {}: {}",
-                interface, self.name, stderr
-            )));
-        }
-
-        Ok(())
+        // Use native ioctl to add member to bridge
+        ioctl::bridge_add_member(&self.name, interface)
     }
 
     /// Remove a member interface from the bridge (_unused: future feature)
     #[allow(dead_code)]
     pub fn remove_member(&self, interface: &str) -> Result<()> {
-        let output = Command::new("ifconfig")
-            .args([&self.name, "deletem", interface])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to remove member: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!(
-                "Failed to remove {} from bridge {}: {}",
-                interface, self.name, stderr
-            )));
-        }
-
-        Ok(())
+        // Use native ioctl to remove member from bridge
+        ioctl::bridge_delete_member(&self.name, interface)
     }
 
     /// Set an IP address on the bridge
+    ///
+    /// Uses native SIOCSIFADDR ioctl syscall.
     pub fn set_address(&self, addr: &str) -> Result<()> {
-        let output = Command::new("ifconfig")
-            .args([&self.name, addr])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to set address: {}", e)))?;
+        ioctl::set_ipv4_address(&self.name, addr)
+    }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!(
-                "Failed to set address on {}: {}",
-                self.name, stderr
-            )));
+    /// Enable VLAN filtering on the bridge (FreeBSD 15.0+)
+    ///
+    /// Uses native SIOCSDRVSPEC ioctl with BRDGSFLAGS command.
+    pub fn enable_vlan_filtering(&self) -> Result<()> {
+        ioctl::bridge_enable_vlan_filtering(&self.name)
+    }
+
+    /// Add a trunk member with tagged VLANs (FreeBSD 15.0+)
+    ///
+    /// The interface is added to the bridge with specified tagged VLAN IDs.
+    /// Uses native SIOCSDRVSPEC ioctls for bridge member add and VLAN set.
+    pub fn add_trunk_member(&self, interface: &str, tagged_vlans: &[u16]) -> Result<()> {
+        if tagged_vlans.is_empty() {
+            return Err(Error::Network(
+                "At least one tagged VLAN required for trunk".to_string(),
+            ));
         }
 
-        Ok(())
+        // First add the member to the bridge
+        ioctl::bridge_add_member(&self.name, interface)?;
+
+        // Then set the tagged VLANs
+        ioctl::bridge_set_tagged_vlans(&self.name, interface, tagged_vlans)
+    }
+
+    /// Add a member interface with untagged VLAN (PVID) (FreeBSD 15.0+)
+    ///
+    /// The interface is added as an access port with the specified VLAN ID.
+    /// Uses native SIOCSDRVSPEC ioctls for bridge member add and PVID set.
+    pub fn add_member_untagged(&self, interface: &str, vlan_id: u16) -> Result<()> {
+        // First add the member to the bridge
+        ioctl::bridge_add_member(&self.name, interface)?;
+
+        // Then set the PVID
+        ioctl::bridge_set_pvid(&self.name, interface, vlan_id)
+    }
+
+    /// Disable hardware VLAN filtering on an interface
+    ///
+    /// Some NICs (especially Broadcom) have buggy VLAN hardware filtering.
+    /// Uses native SIOCGIFCAP/SIOCSIFCAP ioctls to clear IFCAP_VLAN_HWFILTER.
+    pub fn disable_hwfilter(interface: &str) -> Result<()> {
+        ioctl::disable_hwfilter(interface)
     }
 
     /// List member interfaces
+    ///
+    /// Uses native SIOCGDRVSPEC ioctl with BRDGGIFS command.
     pub fn members(&self) -> Result<Vec<String>> {
-        let output = Command::new("ifconfig")
-            .arg(&self.name)
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to get bridge info: {}", e)))?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut members = Vec::new();
-
-        for line in stdout.lines() {
-            let line = line.trim();
-            if line.starts_with("member:")
-                && let Some(iface) = line.split_whitespace().nth(1) {
-                    members.push(iface.to_string());
-                }
-        }
-
-        Ok(members)
+        ioctl::bridge_list_members(&self.name)
     }
 
-    /// Load required kernel modules for bridging
+    /// Load required kernel modules for bridging using native syscall
     fn load_modules() -> Result<()> {
         let modules = ["if_bridge", "bridgestp", "if_epair"];
 
         for module in modules {
-            let output = Command::new("kldload").arg(module).output().map_err(|e| {
-                Error::Network(format!("Failed to load module {}: {}", module, e))
+            let module_cstr = CString::new(module).map_err(|e| {
+                Error::Network(format!("Invalid module name {}: {}", module, e))
             })?;
 
-            // Ignore "already loaded" errors (exit code 1 with specific message)
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if !stderr.contains("already loaded") && !stderr.contains("module already loaded") {
-                    // Not an error if module is built-in or already loaded
-                    if stderr.contains("No such file") {
-                        // Module might be built into kernel, that's fine
-                        continue;
-                    }
+            // Use native kldload(2) syscall instead of spawning process
+            let result = unsafe { kldload(module_cstr.as_ptr()) };
+
+            if result < 0 {
+                let err = std::io::Error::last_os_error();
+                let errno = err.raw_os_error().unwrap_or(0);
+
+                // Ignore if module is already loaded (EEXIST) or built-in (ENOENT)
+                if errno != libc::EEXIST && errno != libc::ENOENT {
+                    return Err(Error::Network(format!(
+                        "Failed to load module {}: {}",
+                        module, err
+                    )));
                 }
             }
         }
@@ -248,18 +212,10 @@ pub fn destroy_bridge(name: &str, force: bool) -> Result<()> {
 }
 
 /// List all bridge interfaces on the system
+///
+/// Uses native if_nameindex(3) to enumerate interfaces.
 pub fn list_bridges() -> Result<Vec<String>> {
-    let output = Command::new("ifconfig")
-        .args(["-l", "-g", "bridge"])
-        .output()
-        .map_err(|e| Error::Network(format!("Failed to list bridges: {}", e)))?;
-
-    if !output.status.success() {
-        return Ok(Vec::new());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.split_whitespace().map(String::from).collect())
+    ioctl::list_bridges()
 }
 
 #[cfg(test)]

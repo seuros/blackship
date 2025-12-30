@@ -1,0 +1,13 @@
+Blackship is a FreeBSD jail orchestrator that provides a Docker-like
+experience for managing jails. It offers:
+
+- Declarative TOML configuration for jail definitions
+- Dependency management with automatic start/stop ordering
+- State machine-driven lifecycle control
+- VNET networking with bridge-based configuration
+- ZFS integration for snapshots, clones, and efficient export/import
+- PF-based port forwarding
+- Health checks (HTTP, TCP, command-based) with automatic restarts
+- Lifecycle hooks (pre/post start/stop scripts)
+- Jailfile templates for reproducible jail creation
+- Warden supervisor mode for jail auto-restart

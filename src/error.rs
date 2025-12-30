@@ -90,6 +90,20 @@ pub enum Error {
     #[error("Unsupported architecture: {0}")]
     UnsupportedArch(String),
 
+    // System errors
+    #[error("Feature '{feature}' requires FreeBSD {minimum}+, but running {current}")]
+    UnsupportedOsVersion {
+        feature: String,
+        minimum: String,
+        current: String,
+    },
+
+    #[error("Invalid version format: {0}")]
+    InvalidVersion(String),
+
+    #[error("Command '{command}' failed: {message}")]
+    CommandFailed { command: String, message: String },
+
     // Network errors
     #[error("Network error: {0}")]
     Network(String),
@@ -110,6 +124,10 @@ pub enum Error {
 
     #[error("Hook timeout after {0} seconds")]
     HookTimeout(u64),
+
+    // Jail execution timeout
+    #[error("Jail command timeout after {0} seconds")]
+    JailTimeout(u64),
 
     // Health check errors
     #[error("Health check failed for jail '{jail}' ({check}): {message}")]

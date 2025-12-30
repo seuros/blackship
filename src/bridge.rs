@@ -14,7 +14,8 @@ use crate::jail::{
 };
 use crate::jail::state::State as JailState;
 use crate::manifest::{BlackshipConfig, DnsConfig};
-use crate::network::{IpAllocator, IpPool, VnetConfig, VnetSetup};
+use crate::network::{Bridge as NetworkBridge, IpAllocator, IpPool, VnetConfig, VnetSetup};
+use crate::sys::OsVersion;
 use crate::warden::WardenHandle;
 use crate::zfs::ZfsManager;
 use ipnet::IpNet;
@@ -73,6 +74,39 @@ pub struct Bridge {
 impl Bridge {
     /// Create a new bridge from configuration
     pub fn new(config: BlackshipConfig) -> Result<Self> {
+        // Detect OS version for feature compatibility checks
+        let os_version = OsVersion::detect_kernel()?;
+
+        // Check if VLAN filtering is being used and verify OS version
+        if let Some(ref bridge_config) = config.config.bridge {
+            if bridge_config.vlan_filtering && !os_version.supports_vlan_filtering() {
+                return Err(Error::UnsupportedOsVersion {
+                    feature: "VLAN filtering".to_string(),
+                    minimum: "15.0".to_string(),
+                    current: os_version.to_string(),
+                });
+            }
+
+            // Setup bridge with VLAN filtering if configured
+            if bridge_config.vlan_filtering {
+                let bridge = NetworkBridge::create_or_open(&bridge_config.name)?;
+                bridge.enable_vlan_filtering()?;
+
+                // Add trunk interface if configured
+                if let Some(ref trunk) = bridge_config.trunk {
+                    // Disable hardware VLAN filter if requested (for Broadcom NICs)
+                    if trunk.disable_hwfilter {
+                        NetworkBridge::disable_hwfilter(&trunk.interface)?;
+                    }
+
+                    // Add trunk member with tagged VLANs
+                    if !trunk.tagged.is_empty() {
+                        bridge.add_trunk_member(&trunk.interface, &trunk.tagged)?;
+                    }
+                }
+            }
+        }
+
         let mut graph = DiGraph::new();
         let mut node_map = HashMap::new();
 
@@ -153,6 +187,13 @@ impl Bridge {
     /// Set a Warden handle for jail event notifications
     pub fn set_warden_handle(&mut self, handle: WardenHandle) {
         self.warden_handle = Some(handle);
+    }
+
+    /// Resolve a jail identifier to (service_name, full_name)
+    fn resolve_jail_names(&self, name: &str) -> Result<(String, String)> {
+        self.config
+            .resolve_jail_names(name)
+            .ok_or_else(|| Error::JailNotFound(name.to_string()))
     }
 
     /// Get the start order (topological sort)
@@ -237,9 +278,10 @@ impl Bridge {
         println!("Would start {} jail(s):\n", jails_to_start.len());
 
         for name in &jails_to_start {
-            let jail_def = self.config.get_jail(name);
+            let (service_name, full_name) = self.resolve_jail_names(name)?;
+            let jail_def = self.config.get_jail(&service_name);
             if let Some(jail_def) = jail_def {
-                let path = jail_def.effective_path(&self.config.config);
+                let path = jail_def.effective_path(&self.config.config, &full_name);
                 let ip = jail_def
                     .network
                     .as_ref()
@@ -247,7 +289,7 @@ impl Bridge {
                     .map(|ip| ip.to_string())
                     .unwrap_or_else(|| "none".to_string());
 
-                println!("  [START] {}", name);
+                println!("  [START] {}", full_name);
                 println!("          Path: {}", path.display());
                 println!("          IP: {}", ip);
 
@@ -299,13 +341,14 @@ impl Bridge {
         println!("Would stop {} jail(s):\n", jails_to_stop.len());
 
         for name in &jails_to_stop {
-            let is_running = jail_getid(name).is_ok();
+            let (service_name, full_name) = self.resolve_jail_names(name)?;
+            let is_running = jail_getid(&full_name).is_ok();
             let status = if is_running { "running" } else { "stopped" };
 
-            println!("  [STOP] {} (currently {})", name, status);
+            println!("  [STOP] {} (currently {})", full_name, status);
 
             // Show hooks that would run
-            if let Some(jail_def) = self.config.get_jail(name)
+            if let Some(jail_def) = self.config.get_jail(&service_name)
                 && !jail_def.hooks.is_empty() {
                     let pre_stop: Vec<_> = jail_def
                         .hooks
@@ -337,12 +380,13 @@ impl Bridge {
             let mut jails_data: Vec<serde_json::Value> = Vec::new();
 
             for jail_def in &self.config.jails {
-                let (state, jid) = if let Some(instance) = self.instances.get(&jail_def.name) {
+                let full_name = self.config.jail_name(&jail_def.name);
+                let (state, jid) = if let Some(instance) = self.instances.get(&full_name) {
                     let state = format!("{:?}", instance.state());
                     let jid = instance.jid;
                     (state, jid)
                 } else {
-                    match jail_getid(&jail_def.name) {
+                    match jail_getid(&full_name) {
                         Ok(jid) => ("Running".to_string(), Some(jid)),
                         Err(_) => ("Stopped".to_string(), None),
                     }
@@ -355,11 +399,11 @@ impl Bridge {
                     .map(|ip| ip.to_string());
 
                 jails_data.push(serde_json::json!({
-                    "name": jail_def.name,
+                    "name": full_name,
                     "state": state,
                     "jid": jid,
                     "ip": ip,
-                    "path": jail_def.effective_path(&self.config.config).to_string_lossy()
+                    "path": jail_def.effective_path(&self.config.config, &full_name).to_string_lossy()
                 }));
             }
 
@@ -369,18 +413,19 @@ impl Bridge {
             println!("{}", "-".repeat(42));
 
             for jail_def in &self.config.jails {
-                let (state, jid) = if let Some(instance) = self.instances.get(&jail_def.name) {
+                let full_name = self.config.jail_name(&jail_def.name);
+                let (state, jid) = if let Some(instance) = self.instances.get(&full_name) {
                     let state = format!("{:?}", instance.state());
                     let jid = instance.jid.map(|j| j.to_string()).unwrap_or_default();
                     (state, jid)
                 } else {
-                    match jail_getid(&jail_def.name) {
+                    match jail_getid(&full_name) {
                         Ok(jid) => ("Running".to_string(), jid.to_string()),
                         Err(_) => ("Stopped".to_string(), String::new()),
                     }
                 };
 
-                println!("{:<20} {:<10} {:<10}", jail_def.name, state, jid);
+                println!("{:<20} {:<10} {:<10}", full_name, state, jid);
             }
         }
 
@@ -396,7 +441,8 @@ impl Bridge {
         let order = self.start_order()?;
         println!("\nStart order:");
         for (i, name) in order.iter().enumerate() {
-            println!("  {}. {}", i + 1, name);
+            let full_name = self.config.jail_name(name);
+            println!("  {}. {}", i + 1, full_name);
         }
 
         // Check ZFS status
@@ -409,10 +455,11 @@ impl Bridge {
         // Check jail paths
         println!("\nJail paths:");
         for jail in &self.config.jails {
-            let path = jail.effective_path(&self.config.config);
+            let full_name = self.config.jail_name(&jail.name);
+            let path = jail.effective_path(&self.config.config, &full_name);
             let exists = path.exists();
             let status = if exists { "exists" } else { "missing" };
-            println!("  {}: {} ({})", jail.name, path.display(), status);
+            println!("  {}: {} ({})", full_name, path.display(), status);
         }
 
         Ok(())
@@ -445,29 +492,30 @@ impl Bridge {
             }
         }
 
+        let (service_name, full_name) = self.resolve_jail_names(name)?;
         let jail_def = self
             .config
-            .get_jail(name)
+            .get_jail(&service_name)
             .ok_or_else(|| Error::JailNotFound(name.to_string()))?;
 
         // Check if already running
-        if jail_getid(name).is_ok() {
-            return Err(Error::JailAlreadyRunning(name.to_string()));
+        if jail_getid(&full_name).is_ok() {
+            return Err(Error::JailAlreadyRunning(full_name));
         }
 
         // Track resources for cleanup on failure
         let mut created_zfs_dataset = false;
 
-        // Create ZFS dataset if needed
+        // Create ZFS dataset if needed (use full_name for system resources)
         let path = if let Some(zfs) = &self.zfs {
             if jail_def.path.is_none() {
                 created_zfs_dataset = true;
-                zfs.create_jail_dataset(name)?
+                zfs.create_jail_dataset(&full_name)?
             } else {
-                jail_def.effective_path(&self.config.config)
+                jail_def.effective_path(&self.config.config, &full_name)
             }
         } else {
-            jail_def.effective_path(&self.config.config)
+            jail_def.effective_path(&self.config.config, &full_name)
         };
 
         // Check path exists - auto-provision from release if available
@@ -478,17 +526,16 @@ impl Bridge {
                 if release_path.exists() {
                     println!(
                         "Provisioning jail '{}' from release '{}'...",
-                        name, release
+                        full_name, release
                     );
 
                     // Create the jail directory
                     if let Err(e) = std::fs::create_dir_all(&path) {
                         // Cleanup ZFS dataset if we created it
-                        if created_zfs_dataset {
-                            if let Some(zfs) = &self.zfs {
-                                let _ = zfs.destroy_jail_dataset(name);
+                        if created_zfs_dataset
+                            && let Some(zfs) = &self.zfs {
+                                let _ = zfs.destroy_jail_dataset(&full_name);
                             }
-                        }
                         return Err(Error::JailOperation(format!(
                             "Failed to create jail directory: {}",
                             e
@@ -504,16 +551,15 @@ impl Bridge {
 
                     match status {
                         Ok(s) if s.success() => {
-                            println!("Jail '{}' provisioned from release '{}'", name, release);
+                            println!("Jail '{}' provisioned from release '{}'", full_name, release);
                         }
                         Ok(s) => {
                             // Cleanup on failure
                             let _ = std::fs::remove_dir_all(&path);
-                            if created_zfs_dataset {
-                                if let Some(zfs) = &self.zfs {
-                                    let _ = zfs.destroy_jail_dataset(name);
+                            if created_zfs_dataset
+                                && let Some(zfs) = &self.zfs {
+                                    let _ = zfs.destroy_jail_dataset(&full_name);
                                 }
-                            }
                             return Err(Error::JailOperation(format!(
                                 "Failed to copy release: cp exited with status {}",
                                 s
@@ -522,11 +568,10 @@ impl Bridge {
                         Err(e) => {
                             // Cleanup on failure
                             let _ = std::fs::remove_dir_all(&path);
-                            if created_zfs_dataset {
-                                if let Some(zfs) = &self.zfs {
-                                    let _ = zfs.destroy_jail_dataset(name);
+                            if created_zfs_dataset
+                                && let Some(zfs) = &self.zfs {
+                                    let _ = zfs.destroy_jail_dataset(&full_name);
                                 }
-                            }
                             return Err(Error::JailOperation(format!(
                                 "Failed to execute cp command: {}",
                                 e
@@ -535,11 +580,10 @@ impl Bridge {
                     }
                 } else {
                     // Release not found
-                    if created_zfs_dataset {
-                        if let Some(zfs) = &self.zfs {
-                            let _ = zfs.destroy_jail_dataset(name);
+                    if created_zfs_dataset
+                        && let Some(zfs) = &self.zfs {
+                            let _ = zfs.destroy_jail_dataset(&full_name);
                         }
-                    }
                     return Err(Error::JailOperation(format!(
                         "Release '{}' not found at {}. Run 'blackship bootstrap {}' first.",
                         release,
@@ -550,11 +594,10 @@ impl Bridge {
             } else {
                 // No release specified, return original error
                 // Cleanup ZFS dataset if we created it
-                if created_zfs_dataset {
-                    if let Some(zfs) = &self.zfs {
-                        let _ = zfs.destroy_jail_dataset(name);
+                if created_zfs_dataset
+                    && let Some(zfs) = &self.zfs {
+                        let _ = zfs.destroy_jail_dataset(&full_name);
                     }
-                }
                 return Err(Error::JailPathNotFound(path));
             }
         }
@@ -565,7 +608,7 @@ impl Bridge {
                 // Cleanup on DNS config failure
                 if created_zfs_dataset
                     && let Some(zfs) = &self.zfs {
-                        let _ = zfs.destroy_jail_dataset(name);
+                        let _ = zfs.destroy_jail_dataset(&full_name);
                     }
                 return Err(e);
             }
@@ -595,11 +638,10 @@ impl Bridge {
                     }
                     Err(e) => {
                         // Cleanup on allocation failure
-                        if created_zfs_dataset {
-                            if let Some(zfs) = &self.zfs {
-                                let _ = zfs.destroy_jail_dataset(name);
+                        if created_zfs_dataset
+                            && let Some(zfs) = &self.zfs {
+                                let _ = zfs.destroy_jail_dataset(&full_name);
                             }
-                        }
                         return Err(e);
                     }
                 }
@@ -612,7 +654,7 @@ impl Bridge {
 
         // Setup hook runner and context
         let hook_runner = HookRunner::new(jail_def.hooks.clone()).verbose(self.verbose);
-        let mut hook_context = HookContext::new(name, &path);
+        let mut hook_context = HookContext::new(&full_name, &path);
 
         // Add IP to context if available
         if let Some(ip) = effective_ip {
@@ -627,7 +669,7 @@ impl Bridge {
             }
             if created_zfs_dataset
                 && let Some(zfs) = &self.zfs {
-                    let _ = zfs.destroy_jail_dataset(name);
+                    let _ = zfs.destroy_jail_dataset(&full_name);
                 }
             return Err(e);
         }
@@ -637,13 +679,13 @@ impl Bridge {
 
         // Create VNET setup for VNET jails before creating the jail
         let mut vnet_setup: Option<VnetSetup> = None;
-        if is_vnet {
-            if let Some(network) = &jail_def.network {
+        if is_vnet
+            && let Some(network) = &jail_def.network {
                 // Validate VNET configuration
                 let bridge_name = network.bridge.as_ref().ok_or_else(|| {
                     Error::Network(format!(
                         "VNET jail '{}' requires a bridge configuration",
-                        name
+                        full_name
                     ))
                 })?;
 
@@ -670,19 +712,23 @@ impl Bridge {
                     vnet_config = vnet_config.with_mac_address(mac.clone());
                 }
 
+                // Set VLAN ID if configured (FreeBSD 15.0+)
+                if let Some(vlan_id) = network.vlan_id {
+                    vnet_config = vnet_config.with_vlan_id(vlan_id);
+                }
+
                 // Create VnetSetup - this handles epair creation, MAC setting, and bridge addition
-                let setup = match VnetSetup::create(name, vnet_config) {
+                let setup = match VnetSetup::create(&full_name, vnet_config) {
                     Ok(s) => s,
                     Err(e) => {
                         // Cleanup on VnetSetup creation failure
                         if let Some((network_name, ip)) = &allocated_ip {
                             self.ip_allocator.release(network_name, ip);
                         }
-                        if created_zfs_dataset {
-                            if let Some(zfs) = &self.zfs {
-                                let _ = zfs.destroy_jail_dataset(name);
+                        if created_zfs_dataset
+                            && let Some(zfs) = &self.zfs {
+                                let _ = zfs.destroy_jail_dataset(&full_name);
                             }
-                        }
                         return Err(e);
                     }
                 };
@@ -702,11 +748,10 @@ impl Bridge {
 
                 vnet_setup = Some(setup);
             }
-        }
 
-        // Build jail parameters
+        // Build jail parameters (use full_name for FreeBSD jail name)
         let mut params = HashMap::new();
-        params.insert("name".to_string(), ParamValue::String(name.to_string()));
+        params.insert("name".to_string(), ParamValue::String(full_name.clone()));
 
         if let Some(hostname) = &jail_def.hostname {
             params.insert(
@@ -739,12 +784,12 @@ impl Bridge {
         }
 
         // Create the jail
-        println!("Starting jail '{}'...", name);
+        println!("Starting jail '{}'...", full_name);
         let jid = match jail_create(&path, params) {
             Ok(jid) => jid,
             Err(e) => {
                 // Cleanup on jail creation failure
-                eprintln!("Failed to create jail '{}': {}", name, e);
+                eprintln!("Failed to create jail '{}': {}", full_name, e);
                 // Cleanup VnetSetup if created
                 if let Some(setup) = vnet_setup {
                     let _ = setup.cleanup();
@@ -756,23 +801,23 @@ impl Bridge {
                 if created_zfs_dataset {
                     eprintln!("Cleaning up ZFS dataset...");
                     if let Some(zfs) = &self.zfs {
-                        let _ = zfs.destroy_jail_dataset(name);
+                        let _ = zfs.destroy_jail_dataset(&full_name);
                     }
                 }
                 // Track the failed instance
-                let jail_config = JailConfig::new(name, &path);
+                let jail_config = JailConfig::new(&full_name, &path);
                 let mut instance = JailInstance::new(jail_config);
                 instance.start().ok(); // Transition to Starting
                 instance.fail().ok();  // Transition to Failed
-                self.instances.insert(name.to_string(), instance);
+                self.instances.insert(full_name.clone(), instance);
                 // Notify Warden of failure
                 if let Some(handle) = &self.warden_handle {
-                    let _ = handle.notify_failure_blocking(name);
+                    let _ = handle.notify_failure_blocking(&full_name);
                 }
                 return Err(e);
             }
         };
-        println!("Jail '{}' started with JID {}", name, jid);
+        println!("Jail '{}' started with JID {}", full_name, jid);
 
 
         // For VNET jails: attach the VnetSetup to the jail (moves interface and configures networking)
@@ -781,14 +826,14 @@ impl Bridge {
             if let Err(e) = setup.attach_to_jail(jid) {
                 eprintln!(
                     "Warning: Failed to attach VNET to jail '{}': {}",
-                    name, e
+                    full_name, e
                 );
                 eprintln!("VNET networking may not work correctly.");
             } else if self.verbose {
                 println!(
                     "  Moved {} into jail {} (JID {})",
                     setup.jail_interface(),
-                    name,
+                    full_name,
                     jid
                 );
                 println!(
@@ -800,7 +845,7 @@ impl Bridge {
             }
 
             // Store the VnetSetup for cleanup on stop
-            self.vnet_setups.insert(name.to_string(), setup);
+            self.vnet_setups.insert(full_name.clone(), setup);
         }
 
         // Update context with JID for post_start hooks
@@ -808,12 +853,12 @@ impl Bridge {
 
         // Execute post_start hooks (failure here doesn't cleanup the jail)
         if let Err(e) = hook_runner.execute_phase(HookPhase::PostStart, &hook_context) {
-            eprintln!("Warning: post_start hook failed for jail '{}': {}", name, e);
+            eprintln!("Warning: post_start hook failed for jail '{}': {}", full_name, e);
             eprintln!("Jail is running but may not be fully configured.");
         }
 
         // Track the instance with full configuration
-        let mut jail_config = JailConfig::new(name, &path);
+        let mut jail_config = JailConfig::new(&full_name, &path);
         if let Some(hostname) = &jail_def.hostname {
             jail_config = jail_config.hostname(hostname);
         }
@@ -824,19 +869,18 @@ impl Bridge {
         instance.jid = Some(jid);
         instance.start().ok();
         instance.started().ok();
-        self.instances.insert(name.to_string(), instance);
+        self.instances.insert(full_name.clone(), instance);
 
         // Track allocated IP for cleanup on stop
         if let Some(alloc) = allocated_ip {
-            self.allocated_ips.insert(name.to_string(), alloc);
+            self.allocated_ips.insert(full_name.clone(), alloc);
         }
 
         // Notify Warden that jail started successfully
-        if let Some(handle) = &self.warden_handle {
-            if let Err(e) = handle.notify_started_blocking(name) {
+        if let Some(handle) = &self.warden_handle
+            && let Err(e) = handle.notify_started_blocking(&full_name) {
                 eprintln!("Warning: Failed to notify Warden of jail start: {}", e);
             }
-        }
 
         Ok(())
     }
@@ -848,13 +892,14 @@ impl Bridge {
     /// - Removes jail if partially created
     /// - Destroys ZFS dataset if created by blackship
     pub fn cleanup(&mut self, name: &str, force: bool) -> Result<()> {
-        println!("Cleaning up jail '{}'...", name);
+        let (service_name, full_name) = self.resolve_jail_names(name)?;
+        println!("Cleaning up jail '{}'...", full_name);
 
         // Try to get jail definition
-        let jail_def = self.config.get_jail(name);
+        let jail_def = self.config.get_jail(&service_name);
 
         // Try to remove jail if it exists (even partially)
-        if let Ok(jid) = jail_getid(name) {
+        if let Ok(jid) = jail_getid(&full_name) {
             println!("  Removing jail (JID {})...", jid);
             if let Err(e) = jail_remove(jid) {
                 if force {
@@ -871,7 +916,7 @@ impl Bridge {
                 // Only destroy if path is managed by blackship (not custom path)
                 if jail_def.path.is_none() {
                     println!("  Destroying ZFS dataset...");
-                    if let Err(e) = zfs.destroy_jail_dataset(name) {
+                    if let Err(e) = zfs.destroy_jail_dataset(&full_name) {
                         if force {
                             eprintln!("  Warning: Failed to destroy dataset: {}", e);
                         } else {
@@ -879,13 +924,13 @@ impl Bridge {
                         }
                     }
                 }
-            }
+        }
 
         // Remove from instances
-        self.instances.remove(name);
+        self.instances.remove(&full_name);
 
         // Cleanup VNET epair interface if present
-        if let Some(vnet_setup) = self.vnet_setups.remove(name) {
+        if let Some(vnet_setup) = self.vnet_setups.remove(&full_name) {
             println!("  Cleaning up VNET setup...");
             if let Err(e) = vnet_setup.cleanup() {
                 if force {
@@ -897,33 +942,35 @@ impl Bridge {
         }
 
         // Release allocated IP back to the pool
-        if let Some((network_name, ip)) = self.allocated_ips.remove(name) {
+        if let Some((network_name, ip)) = self.allocated_ips.remove(&full_name) {
             self.ip_allocator.release(&network_name, &ip);
             println!("  Released IP {} back to network '{}'", ip, network_name);
         }
 
-        println!("Cleanup complete for jail '{}'", name);
+        println!("Cleanup complete for jail '{}'", full_name);
         Ok(())
     }
 
     /// Stop a single jail
     fn stop_jail(&mut self, name: &str) -> Result<()> {
+        let (service_name, full_name) = self.resolve_jail_names(name)?;
+
         // Get JID
-        let jid = match jail_getid(name) {
+        let jid = match jail_getid(&full_name) {
             Ok(jid) => jid,
             Err(_) => {
-                return Err(Error::JailNotRunning(name.to_string()));
+                return Err(Error::JailNotRunning(full_name));
             }
         };
 
         // Get jail definition for hooks
-        let jail_def = self.config.get_jail(name);
+        let jail_def = self.config.get_jail(&service_name);
 
         // Setup hooks if jail has hook configuration
         if let Some(jail_def) = jail_def {
-            let path = jail_def.effective_path(&self.config.config);
+            let path = jail_def.effective_path(&self.config.config, &full_name);
             let hook_runner = HookRunner::new(jail_def.hooks.clone()).verbose(self.verbose);
-            let mut hook_context = HookContext::new(name, &path).with_jid(jid);
+            let mut hook_context = HookContext::new(&full_name, &path).with_jid(jid);
 
             // Add IP to context if available
             if let Some(network) = &jail_def.network
@@ -935,39 +982,39 @@ impl Bridge {
             hook_runner.execute_phase(HookPhase::PreStop, &hook_context)?;
 
             // Remove the jail
-            println!("Stopping jail '{}'...", name);
+            println!("Stopping jail '{}'...", full_name);
             jail_remove(jid)?;
-            println!("Jail '{}' stopped", name);
+            println!("Jail '{}' stopped", full_name);
 
             // Execute post_stop hooks (on host, after jail stopped)
             // Note: JID is no longer valid, but path and name are
-            let hook_context = HookContext::new(name, &path);
+            let hook_context = HookContext::new(&full_name, &path);
             hook_runner.execute_phase(HookPhase::PostStop, &hook_context)?;
         } else {
             // No jail definition found, just stop directly
-            println!("Stopping jail '{}'...", name);
+            println!("Stopping jail '{}'...", full_name);
             jail_remove(jid)?;
-            println!("Jail '{}' stopped", name);
+            println!("Jail '{}' stopped", full_name);
         }
 
         // Update instance state
-        if let Some(instance) = self.instances.get_mut(name) {
+        if let Some(instance) = self.instances.get_mut(&full_name) {
             instance.stop().ok();
             instance.stopped().ok();
             instance.jid = None;
         }
 
         // Cleanup VNET setup if present
-        if let Some(vnet_setup) = self.vnet_setups.remove(name) {
+        if let Some(vnet_setup) = self.vnet_setups.remove(&full_name) {
             if let Err(e) = vnet_setup.cleanup() {
-                eprintln!("Warning: Failed to cleanup VNET setup for jail '{}': {}", name, e);
+                eprintln!("Warning: Failed to cleanup VNET setup for jail '{}': {}", full_name, e);
             } else if self.verbose {
                 println!("  Cleaned up VNET for bridge {}", vnet_setup.bridge_name);
             }
         }
 
         // Release allocated IP back to the pool
-        if let Some((network_name, ip)) = self.allocated_ips.remove(name) {
+        if let Some((network_name, ip)) = self.allocated_ips.remove(&full_name) {
             self.ip_allocator.release(&network_name, &ip);
             if self.verbose {
                 println!("  Released IP {} back to network '{}'", ip, network_name);
@@ -975,11 +1022,10 @@ impl Bridge {
         }
 
         // Notify Warden that jail stopped
-        if let Some(handle) = &self.warden_handle {
-            if let Err(e) = handle.notify_stopped_blocking(name) {
+        if let Some(handle) = &self.warden_handle
+            && let Err(e) = handle.notify_stopped_blocking(&full_name) {
                 eprintln!("Warning: Failed to notify Warden of jail stop: {}", e);
             }
-        }
 
         Ok(())
     }
@@ -988,33 +1034,34 @@ impl Bridge {
     ///
     /// Used by the Warden for automatic restart on failure
     pub fn restart_jail(&mut self, name: &str) -> Result<()> {
-        println!("Restarting jail '{}'...", name);
+        let (service_name, full_name) = self.resolve_jail_names(name)?;
+        println!("Restarting jail '{}'...", full_name);
 
         // If the jail is in Failed state, recover it first
-        if let Some(instance) = self.instances.get_mut(name) {
-            if instance.state() == JailState::Failed {
+        if let Some(instance) = self.instances.get_mut(&full_name)
+            && instance.state() == JailState::Failed {
                 instance.recover().ok(); // Transition from Failed to Stopped
             }
-        }
 
         // Stop if running
-        if jail_getid(name).is_ok() {
-            self.stop_jail(name)?;
+        if jail_getid(&full_name).is_ok() {
+            self.stop_jail(&service_name)?;
         }
 
         // Start the jail
-        self.start_jail(name)?;
+        self.start_jail(&service_name)?;
 
-        println!("Jail '{}' restarted successfully", name);
+        println!("Jail '{}' restarted successfully", full_name);
         Ok(())
     }
 
     /// Get all dependencies of a jail (including the jail itself)
     fn get_dependencies(&self, name: &str) -> Result<Vec<&str>> {
+        let (service_name, _full_name) = self.resolve_jail_names(name)?;
         let order = self.start_order()?;
         let idx = order
             .iter()
-            .position(|n| *n == name)
+            .position(|n| *n == service_name)
             .ok_or_else(|| Error::JailNotFound(name.to_string()))?;
 
         // Return all jails up to and including this one
@@ -1023,10 +1070,11 @@ impl Bridge {
 
     /// Get all dependents of a jail (including the jail itself)
     fn get_dependents(&self, name: &str) -> Result<Vec<&str>> {
+        let (service_name, _full_name) = self.resolve_jail_names(name)?;
         let order = self.stop_order()?;
         let idx = order
             .iter()
-            .position(|n| *n == name)
+            .position(|n| *n == service_name)
             .ok_or_else(|| Error::JailNotFound(name.to_string()))?;
 
         // Return all jails from the start up to and including this one
@@ -1069,9 +1117,10 @@ impl Bridge {
         bind_ip: Option<IpAddr>,
     ) -> Result<PortForward> {
         // Verify jail exists and get its IP
+        let (service_name, full_name) = self.resolve_jail_names(jail_name)?;
         let jail_def = self
             .config
-            .get_jail(jail_name)
+            .get_jail(&service_name)
             .ok_or_else(|| Error::JailNotFound(jail_name.to_string()))?;
 
         let jail_ip = jail_def
@@ -1081,13 +1130,13 @@ impl Bridge {
             .ok_or_else(|| {
                 Error::Network(format!(
                     "Jail '{}' has no IP address configured",
-                    jail_name
+                    full_name
                 ))
             })?;
 
         // Create port forward rule
         let internal = internal_port.unwrap_or(external_port);
-        let mut forward = PortForward::new(external_port, internal, protocol, jail_ip, jail_name);
+        let mut forward = PortForward::new(external_port, internal, protocol, jail_ip, &full_name);
 
         if let Some(ip) = bind_ip {
             forward = forward.with_bind_ip(ip);
@@ -1112,10 +1161,11 @@ impl Bridge {
 
     /// Remove all port forwards for a jail
     pub fn remove_port_forwards(&mut self, jail_name: &str) -> Result<()> {
-        self.bulkhead.remove_jail_forwards(jail_name)?;
+        let (_service_name, full_name) = self.resolve_jail_names(jail_name)?;
+        self.bulkhead.remove_jail_forwards(&full_name)?;
 
         if self.verbose {
-            println!("Removed port forwards for jail '{}'", jail_name);
+            println!("Removed port forwards for jail '{}'", full_name);
         }
 
         Ok(())
@@ -1128,7 +1178,11 @@ impl Bridge {
 
     /// Get port forwards for a specific jail
     pub fn get_jail_port_forwards(&self, jail_name: &str) -> Vec<&PortForward> {
-        self.bulkhead.get_jail_forwards(jail_name)
+        if let Some((_service_name, full_name)) = self.config.resolve_jail_names(jail_name) {
+            self.bulkhead.get_jail_forwards(&full_name)
+        } else {
+            Vec::new()
+        }
     }
 }
 

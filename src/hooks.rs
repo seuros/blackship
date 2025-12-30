@@ -7,6 +7,7 @@
 //! - Configurable failure handling
 
 use crate::error::{Error, Result};
+use crate::jail::jexec::jexec_with_timeout;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Read;
@@ -445,6 +446,8 @@ impl HookRunner {
     }
 
     /// Execute a command inside a jail with timeout enforcement
+    ///
+    /// Uses native jail_attach(2) syscall instead of spawning jexec process
     fn execute_in_jail(
         &self,
         jid: i32,
@@ -452,64 +455,25 @@ impl HookRunner {
         args: &[String],
         timeout_secs: u64,
     ) -> Result<HookResult> {
-        let timeout = Duration::from_secs(timeout_secs);
+        // Build full command array for jexec
+        let mut cmd_parts: Vec<&str> = vec![command];
+        for arg in args {
+            cmd_parts.push(arg);
+        }
 
-        // Build jexec command with piped output for capturing
-        let mut cmd = Command::new("/usr/sbin/jexec");
-        cmd.arg("-u")
-            .arg("root")
-            .arg(jid.to_string())
-            .arg(command)
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = cmd.spawn().map_err(|e| Error::HookFailed {
-            phase: String::new(),
-            command: command.to_string(),
-            message: format!("Failed to execute jexec: {}", e),
-        })?;
-
-        let start = Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    // Process completed, read output
-                    let mut stdout = String::new();
-                    let mut stderr = String::new();
-
-                    if let Some(mut stdout_handle) = child.stdout.take() {
-                        let _ = stdout_handle.read_to_string(&mut stdout);
-                    }
-                    if let Some(mut stderr_handle) = child.stderr.take() {
-                        let _ = stderr_handle.read_to_string(&mut stderr);
-                    }
-
-                    return Ok(HookResult {
-                        success: status.success(),
-                        exit_code: status.code(),
-                        stdout,
-                        stderr,
-                    });
-                }
-                Ok(None) => {
-                    // Process still running, check timeout
-                    if start.elapsed() > timeout {
-                        let _ = child.kill();
-                        // Wait for process to be reaped after kill
-                        let _ = child.wait();
-                        return Err(Error::HookTimeout(timeout_secs));
-                    }
-                    thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => {
-                    return Err(Error::HookFailed {
-                        phase: String::new(),
-                        command: command.to_string(),
-                        message: format!("Failed to wait on process: {}", e),
-                    });
-                }
-            }
+        match jexec_with_timeout(jid, &cmd_parts, timeout_secs) {
+            Ok((exit_code, stdout, stderr)) => Ok(HookResult {
+                success: exit_code == 0,
+                exit_code: Some(exit_code),
+                stdout,
+                stderr,
+            }),
+            Err(Error::JailTimeout(secs)) => Err(Error::HookTimeout(secs)),
+            Err(e) => Err(Error::HookFailed {
+                phase: String::new(),
+                command: command.to_string(),
+                message: e.to_string(),
+            }),
         }
     }
 }

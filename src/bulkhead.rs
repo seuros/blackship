@@ -8,7 +8,6 @@ use std::net::IpAddr;
 use std::process::Command;
 
 /// PF anchor name for blackship rules
-
 const PF_ANCHOR: &str = "blackship";
 
 /// Port forwarding rule
@@ -75,14 +74,12 @@ impl PortForward {
 /// Bulkhead manager for PF
 #[derive(Debug, Default)]
 pub struct BulkheadManager {
-    /// Active port forwards 
-    
+    /// Active port forwards
     forwards: Vec<PortForward>,
 }
 
 impl BulkheadManager {
-    /// Create a new bulkhead manager 
-    
+    /// Create a new bulkhead manager
     pub fn new() -> Self {
         Self::default()
     }
@@ -94,7 +91,6 @@ impl BulkheadManager {
     /// rdr-anchor "blackship"
     /// anchor "blackship"
     /// ```
-    
     pub fn init() -> Result<()> {
         // Check if PF is enabled
         let output = Command::new("pfctl")
@@ -125,8 +121,7 @@ impl BulkheadManager {
         Ok(())
     }
 
-    /// Add a port forward rule 
-    
+    /// Add a port forward rule
     pub fn add_forward(&mut self, forward: PortForward) -> Result<()> {
         // Add to our list
         self.forwards.push(forward);
@@ -135,15 +130,13 @@ impl BulkheadManager {
         self.apply_rules()
     }
 
-    /// Remove port forwards for a jail 
-    
+    /// Remove port forwards for a jail
     pub fn remove_jail_forwards(&mut self, jail_name: &str) -> Result<()> {
         self.forwards.retain(|f| f.jail_name != jail_name);
         self.apply_rules()
     }
 
-    /// Apply all rules to the PF anchor 
-    
+    /// Apply all rules to the PF anchor
     fn apply_rules(&self) -> Result<()> {
         // Generate rules
         let rules: Vec<String> = self.forwards.iter().map(|f| f.to_pf_rule()).collect();
@@ -175,14 +168,12 @@ impl BulkheadManager {
         Ok(())
     }
 
-    /// List current port forwards 
-    
+    /// List current port forwards
     pub fn list_forwards(&self) -> &[PortForward] {
         &self.forwards
     }
 
-    /// Get forwards for a specific jail 
-    
+    /// Get forwards for a specific jail
     pub fn get_jail_forwards(&self, jail_name: &str) -> Vec<&PortForward> {
         self.forwards
             .iter()
