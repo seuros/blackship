@@ -1021,7 +1021,7 @@ data_dir = "/var/blackship"
                 println!("\nBuild complete! Jail root: {}", target_path.display());
                 println!("Add the jail to blackship.toml to manage it:");
                 println!("  [[jails]]");
-                println!("  name = \"{}\"", jail_name);
+                println!("  name = \"{}\"", full_name);
                 println!("  path = \"{}\"", target_path.display());
             }
         }
