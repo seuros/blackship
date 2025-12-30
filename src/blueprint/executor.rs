@@ -2,13 +2,15 @@
 //!
 //! Executes Jailfile instructions to build a jail.
 
-use crate::error::{Error, Result};
 use crate::blueprint::context::BuildContext;
 use crate::blueprint::instructions::{CopySpec, Instruction, Jailfile};
+use crate::error::{Error, Result};
+use crate::jail::jexec::chroot_exec;
+use nix::unistd::{Group, User};
+use std::ffi::CString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 
 /// Template executor for building jails
 pub struct TemplateExecutor {
@@ -179,37 +181,76 @@ impl TemplateExecutor {
     /// Execute a RUN command inside the jail
     fn execute_run(&self, command: &str) -> Result<()> {
         let target_path = self.context.target_path();
+        let dev_path = target_path.join("dev");
+        let resolv_path = target_path.join("etc/resolv.conf");
 
-        // Use chroot to run command in jail environment
-        let output = Command::new("/usr/sbin/chroot")
-            .arg(target_path)
-            .arg("/bin/sh")
-            .arg("-c")
-            .arg(command)
-            .envs(self.context.env())
-            .output()
-            .map_err(|e| Error::BuildFailed {
-                step: "RUN".to_string(),
-                message: format!("Failed to execute chroot: {}", e),
-            })?;
+        // Copy host resolv.conf if jail doesn't have one
+        if !resolv_path.exists()
+            && let Ok(content) = fs::read_to_string("/etc/resolv.conf") {
+                let _ = fs::write(&resolv_path, content);
+            }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        // Mount devfs for the chroot environment
+        let need_devfs = !dev_path.join("null").exists();
+        if need_devfs {
+            std::fs::create_dir_all(&dev_path).ok();
+
+            // Use native mount(2) syscall instead of spawning process
+            let fstype = CString::new("devfs").unwrap();
+            let from = CString::new("devfs").unwrap();
+            let to = CString::new(dev_path.to_str().unwrap()).unwrap();
+
+            let result = unsafe {
+                libc::mount(
+                    from.as_ptr(),
+                    to.as_ptr(),
+                    0, // flags
+                    fstype.as_ptr() as *mut libc::c_void,
+                )
+            };
+
+            if result != 0 {
+                eprintln!("Warning: Failed to mount devfs: {}", std::io::Error::last_os_error());
+            }
+        }
+
+        // Use native chroot(2) syscall to run command in jail environment
+        let env_vars: Vec<(String, String)> = self
+            .context
+            .env()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let result = chroot_exec(target_path.to_str().unwrap(), command, &env_vars);
+
+        // Unmount devfs if we mounted it
+        if need_devfs {
+            // Use native unmount(2) syscall instead of spawning process
+            let path = CString::new(dev_path.to_str().unwrap()).unwrap();
+            unsafe {
+                libc::unmount(path.as_ptr(), 0);
+            }
+        }
+
+        let (exit_code, stdout, stderr) = result.map_err(|e| Error::BuildFailed {
+            step: "RUN".to_string(),
+            message: format!("Failed to execute chroot: {}", e),
+        })?;
+
+        if exit_code != 0 {
+            let stderr_str = String::from_utf8_lossy(&stderr);
             return Err(Error::BuildFailed {
                 step: "RUN".to_string(),
-                message: format!(
-                    "Command failed with exit code {:?}: {}",
-                    output.status.code(),
-                    stderr
-                ),
+                message: format!("Command failed with exit code {}: {}", exit_code, stderr_str),
             });
         }
 
         // Print stdout if verbose
         if self.context.is_verbose() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if !stdout.is_empty() {
-                for line in stdout.lines() {
+            let stdout_str = String::from_utf8_lossy(&stdout);
+            if !stdout_str.is_empty() {
+                for line in stdout_str.lines() {
                     println!("  {}", line);
                 }
             }
@@ -338,22 +379,59 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Set file owner using chown
+/// Set file owner using chown syscall
 fn set_owner(path: &Path, owner: &str) -> Result<()> {
-    let output = Command::new("/usr/sbin/chown")
-        .arg(owner)
-        .arg(path)
-        .output()
-        .map_err(|e| Error::BuildFailed {
-            step: "COPY".to_string(),
-            message: format!("Failed to run chown: {}", e),
-        })?;
+    // Parse owner string (format: "user", "user:group", or ":group")
+    let parts: Vec<&str> = owner.split(':').collect();
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let uid = if !parts[0].is_empty() {
+        // Look up user by name
+        User::from_name(parts[0])
+            .map_err(|e| Error::BuildFailed {
+                step: "COPY".to_string(),
+                message: format!("Failed to lookup user {}: {}", parts[0], e),
+            })?
+            .ok_or_else(|| Error::BuildFailed {
+                step: "COPY".to_string(),
+                message: format!("User not found: {}", parts[0]),
+            })?
+            .uid
+            .as_raw()
+    } else {
+        // No user specified, use -1 to keep unchanged
+        u32::MAX
+    };
+
+    let gid = if parts.len() > 1 && !parts[1].is_empty() {
+        // Look up group by name
+        Group::from_name(parts[1])
+            .map_err(|e| Error::BuildFailed {
+                step: "COPY".to_string(),
+                message: format!("Failed to lookup group {}: {}", parts[1], e),
+            })?
+            .ok_or_else(|| Error::BuildFailed {
+                step: "COPY".to_string(),
+                message: format!("Group not found: {}", parts[1]),
+            })?
+            .gid
+            .as_raw()
+    } else {
+        // No group specified, use -1 to keep unchanged
+        u32::MAX
+    };
+
+    // Use native chown(2) syscall instead of spawning process
+    let path_cstr = CString::new(path.to_str().unwrap()).map_err(|e| Error::BuildFailed {
+        step: "COPY".to_string(),
+        message: format!("Invalid path: {}", e),
+    })?;
+
+    let result = unsafe { libc::chown(path_cstr.as_ptr(), uid, gid) };
+
+    if result != 0 {
         return Err(Error::BuildFailed {
             step: "COPY".to_string(),
-            message: format!("chown failed: {}", stderr),
+            message: format!("chown syscall failed: {}", std::io::Error::last_os_error()),
         });
     }
 

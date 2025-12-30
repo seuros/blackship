@@ -20,6 +20,8 @@ pub struct VnetConfig {
     pub gateway: IpAddr,
     /// Static MAC address for the jail-side interface
     pub mac_address: Option<String>,
+    /// VLAN ID for this jail's interface (untagged/PVID)
+    pub vlan_id: Option<u16>,
 }
 
 impl VnetConfig {
@@ -30,12 +32,19 @@ impl VnetConfig {
             ip,
             gateway,
             mac_address: None,
+            vlan_id: None,
         }
     }
 
     /// Set static MAC address for the jail-side interface
     pub fn with_mac_address(mut self, mac: String) -> Self {
         self.mac_address = Some(mac);
+        self
+    }
+
+    /// Set VLAN ID for the jail's interface
+    pub fn with_vlan_id(mut self, vlan_id: u16) -> Self {
+        self.vlan_id = Some(vlan_id);
         self
     }
 }
@@ -69,7 +78,12 @@ impl VnetSetup {
         }
 
         // Add host side of epair to bridge
-        bridge.add_member(epair.host_side())?;
+        // Use VLAN filtering if vlan_id is configured (FreeBSD 15.0+)
+        if let Some(vlan_id) = config.vlan_id {
+            bridge.add_member_untagged(epair.host_side(), vlan_id)?;
+        } else {
+            bridge.add_member(epair.host_side())?;
+        }
 
         Ok(Self {
             epair,

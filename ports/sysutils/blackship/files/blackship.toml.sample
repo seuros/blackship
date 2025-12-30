@@ -1,0 +1,24 @@
+# Blackship Configuration File
+# See https://github.com/seuros/blackship for full documentation
+
+[global]
+# Base directory for jail root filesystems
+base_path = "/jails"
+
+# ZFS dataset for jails (optional)
+# zfs_dataset = "zpool/jails"
+
+# Default network bridge
+# bridge = "bridge0"
+
+# Example jail definition:
+# [jails.example]
+# hostname = "example.jail"
+# ip = "10.0.0.2/24"
+# gateway = "10.0.0.1"
+#
+# [jails.example.healthcheck]
+# type = "tcp"
+# port = 22
+# interval = 30
+# timeout = 5

@@ -3,8 +3,9 @@
 //! Provides health check configuration and status tracking for jails.
 
 use crate::error::{Error, Result};
-use crate::sickbay::recovery::{RecoveryAction, RecoveryConfig};
 use crate::jail::ffi::{jail_getid, jail_remove};
+use crate::jail::jexec::jexec_with_timeout;
+use crate::sickbay::recovery::{RecoveryAction, RecoveryConfig};
 use crate::warden::WardenHandle;
 use breaker_machines::{CircuitBreaker, CircuitBuilder};
 use serde::Deserialize;
@@ -601,71 +602,24 @@ impl HealthChecker {
     }
 
     /// Execute a check command inside the jail with timeout enforcement
+    ///
+    /// Uses native jail_attach(2) syscall instead of spawning jexec process
     fn execute_in_jail(&self, jid: i32, command: &str, timeout: u64) -> Result<(bool, String)> {
-        // Spawn jexec directly with output capture instead of using console::exec_in_jail
-        // which is designed for interactive use
-        let mut child = Command::new("/usr/sbin/jexec")
-            .arg(jid.to_string())
-            .args(["sh", "-c", command])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| Error::HealthCheckFailed {
+        // Use native jexec with timeout - runs sh -c "<command>" inside jail
+        match jexec_with_timeout(jid, &["sh", "-c", command], timeout) {
+            Ok((exit_code, stdout, stderr)) => {
+                let combined = format!("{}{}", stdout, stderr);
+                Ok((exit_code == 0, combined))
+            }
+            Err(Error::JailTimeout(secs)) => Ok((
+                false,
+                format!("Health check timed out after {} seconds", secs),
+            )),
+            Err(e) => Err(Error::HealthCheckFailed {
                 jail: self.jail_name.clone(),
                 check: "jail".to_string(),
-                message: format!("Failed to execute jexec: {}", e),
-            })?;
-
-        let timeout_duration = Duration::from_secs(timeout);
-        let start = Instant::now();
-
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    // Process completed
-                    let stdout = child
-                        .stdout
-                        .take()
-                        .map(|mut s| {
-                            let mut buf = String::new();
-                            std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                            buf
-                        })
-                        .unwrap_or_default();
-                    let stderr = child
-                        .stderr
-                        .take()
-                        .map(|mut s| {
-                            let mut buf = String::new();
-                            std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                            buf
-                        })
-                        .unwrap_or_default();
-                    let combined = format!("{}{}", stdout, stderr);
-                    return Ok((status.success(), combined));
-                }
-                Ok(None) => {
-                    // Process still running, check timeout
-                    if start.elapsed() > timeout_duration {
-                        // Kill the process
-                        let _ = child.kill();
-                        let _ = child.wait(); // Reap the zombie
-                        return Ok((
-                            false,
-                            format!("Health check timed out after {} seconds", timeout),
-                        ));
-                    }
-                    // Sleep briefly before polling again
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => {
-                    return Err(Error::HealthCheckFailed {
-                        jail: self.jail_name.clone(),
-                        check: "jail".to_string(),
-                        message: format!("Failed to wait for jexec process: {}", e),
-                    });
-                }
-            }
+                message: e.to_string(),
+            }),
         }
     }
 
@@ -690,11 +644,10 @@ impl HealthChecker {
         );
 
         // Notify Warden of health failure
-        if let Some(handle) = &self.warden_handle {
-            if let Err(e) = handle.notify_health_failure_blocking(&self.jail_name) {
+        if let Some(handle) = &self.warden_handle
+            && let Err(e) = handle.notify_health_failure_blocking(&self.jail_name) {
                 eprintln!("Warning: Failed to notify Warden of health failure: {}", e);
             }
-        }
 
         // Execute recovery action
         match &config.action {

@@ -8,6 +8,7 @@
 
 pub mod bridge;
 pub mod epair;
+pub mod ioctl;
 pub mod ip;
 pub mod vnet;
 

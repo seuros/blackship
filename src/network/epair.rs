@@ -5,7 +5,8 @@
 //! into the jail.
 
 use crate::error::{Error, Result};
-use std::process::Command;
+use crate::jail::jexec_with_output;
+use crate::network::ioctl;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Counter for generating unique epair names
@@ -21,25 +22,12 @@ pub struct EpairInterface {
 }
 
 impl EpairInterface {
-    /// Create a new epair interface pair
+    /// Create a new epair interface pair using native ioctl syscalls
     ///
     /// The epair is created with system-assigned names (epairNa, epairNb).
     pub fn create() -> Result<Self> {
-        let output = Command::new("ifconfig")
-            .args(["epair", "create"])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to create epair: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!(
-                "Failed to create epair: {}",
-                stderr
-            )));
-        }
-
-        // Output is something like "epair0a\n"
-        let host_side = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // Use native SIOCIFCREATE ioctl instead of spawning ifconfig process
+        let host_side = ioctl::create_interface("epair", None)?;
 
         // The jail side is the same but with 'b' instead of 'a'
         let jail_side = host_side
@@ -49,19 +37,8 @@ impl EpairInterface {
                 Error::Network(format!("Unexpected epair name format: {}", host_side))
             })?;
 
-        // Bring host side up
-        let output = Command::new("ifconfig")
-            .args([&host_side, "up"])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to bring up epair: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!(
-                "Failed to bring up {}: {}",
-                host_side, stderr
-            )));
-        }
+        // Bring host side up using native ioctl
+        ioctl::set_interface_up(&host_side, true)?;
 
         Ok(Self {
             host_side,
@@ -83,40 +60,18 @@ impl EpairInterface {
         let new_host_name = format!("e{}a_{}", counter, Self::sanitize_name(jail_name));
         let new_jail_name = format!("e{}b_{}", counter, Self::sanitize_name(jail_name));
 
-        // Rename host side
-        let output = Command::new("ifconfig")
-            .args([&epair.host_side, "name", &new_host_name])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to rename epair: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        // Rename host side using ioctl
+        if let Err(e) = ioctl::rename_interface(&epair.host_side, &new_host_name) {
             // Clean up the original epair
-            let _ = Command::new("ifconfig")
-                .args([&epair.host_side, "destroy"])
-                .output();
-            return Err(Error::Network(format!(
-                "Failed to rename {}: {}",
-                epair.host_side, stderr
-            )));
+            let _ = ioctl::destroy_interface(&epair.host_side);
+            return Err(e);
         }
 
-        // Rename jail side
-        let output = Command::new("ifconfig")
-            .args([&epair.jail_side, "name", &new_jail_name])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to rename epair: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        // Rename jail side using ioctl
+        if let Err(e) = ioctl::rename_interface(&epair.jail_side, &new_jail_name) {
             // Clean up
-            let _ = Command::new("ifconfig")
-                .args([&new_host_name, "destroy"])
-                .output();
-            return Err(Error::Network(format!(
-                "Failed to rename {}: {}",
-                epair.jail_side, stderr
-            )));
+            let _ = ioctl::destroy_interface(&new_host_name);
+            return Err(e);
         }
 
         Ok(Self {
@@ -135,46 +90,19 @@ impl EpairInterface {
         &self.jail_side
     }
 
-    /// Set MAC address on the jail-side interface
+    /// Set MAC address on the jail-side interface using ioctl
     ///
     /// Must be called before moving the interface into the jail.
     /// MAC format: "02:00:00:00:00:01" (locally administered addresses start with 02)
     pub fn set_mac_address(&self, mac: &str) -> Result<()> {
-        let output = Command::new("ifconfig")
-            .args([&self.jail_side, "ether", mac])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to set MAC address: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!(
-                "Failed to set MAC {} on {}: {}",
-                mac, self.jail_side, stderr
-            )));
-        }
-
-        Ok(())
+        ioctl::set_mac_address(&self.jail_side, mac)
     }
 
-    /// Move the jail-side interface into a VNET jail
+    /// Move the jail-side interface into a VNET jail using ioctl
     ///
-    /// This is done by setting the vnet parameter when creating the jail,
-    /// or using `ifconfig <iface> vnet <jid>` after jail creation.
+    /// This is done via SIOCSIFVNET ioctl syscall.
     pub fn move_to_jail(&self, jid: i32) -> Result<()> {
-        let output = Command::new("ifconfig")
-            .args([&self.jail_side, "vnet", &jid.to_string()])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to move interface to jail: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!(
-                "Failed to move {} to jail {}: {}",
-                self.jail_side, jid, stderr
-            )));
-        }
-
-        Ok(())
+        ioctl::move_to_vnet(&self.jail_side, jid)
     }
 
     /// Configure the jail-side interface with an IP address (inside the jail)
@@ -184,48 +112,42 @@ impl EpairInterface {
         addr: &str,
         gateway: Option<&str>,
     ) -> Result<()> {
-        // Configure IP address inside jail
-        let output = Command::new("jexec")
-            .args([&jid.to_string(), "ifconfig", interface, addr])
-            .output()
+        // Configure IP address inside jail using native jexec syscall
+        let (exit_code, _stdout, stderr) = jexec_with_output(jid, &["ifconfig", interface, addr])
             .map_err(|e| Error::Network(format!("Failed to configure interface: {}", e)))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if exit_code != 0 {
+            let stderr_str = String::from_utf8_lossy(&stderr);
             return Err(Error::Network(format!(
                 "Failed to configure {} in jail {}: {}",
-                interface, jid, stderr
+                interface, jid, stderr_str
             )));
         }
 
-        // Bring interface up
-        let output = Command::new("jexec")
-            .args([&jid.to_string(), "ifconfig", interface, "up"])
-            .output()
+        // Bring interface up using native jexec syscall
+        let (exit_code, _stdout, stderr) = jexec_with_output(jid, &["ifconfig", interface, "up"])
             .map_err(|e| Error::Network(format!("Failed to bring up interface: {}", e)))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if exit_code != 0 {
+            let stderr_str = String::from_utf8_lossy(&stderr);
             return Err(Error::Network(format!(
                 "Failed to bring up {} in jail {}: {}",
-                interface, jid, stderr
+                interface, jid, stderr_str
             )));
         }
 
-        // Set default route if gateway provided
+        // Set default route if gateway provided using native jexec syscall
         if let Some(gw) = gateway {
-            let output = Command::new("jexec")
-                .args([&jid.to_string(), "route", "add", "default", gw])
-                .output()
+            let (exit_code, _stdout, stderr) = jexec_with_output(jid, &["route", "add", "default", gw])
                 .map_err(|e| Error::Network(format!("Failed to add route: {}", e)))?;
 
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
+            if exit_code != 0 {
+                let stderr_str = String::from_utf8_lossy(&stderr);
                 // Don't fail if route already exists
-                if !stderr.contains("File exists") {
+                if !stderr_str.contains("File exists") {
                     return Err(Error::Network(format!(
                         "Failed to add default route in jail {}: {}",
-                        jid, stderr
+                        jid, stderr_str
                     )));
                 }
             }
@@ -234,26 +156,17 @@ impl EpairInterface {
         Ok(())
     }
 
-    /// Destroy the epair (destroys both ends)
+    /// Destroy the epair using ioctl (destroys both ends)
     pub fn destroy(&self) -> Result<()> {
         // Destroying either end destroys both
-        let output = Command::new("ifconfig")
-            .args([&self.host_side, "destroy"])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to destroy epair: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // Don't fail if already destroyed
-            if !stderr.contains("does not exist") {
-                return Err(Error::Network(format!(
-                    "Failed to destroy {}: {}",
-                    self.host_side, stderr
-                )));
+        // Ignore error if already destroyed
+        ioctl::destroy_interface(&self.host_side).or_else(|e| {
+            if e.to_string().contains("does not exist") {
+                Ok(())
+            } else {
+                Err(e)
             }
-        }
-
-        Ok(())
+        })
     }
 
     /// Sanitize a jail name for use in interface names

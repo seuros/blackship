@@ -13,6 +13,7 @@ mod supply;
 mod bulkhead;
 mod sickbay;
 mod hooks;
+mod sys;
 mod jail;
 mod network;
 mod bridge;
@@ -20,7 +21,7 @@ mod blueprint;
 mod warden;
 mod zfs;
 
-use cli::{Cli, Commands, NetworkAction, ReleasesAction, SnapshotAction, TemplateAction};
+use cli::{ArmadaAction, Cli, Commands, NetworkAction, ReleasesAction, SnapshotAction, TemplateAction};
 use error::Result;
 
 use std::sync::Arc;
@@ -59,6 +60,393 @@ fn run() -> Result<()> {
             cli::Cli::generate_completion(shell);
             return Ok(());
         }
+
+        // Initialize a new Jailfile
+        Commands::Init { file, release, toml, force } => {
+            use std::fs;
+
+            // Check if file exists
+            if file.exists() && !force {
+                eprintln!("Error: {} already exists. Use -y/--force to overwrite.", file.display());
+                std::process::exit(1);
+            }
+
+            // Determine release to use
+            let base_release = release.unwrap_or_else(|| "15.0-RELEASE".to_string());
+
+            let content = if toml {
+                format!(r#"[metadata]
+name = "my-jail"
+version = "1.0"
+# description = "My jail description"
+
+[build]
+from = "{}"
+
+# Build arguments
+# [[build.args]]
+# name = "VERSION"
+# default = "1.0"
+
+# Run commands
+# [[build.run]]
+# command = "pkg install -y <packages>"
+
+# Copy files
+# [[build.copy]]
+# src = "config.conf"
+# dest = "/usr/local/etc/"
+
+# [start]
+# cmd = "/usr/sbin/service myapp start"
+# user = "root"
+"#, base_release)
+            } else {
+                format!(r#"# Jailfile
+FROM {}
+
+# Build arguments
+# ARG VERSION=1.0
+
+# Install packages
+# RUN pkg install -y <packages>
+
+# Copy files from build context
+# COPY config.conf /usr/local/etc/
+
+# Set working directory
+# WORKDIR /usr/local
+
+# Expose ports
+# EXPOSE 80/tcp
+
+# Default command
+# CMD /usr/sbin/service myapp start
+"#, base_release)
+            };
+
+            fs::write(&file, content)?;
+            println!("Created {}", file.display());
+            println!("\nNext steps:");
+            println!("  1. Edit {} to customize your jail", file.display());
+            println!("  2. Run 'blackship build -f {}' to build the jail", file.display());
+            return Ok(());
+        }
+
+        // Armada (docker-compose style orchestration)
+        Commands::Armada { files, action } => {
+            match action {
+                ArmadaAction::Init { file, force } => {
+                    use std::fs;
+
+                    if file.exists() && !force {
+                        eprintln!("Error: {} already exists. Use -y/--force to overwrite.", file.display());
+                        std::process::exit(1);
+                    }
+
+                    let content = r#"# Blackship Armada Configuration
+# https://github.com/seuros/blackship
+
+[config]
+data_dir = "/var/blackship"
+# zfs_enabled = true
+# zpool = "zroot"
+
+# Example jail referencing a Jailfile:
+# [[jails]]
+# name = "web"
+# build = "./web"              # Directory containing Jailfile
+# depends_on = ["db"]
+#
+# [jails.network]
+# ip_cidr = "10.0.1.10/24"
+#
+# [[jails.hooks]]
+# phase = "post_start"
+# command = "echo 'Web started'"
+
+# Example jail without Jailfile (using release directly):
+# [[jails]]
+# name = "db"
+# release = "15.0-RELEASE"
+# path = "/jails/db"
+"#;
+
+                    fs::write(&file, content)?;
+                    println!("Created {}", file.display());
+                    println!("\nNext steps:");
+                    println!("  1. Edit {} to define your jails", file.display());
+                    println!("  2. Run 'blackship armada up' to start all jails");
+                    return Ok(());
+                }
+
+                ArmadaAction::Up { detach, jails, build: _, no_build: _, dry_run } => {
+                    // Load and merge configs
+                    let config = manifest::load_merged(&files)?;
+                    let mut bridge = bridge::Bridge::new(config)?.verbose(cli.verbose);
+
+                    // TODO: Auto-build jails that have 'build' field set
+
+                    if jails.is_empty() {
+                        // Start all jails
+                        if dry_run {
+                            bridge.up_dry_run(None)?;
+                        } else {
+                            bridge.up(None)?;
+                        }
+                    } else {
+                        // Start specific jails
+                        for jail in &jails {
+                            if dry_run {
+                                bridge.up_dry_run(Some(jail))?;
+                            } else {
+                                bridge.up(Some(jail))?;
+                            }
+                        }
+                    }
+
+                    if detach {
+                        println!("Jails started in background.");
+                        println!("Use 'blackship supervise' for warden mode with auto-restart.");
+                    }
+                }
+
+                ArmadaAction::Down { jails, dry_run } => {
+                    let config = manifest::load_merged(&files)?;
+                    let mut bridge = bridge::Bridge::new(config)?.verbose(cli.verbose);
+
+                    if jails.is_empty() {
+                        if dry_run {
+                            bridge.down_dry_run(None)?;
+                        } else {
+                            bridge.down(None)?;
+                        }
+                    } else {
+                        for jail in &jails {
+                            if dry_run {
+                                bridge.down_dry_run(Some(jail))?;
+                            } else {
+                                bridge.down(Some(jail))?;
+                            }
+                        }
+                    }
+                }
+
+                ArmadaAction::Build { jails, dry_run } => {
+                    use blueprint::{parse_jailfile, BuildContext, TemplateExecutor};
+
+                    let config = manifest::load_merged(&files)?;
+
+                    // Get jails to build
+                    let jails_to_build: Vec<_> = if jails.is_empty() {
+                        config.jails.iter().collect()
+                    } else {
+                        let mut service_names = Vec::new();
+                        for name in &jails {
+                            let (service_name, _full_name) = config
+                                .resolve_jail_names(name)
+                                .ok_or_else(|| error::Error::JailNotFound(name.clone()))?;
+                            service_names.push(service_name);
+                        }
+                        config
+                            .jails
+                            .iter()
+                            .filter(|j| service_names.contains(&j.name))
+                            .collect()
+                    };
+
+                    if dry_run {
+                        println!("=== DRY RUN - No changes will be made ===\n");
+                    }
+
+                    for jail_def in jails_to_build {
+                        if let Some(build_path) = &jail_def.build {
+                            let jailfile_path = build_path.join("Jailfile");
+                            if jailfile_path.exists() {
+                                let full_name = config.jail_name(&jail_def.name);
+                                println!("Building jail '{}' from {}", full_name, jailfile_path.display());
+
+                                // Parse the Jailfile
+                                let content = std::fs::read_to_string(&jailfile_path).map_err(|e| {
+                                    error::Error::TemplateParseFailed(format!(
+                                        "Failed to read {}: {}",
+                                        jailfile_path.display(),
+                                        e
+                                    ))
+                                })?;
+                                let jailfile = parse_jailfile(&content)?;
+
+                                // Target path for the jail
+                                let target_path = config
+                                    .config
+                                    .data_dir
+                                    .join("jails")
+                                    .join(&full_name);
+
+                                // Copy base release if needed
+                                if let Some(release) = &jailfile.from {
+                                    let bs = provision::Provisioner::from_config(&config.config)?;
+                                    let release_path = config.config.releases_dir.join(release);
+
+                                    if !release_path.exists() {
+                                        println!("  Base release '{}' not found. Bootstrapping...", release);
+                                        if !dry_run {
+                                            bs.bootstrap(release, false)?;
+                                        }
+                                    }
+
+                                    // Copy release to target
+                                    if !dry_run && !target_path.exists() {
+                                        println!("  Creating jail root from {}...", release);
+                                        std::fs::create_dir_all(&target_path)?;
+                                        let status = std::process::Command::new("cp")
+                                            .arg("-a")
+                                            .arg(format!("{}/.", release_path.display()))
+                                            .arg(&target_path)
+                                            .status()
+                                            .map_err(|e| error::Error::BuildFailed {
+                                                step: "FROM".to_string(),
+                                                message: format!("Failed to copy base release: {}", e),
+                                            })?;
+                                        if !status.success() {
+                                            return Err(error::Error::BuildFailed {
+                                                step: "FROM".to_string(),
+                                                message: "cp command failed".to_string(),
+                                            });
+                                        }
+                                    }
+                                }
+
+                                // Create build context and execute
+                                let ctx = BuildContext::new(build_path, &target_path, &full_name)
+                                    .verbose(cli.verbose);
+                                let mut executor = TemplateExecutor::new(ctx).dry_run(dry_run);
+                                executor.execute(&jailfile)?;
+
+                                if !dry_run {
+                                    println!("  Build complete: {}\n", target_path.display());
+                                }
+                            } else if let Some(jailfile_explicit) = &jail_def.jailfile {
+                                if jailfile_explicit.exists() {
+                                    let full_name = config.jail_name(&jail_def.name);
+                                    println!(
+                                        "Building jail '{}' from {}",
+                                        full_name,
+                                        jailfile_explicit.display()
+                                    );
+                                    // Similar logic for explicit jailfile path
+                                    let content = std::fs::read_to_string(jailfile_explicit).map_err(|e| {
+                                        error::Error::TemplateParseFailed(format!(
+                                            "Failed to read {}: {}",
+                                            jailfile_explicit.display(),
+                                            e
+                                        ))
+                                    })?;
+                                    let jailfile = parse_jailfile(&content)?;
+                                    let target_path = config
+                                        .config
+                                        .data_dir
+                                        .join("jails")
+                                        .join(&full_name);
+                                    let context_dir = jailfile_explicit.parent().unwrap_or(std::path::Path::new("."));
+
+                                    if let Some(release) = &jailfile.from {
+                                        let bs = provision::Provisioner::from_config(&config.config)?;
+                                        let release_path = config.config.releases_dir.join(release);
+
+                                        if !release_path.exists() && !dry_run {
+                                            println!("  Bootstrapping {}...", release);
+                                            bs.bootstrap(release, false)?;
+                                        }
+
+                                        if !dry_run && !target_path.exists() {
+                                            println!("  Creating jail root from {}...", release);
+                                            std::fs::create_dir_all(&target_path)?;
+                                            let status = std::process::Command::new("cp")
+                                                .arg("-a")
+                                                .arg(format!("{}/.", release_path.display()))
+                                                .arg(&target_path)
+                                                .status()
+                                                .map_err(|e| error::Error::BuildFailed {
+                                                    step: "FROM".to_string(),
+                                                    message: format!("Failed to copy base release: {}", e),
+                                                })?;
+                                            if !status.success() {
+                                                return Err(error::Error::BuildFailed {
+                                                    step: "FROM".to_string(),
+                                                    message: "cp command failed".to_string(),
+                                                });
+                                            }
+                                        }
+                                    }
+
+                                    let ctx = BuildContext::new(context_dir, &target_path, &full_name)
+                                        .verbose(cli.verbose);
+                                    let mut executor = TemplateExecutor::new(ctx).dry_run(dry_run);
+                                    executor.execute(&jailfile)?;
+
+                                    if !dry_run {
+                                        println!("  Build complete: {}\n", target_path.display());
+                                    }
+                                } else {
+                                    eprintln!("Warning: Jailfile not found at {}", jailfile_explicit.display());
+                                }
+                            } else {
+                                eprintln!("Warning: No Jailfile found at {}", jailfile_path.display());
+                            }
+                        }
+                    }
+                }
+
+                ArmadaAction::Ps { json } => {
+                    let config = manifest::load_merged(&files)?;
+                    let bridge = bridge::Bridge::new(config)?.verbose(cli.verbose);
+                    bridge.ps(json)?;
+                }
+
+                ArmadaAction::Config { show } => {
+                    let config = manifest::load_merged(&files)?;
+
+                    if show {
+                        // Print merged config as TOML
+                        println!("# Merged configuration from: {:?}\n", files);
+                        println!("[config]");
+                        println!("data_dir = \"{}\"", config.config.data_dir.display());
+                        if config.config.zfs_enabled {
+                            println!("zfs_enabled = true");
+                            if let Some(pool) = &config.config.zpool {
+                                println!("zpool = \"{}\"", pool);
+                            }
+                        }
+                        println!();
+                        for jail in &config.jails {
+                            println!("[[jails]]");
+                            println!("name = \"{}\"", jail.name);
+                            if let Some(path) = &jail.path {
+                                println!("path = \"{}\"", path.display());
+                            }
+                            if let Some(release) = &jail.release {
+                                println!("release = \"{}\"", release);
+                            }
+                            if let Some(build) = &jail.build {
+                                println!("build = \"{}\"", build.display());
+                            }
+                            if !jail.depends_on.is_empty() {
+                                println!("depends_on = {:?}", jail.depends_on);
+                            }
+                            println!();
+                        }
+                    } else {
+                        // Just validate
+                        println!("Configuration valid.");
+                        println!("  Files: {:?}", files);
+                        println!("  Jails: {}", config.jails.len());
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         Commands::Logs {
             jail,
             follow,
@@ -67,11 +455,14 @@ fn run() -> Result<()> {
             let config = manifest::load(&cli.config)?;
 
             // Find jail config to get its path
+            let (service_name, full_name) = config
+                .resolve_jail_names(&jail)
+                .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
             let jail_def = config
-                .get_jail(&jail)
+                .get_jail(&service_name)
                 .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
 
-            let jail_path = jail_def.effective_path(&config.config);
+            let jail_path = jail_def.effective_path(&config.config, &full_name);
             let log_dir = jail_path.join("var/log");
 
             // Common log files to look for
@@ -110,13 +501,15 @@ fn run() -> Result<()> {
             let mut cmd = vec!["tail".to_string()];
             cmd.extend(tail_args);
 
-            let status = console::exec_in_jail(&jail, &cmd, &opts)?;
+            let status = console::exec_in_jail(&full_name, &cmd, &opts)?;
             std::process::exit(status.code().unwrap_or(1));
         }
 
         Commands::Supervise => {
             // Load config and save it for later use (before moving into async)
             let config = manifest::load(&cli.config)?;
+            let project_name = config.config.project_name();
+            let project_prefix = format!("{}-", project_name);
             let jails_for_health = config.jails.clone();
             let rate_limit = config.config.rate_limit.clone();
 
@@ -161,7 +554,11 @@ fn run() -> Result<()> {
 
                 for jail_def in &jails_for_health {
                     if jail_def.healthcheck.enabled && !jail_def.healthcheck.checks.is_empty() {
-                        let jail_name = jail_def.name.clone();
+                        let full_name = if jail_def.name.starts_with(&project_prefix) {
+                            jail_def.name.clone()
+                        } else {
+                            format!("{}-{}", project_name, jail_def.name)
+                        };
                         let healthcheck_config = jail_def.healthcheck.clone();
                         let handle = warden_handle_for_health.clone();
                         let health_capacity = rate_limit.health_capacity;
@@ -169,14 +566,14 @@ fn run() -> Result<()> {
 
                         // Create health checker with warden handle
                         let mut checker = sickbay::HealthChecker::with_rate_limit(
-                            &jail_name,
+                            &full_name,
                             healthcheck_config,
                             health_capacity,
                             health_refill_rate,
                         ).with_warden_handle(handle);
 
                         // Try to get JID for the jail
-                        if let Ok(jid) = jail::jail_getid(&jail_name) {
+                        if let Ok(jid) = jail::jail_getid(&full_name) {
                             checker = checker.with_jid(jid);
                         }
 
@@ -204,7 +601,7 @@ fn run() -> Result<()> {
                             println!("Health monitor stopped for jail '{}'", checker.jail_name());
                         });
 
-                        println!("Spawned health monitor for jail '{}'", jail_def.name);
+                        println!("Spawned health monitor for jail '{}'", full_name);
                     }
                 }
 
@@ -384,10 +781,13 @@ fn run() -> Result<()> {
 
             // Filter jails based on input
             let jails: Vec<_> = if let Some(jail_name) = &jail {
+                let (service_name, _full_name) = config
+                    .resolve_jail_names(jail_name)
+                    .ok_or_else(|| error::Error::JailNotFound(jail_name.clone()))?;
                 config
                     .jails
                     .iter()
-                    .filter(|j| j.name == *jail_name)
+                    .filter(|j| j.name == service_name)
                     .collect()
             } else {
                 config.jails.iter().collect()
@@ -410,14 +810,15 @@ fn run() -> Result<()> {
                 .iter()
                 .filter(|j| j.healthcheck.enabled)
                 .map(|j| {
+                    let full_name = config.jail_name(&j.name);
                     let mut checker = HealthChecker::with_rate_limit(
-                        &j.name,
+                        &full_name,
                         j.healthcheck.clone(),
                         rate_limit.health_capacity,
                         rate_limit.health_refill_rate,
                     );
                     // Try to get JID for running jails
-                    if let Ok(jid) = jail::jail_getid(&j.name) {
+                    if let Ok(jid) = jail::jail_getid(&full_name) {
                         checker = checker.with_jid(jid);
                     }
                     checker
@@ -555,13 +956,14 @@ fn run() -> Result<()> {
             let jailfile = parse_jailfile(&content)?;
 
             // Determine jail name
-            let jail_name = name
+            let service_name = name
                 .or_else(|| jailfile.metadata.name.clone())
                 .unwrap_or_else(|| "unnamed".to_string());
 
             // Determine target path
             let config = manifest::load(&cli.config)?;
-            let target_path = config.config.data_dir.join("jails").join(&jail_name);
+            let full_name = config.jail_name(&service_name);
+            let target_path = config.config.data_dir.join("jails").join(&full_name);
 
             // Check if base release exists and copy it
             if let Some(release) = &jailfile.from {
@@ -598,7 +1000,7 @@ fn run() -> Result<()> {
 
             // Create build context
             let mut ctx =
-                BuildContext::new(&context_dir, &target_path, &jail_name).verbose(cli.verbose);
+                BuildContext::new(&context_dir, &target_path, &full_name).verbose(cli.verbose);
 
             // Set build arguments from command line
             for (key, value) in build_args {
@@ -612,7 +1014,7 @@ fn run() -> Result<()> {
                 println!("=== DRY RUN - No changes will be made ===\n");
             }
 
-            println!("Building jail '{}' from {}", jail_name, file.display());
+            println!("Building jail '{}' from {}", full_name, file.display());
             executor.execute(&jailfile)?;
 
             if !dry_run {
@@ -920,9 +1322,12 @@ fn run() -> Result<()> {
 
         Commands::Unexpose { jail } => {
             let config = manifest::load(&cli.config)?;
+            let (_service_name, full_name) = config
+                .resolve_jail_names(&jail)
+                .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
             let mut bridge = bridge::Bridge::new(config)?.verbose(cli.verbose);
-            bridge.remove_port_forwards(&jail)?;
-            println!("Removed all port forwards for jail '{}'", jail);
+            bridge.remove_port_forwards(&full_name)?;
+            println!("Removed all port forwards for jail '{}'", full_name);
         }
 
         Commands::Cleanup { jail, force } => {
@@ -939,15 +1344,18 @@ fn run() -> Result<()> {
             let config = manifest::load(&cli.config)?;
 
             // Find jail config
+            let (service_name, full_name) = config
+                .resolve_jail_names(&jail)
+                .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
             let jail_def = config
-                .get_jail(&jail)
+                .get_jail(&service_name)
                 .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
 
-            let jail_path = jail_def.effective_path(&config.config);
+            let jail_path = jail_def.effective_path(&config.config, &full_name);
 
             // Determine output path
             let output_path =
-                output.unwrap_or_else(|| std::path::PathBuf::from(format!("{}.tar.zst", jail)));
+                output.unwrap_or_else(|| std::path::PathBuf::from(format!("{}.tar.zst", full_name)));
 
             let hostname = jail_def.hostname.as_deref();
             let ip = jail_def
@@ -966,10 +1374,10 @@ fn run() -> Result<()> {
                     .zpool
                     .as_ref()
                     .ok_or(error::Error::ZfsNotEnabled)?;
-                let dataset = format!("{}/{}/jails/{}", pool, config.config.dataset, jail);
-                export::export_jail_zfs(&jail, &dataset, &output_path, hostname, ip.as_deref())?;
+                let dataset = format!("{}/{}/jails/{}", pool, config.config.dataset, full_name);
+                export::export_jail_zfs(&full_name, &dataset, &output_path, hostname, ip.as_deref())?;
             } else {
-                export::export_jail(&jail, &jail_path, &output_path, hostname, ip.as_deref())?;
+                export::export_jail(&full_name, &jail_path, &output_path, hostname, ip.as_deref())?;
             }
         }
 
@@ -977,8 +1385,10 @@ fn run() -> Result<()> {
             let config = manifest::load(&cli.config)?;
 
             // Determine target path
-            let target_name = name.as_deref().unwrap_or("imported");
-            let target_path = config.config.data_dir.join("jails").join(target_name);
+            let metadata = export::read_metadata(&file)?;
+            let target_name = name.as_deref().unwrap_or(metadata.name.as_str());
+            let full_name = config.jail_name(target_name);
+            let target_path = config.config.data_dir.join("jails").join(&full_name);
 
             // Check if target exists
             if target_path.exists() && !force {
@@ -988,7 +1398,7 @@ fn run() -> Result<()> {
                 )));
             }
 
-            let imported_name = export::import_jail(&file, &target_path, name.as_deref())?;
+            let imported_name = export::import_jail(&file, &target_path, Some(target_name))?;
 
             println!("\nTo add the imported jail to your config:");
             println!("  [[jails]]");
@@ -1014,20 +1424,26 @@ fn run() -> Result<()> {
             match action {
                 SnapshotAction::Create { jail, name } => {
                     // Verify jail exists in config
-                    if config.get_jail(&jail).is_none() {
+                    let (service_name, full_name) = config
+                        .resolve_jail_names(&jail)
+                        .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
+                    if config.get_jail(&service_name).is_none() {
                         return Err(error::Error::JailNotFound(jail.clone()));
                     }
 
-                    let snap_name = zfs.create_snapshot(&jail, name.as_deref())?;
-                    println!("Created snapshot: {}@{}", jail, snap_name);
+                    let snap_name = zfs.create_snapshot(&full_name, name.as_deref())?;
+                    println!("Created snapshot: {}@{}", full_name, snap_name);
                 }
                 SnapshotAction::List { jail, json } => {
                     // Verify jail exists in config
-                    if config.get_jail(&jail).is_none() {
+                    let (service_name, full_name) = config
+                        .resolve_jail_names(&jail)
+                        .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
+                    if config.get_jail(&service_name).is_none() {
                         return Err(error::Error::JailNotFound(jail.clone()));
                     }
 
-                    let snapshots = zfs.list_snapshots(&jail)?;
+                    let snapshots = zfs.list_snapshots(&full_name)?;
 
                     if json {
                         let json_data: Vec<_> = snapshots
@@ -1043,9 +1459,9 @@ fn run() -> Result<()> {
                             .collect();
                         println!("{}", serde_json::to_string_pretty(&json_data).unwrap());
                     } else if snapshots.is_empty() {
-                        println!("No snapshots for jail '{}'.", jail);
+                        println!("No snapshots for jail '{}'.", full_name);
                     } else {
-                        println!("Snapshots for jail '{}':", jail);
+                        println!("Snapshots for jail '{}':", full_name);
                         println!(
                             "{:<30} {:<24} {:<10} {:<10}",
                             "NAME", "CREATED", "USED", "REFER"
@@ -1065,29 +1481,38 @@ fn run() -> Result<()> {
                     force,
                 } => {
                     // Verify jail exists in config
-                    if config.get_jail(&jail).is_none() {
+                    let (service_name, full_name) = config
+                        .resolve_jail_names(&jail)
+                        .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
+                    if config.get_jail(&service_name).is_none() {
                         return Err(error::Error::JailNotFound(jail.clone()));
                     }
 
                     // Check if jail is running
-                    if jail::jail_getid(&jail).is_ok() {
+                    if jail::jail_getid(&full_name).is_ok() {
                         return Err(error::Error::JailOperation(format!(
                             "Jail '{}' is running. Stop it first with 'blackship down {}'",
-                            jail, jail
+                            full_name, full_name
                         )));
                     }
 
-                    zfs.rollback_snapshot(&jail, &snapshot, force)?;
-                    println!("Rolled back jail '{}' to snapshot '{}'", jail, snapshot);
+                    zfs.rollback_snapshot(&full_name, &snapshot, force)?;
+                    println!(
+                        "Rolled back jail '{}' to snapshot '{}'",
+                        full_name, snapshot
+                    );
                 }
                 SnapshotAction::Delete { jail, snapshot } => {
                     // Verify jail exists in config
-                    if config.get_jail(&jail).is_none() {
+                    let (service_name, full_name) = config
+                        .resolve_jail_names(&jail)
+                        .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
+                    if config.get_jail(&service_name).is_none() {
                         return Err(error::Error::JailNotFound(jail.clone()));
                     }
 
-                    zfs.delete_snapshot(&jail, &snapshot)?;
-                    println!("Deleted snapshot '{}@{}'", jail, snapshot);
+                    zfs.delete_snapshot(&full_name, &snapshot)?;
+                    println!("Deleted snapshot '{}@{}'", full_name, snapshot);
                 }
             }
         }
@@ -1110,12 +1535,15 @@ fn run() -> Result<()> {
             let (source_jail, snapshot) = (parts[0], parts[1]);
 
             // Verify source jail exists
-            if config.get_jail(source_jail).is_none() {
+            let (source_service, source_full) = config
+                .resolve_jail_names(source_jail)
+                .ok_or_else(|| error::Error::JailNotFound(source_jail.to_string()))?;
+            if config.get_jail(&source_service).is_none() {
                 return Err(error::Error::JailNotFound(source_jail.to_string()));
             }
 
             // Check new name doesn't already exist
-            if config.get_jail(&name).is_some() {
+            if config.resolve_jail_names(&name).is_some() {
                 return Err(error::Error::JailOperation(format!(
                     "Jail '{}' already exists in config",
                     name
@@ -1129,11 +1557,12 @@ fn run() -> Result<()> {
                 .ok_or(error::Error::ZfsNotEnabled)?;
             let zfs = zfs::ZfsManager::new(pool, &config.config.dataset);
 
-            let new_path = zfs.clone_from_snapshot(source_jail, snapshot, &name)?;
+            let new_full_name = config.jail_name(&name);
+            let new_path = zfs.clone_from_snapshot(&source_full, snapshot, &new_full_name)?;
 
             println!(
                 "Cloned '{}@{}' to new jail '{}'",
-                source_jail, snapshot, name
+                source_full, snapshot, new_full_name
             );
             println!("Path: {}", new_path.display());
             println!("\nTo use this jail, add it to blackship.toml:");
@@ -1191,15 +1620,20 @@ fn run() -> Result<()> {
                 Commands::Check => {
                     bridge.check()?;
                 }
-                Commands::Init => {
+                Commands::Setup => {
                     // Initialize PF firewall anchor for port forwarding
                     bridge.init_bulkhead()?;
-                    println!("Initialization complete.");
+                    println!("System setup complete.");
                     println!("PF anchor 'blackship' initialized for port forwarding.");
                 }
                 // Already handled above
                 Commands::Exec { .. }
                 | Commands::Console { .. }
+                | Commands::Completion { .. }
+                | Commands::Init { .. }
+                | Commands::Armada { .. }
+                | Commands::Logs { .. }
+                | Commands::Supervise
                 | Commands::Bootstrap { .. }
                 | Commands::Releases { .. }
                 | Commands::Network { .. }
@@ -1213,10 +1647,7 @@ fn run() -> Result<()> {
                 | Commands::Export { .. }
                 | Commands::Import { .. }
                 | Commands::Snapshot { .. }
-                | Commands::Clone { .. }
-                | Commands::Completion { .. }
-                | Commands::Supervise
-                | Commands::Logs { .. } => unreachable!(),
+                | Commands::Clone { .. } => unreachable!(),
             }
         }
     }

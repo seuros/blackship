@@ -1,0 +1,60 @@
+#!/bin/sh
+
+# PROVIDE: blackship_warden
+# REQUIRE: LOGIN FILESYSTEMS NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="blackship_warden"
+rcvar="${name}_enable"
+desc="Blackship Warden jail supervisor"
+
+load_rc_config $name
+
+: ${blackship_warden_enable:="NO"}
+: ${blackship_warden_config:="%%ETCDIR%%/blackship.toml"}
+: ${blackship_warden_user:="root"}
+: ${blackship_warden_group:="wheel"}
+
+pidfile="/var/run/${name}.pid"
+command="%%PREFIX%%/bin/blackship"
+command_args="warden --config ${blackship_warden_config}"
+
+start_cmd="${name}_start"
+stop_cmd="${name}_stop"
+status_cmd="${name}_status"
+
+blackship_warden_start()
+{
+	if [ ! -f "${blackship_warden_config}" ]; then
+		warn "Config file ${blackship_warden_config} not found"
+		return 1
+	fi
+	echo "Starting ${name}."
+	/usr/sbin/daemon -p ${pidfile} -u ${blackship_warden_user} \
+		${command} ${command_args}
+}
+
+blackship_warden_stop()
+{
+	if [ -f "${pidfile}" ]; then
+		echo "Stopping ${name}."
+		kill -TERM $(cat ${pidfile}) 2>/dev/null
+		rm -f ${pidfile}
+	else
+		echo "${name} is not running."
+	fi
+}
+
+blackship_warden_status()
+{
+	if [ -f "${pidfile}" ] && kill -0 $(cat ${pidfile}) 2>/dev/null; then
+		echo "${name} is running as pid $(cat ${pidfile})."
+	else
+		echo "${name} is not running."
+		return 1
+	fi
+}
+
+run_rc_command "$1"

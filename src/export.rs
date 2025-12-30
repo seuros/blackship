@@ -30,6 +30,66 @@ pub struct ExportMetadata {
     pub hostname: Option<String>,
 }
 
+/// Read export metadata without importing the archive
+pub fn read_metadata(archive_path: &Path) -> Result<ExportMetadata> {
+    // Open archive
+    let file = File::open(archive_path)
+        .map_err(|e| Error::JailOperation(format!("Failed to open archive: {}", e)))?;
+
+    // Check for ZFS format
+    let mut magic = [0u8; 8];
+    {
+        let mut reader = std::io::BufReader::new(&file);
+        if reader.read_exact(&mut magic).is_ok() && &magic == b"BSZFS001" {
+            let mut len_bytes = [0u8; 4];
+            reader
+                .read_exact(&mut len_bytes)
+                .map_err(|e| Error::JailOperation(format!("Failed to read metadata length: {}", e)))?;
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            let mut buf = vec![0u8; len];
+            reader
+                .read_exact(&mut buf)
+                .map_err(|e| Error::JailOperation(format!("Failed to read metadata: {}", e)))?;
+            return serde_json::from_slice(&buf)
+                .map_err(|e| Error::JailOperation(format!("Failed to parse metadata: {}", e)));
+        }
+    }
+
+    // Reopen file for tar/zstd
+    let file = File::open(archive_path)
+        .map_err(|e| Error::JailOperation(format!("Failed to reopen archive: {}", e)))?;
+
+    // Decompress
+    let decoder = zstd::stream::Decoder::new(file)
+        .map_err(|e| Error::JailOperation(format!("Failed to decompress: {}", e)))?;
+
+    // Open tar archive
+    let mut archive = Archive::new(decoder);
+
+    for entry in archive
+        .entries()
+        .map_err(|e| Error::JailOperation(format!("Failed to read archive entries: {}", e)))?
+    {
+        let mut entry = entry
+            .map_err(|e| Error::JailOperation(format!("Failed to read archive entry: {}", e)))?;
+        let path = entry
+            .path()
+            .map_err(|e| Error::JailOperation(format!("Failed to read entry path: {}", e)))?
+            .to_path_buf();
+
+        if path.to_string_lossy() == ".blackship-metadata.json" {
+            let mut content = String::new();
+            entry
+                .read_to_string(&mut content)
+                .map_err(|e| Error::JailOperation(format!("Failed to read metadata: {}", e)))?;
+            return serde_json::from_str(&content)
+                .map_err(|e| Error::JailOperation(format!("Failed to parse metadata: {}", e)));
+        }
+    }
+
+    Err(Error::JailOperation("Archive missing metadata".into()))
+}
+
 /// Export a jail to a tar.zst archive
 pub fn export_jail(
     name: &str,

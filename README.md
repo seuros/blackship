@@ -17,7 +17,7 @@ A FreeBSD jail orchestrator with TOML configuration, dependency management, stat
 
 ## Requirements
 
-- FreeBSD 14.0+ with jail support
+- FreeBSD 15.0+ with jail support
 - ZFS (optional, for snapshots/clones)
 - PF (optional, for port forwarding)
 
@@ -40,7 +40,20 @@ blackship completion fish > ~/.config/fish/completions/blackship.fish
 
 ## Quick Start
 
-### 1. Initialize Configuration
+### 1. Initialize Jailfile
+
+```sh
+# Create a Jailfile in current directory
+blackship init
+
+# Create with specific FreeBSD release
+blackship init --release 15.0-RELEASE
+
+# TOML format instead of Dockerfile-like
+blackship init --toml
+```
+
+### 2. Initialize Armada Configuration
 
 Create `blackship.toml`:
 
@@ -65,7 +78,9 @@ ip = "10.0.1.10"
 gateway = "10.0.1.1"
 ```
 
-### 2. Bootstrap a Release
+Or use `blackship armada init` to generate a template.
+
+### 3. Bootstrap a Release
 
 ```sh
 # Download and extract FreeBSD base
@@ -75,14 +90,14 @@ blackship bootstrap 15.0-RELEASE
 blackship releases
 ```
 
-### 3. Create Network
+### 4. Create Network
 
 ```sh
 # Create bridge with gateway
 blackship network create default --subnet 10.0.1.0/24 --gateway 10.0.1.1 --bridge blackship0
 ```
 
-### 4. Start Jails
+### 5. Start Jails
 
 ```sh
 # Start a specific jail
@@ -95,7 +110,7 @@ blackship up --all
 blackship up --all --dry-run
 ```
 
-### 5. Interact with Jails
+### 6. Interact with Jails
 
 ```sh
 # Open console
@@ -185,8 +200,9 @@ on_failure = "continue"
 | `blackship restart [jail] [--all] [--dry-run]` | Restart jail(s) |
 | `blackship ps [--json]` | List jail status |
 | `blackship check` | Validate configuration |
-| `blackship init` | Initialize ZFS datasets |
+| `blackship setup` | Initialize PF firewall anchor |
 | `blackship cleanup <jail> [--force]` | Clean up failed jail resources |
+| `blackship init [-f file] [--release] [--toml]` | Create a new Jailfile |
 
 ### Console & Execution
 
@@ -245,6 +261,44 @@ on_failure = "continue"
 | `blackship health [jail] [-w] [-i interval] [--json]` | Health check status |
 | `blackship supervise` | Start Warden supervisor for auto-restart |
 | `blackship logs <jail> [-f] [-n lines]` | Tail jail logs |
+
+### Armada (Multi-Jail Orchestration)
+
+| Command | Description |
+|---------|-------------|
+| `blackship armada init [-f file]` | Create a new blackship.toml |
+| `blackship armada up [-d] [--build] [--no-build] [jails...]` | Start all jails (auto-builds if needed) |
+| `blackship armada down [jails...]` | Stop all jails |
+| `blackship armada build [jails...]` | Build jails from Jailfiles |
+| `blackship armada ps [--json]` | Show status of all jails |
+| `blackship armada config [--show]` | Validate and show configuration |
+
+#### Config File Merging
+
+Armada supports merging multiple config files (later files override earlier):
+
+```sh
+# Merge base config with production overrides
+blackship armada -f base.toml -f prod.toml up
+
+# Merge multiple files
+blackship armada -f base.toml -f secrets.toml -f local.toml up
+```
+
+#### Jailfile References
+
+Jails in `blackship.toml` can reference Jailfiles for building:
+
+```toml
+[[jails]]
+name = "web"
+build = "./web"              # Directory containing Jailfile
+depends_on = ["db"]
+
+[[jails]]
+name = "api"
+jailfile = "./custom/Api.jailfile"  # Explicit Jailfile path
+```
 
 ### Shell Completion
 
@@ -587,7 +641,7 @@ zfs destroy -r zroot/blackship/jails/myjail
 
 ## License
 
-MIT - See [LICENSE](LICENSE) file for details.
+BSD-3-Clause - See [LICENSE](LICENSE) file for details.
 
 ## Author
 

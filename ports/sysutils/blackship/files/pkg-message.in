@@ -1,0 +1,23 @@
+[
+{ type: install
+  message: <<EOM
+Blackship has been installed.
+
+To get started:
+1. Copy the sample configuration:
+   cp %%ETCDIR%%/blackship.toml.sample %%ETCDIR%%/blackship.toml
+
+2. Edit the configuration file to define your jails:
+   edit %%ETCDIR%%/blackship.toml
+
+3. Start managing jails:
+   blackship --config %%ETCDIR%%/blackship.toml status
+
+4. To enable the Warden supervisor (auto-restart jails):
+   sysrc blackship_warden_enable=YES
+   service blackship_warden start
+
+For more information, see: https://github.com/seuros/blackship
+EOM
+}
+]
