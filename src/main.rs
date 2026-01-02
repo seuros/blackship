@@ -3,6 +3,12 @@
 //! A jail manager with TOML configuration, dependency management,
 //! and state machine-controlled lifecycle.
 
+#[cfg(not(target_os = "freebsd"))]
+compile_error!(
+    "blackship only supports FreeBSD. This crate requires jail(2) syscalls \
+     which are only available on FreeBSD."
+);
+
 mod provision;
 mod cli;
 mod manifest;
