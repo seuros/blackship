@@ -20,6 +20,7 @@ pub struct ExecOptions {
     /// Environment variables to set
     pub env: Vec<(String, String)>,
     /// Clear environment before setting new vars
+    #[allow(dead_code)]
     pub clear_env: bool,
 }
 
@@ -48,26 +49,56 @@ pub fn exec_in_jail(jail: &str, command: &[String], opts: &ExecOptions) -> Resul
     // Add jail ID
     cmd.arg(jid.to_string());
 
-    // Add command and arguments
-    if command.is_empty() {
-        // Default to shell
+    // Build the actual command to run
+    // If we have a workdir or env, wrap in shell
+    if opts.workdir.is_some() || !opts.env.is_empty() {
         cmd.arg("/bin/sh");
+        cmd.arg("-c");
+
+        let mut script = String::new();
+
+        // Add environment exports
+        for (key, value) in &opts.env {
+            // Escape single quotes in value
+            let escaped = value.replace('\'', "'\\''");
+            script.push_str(&format!("export {}='{}'; ", key, escaped));
+        }
+
+        // Add working directory change
+        if let Some(ref workdir) = opts.workdir {
+            script.push_str(&format!("cd '{}' || exit 1; ", workdir));
+        }
+
+        // Add the actual command
+        if command.is_empty() {
+            script.push_str("exec /bin/sh");
+        } else {
+            // Quote each argument
+            let quoted: Vec<String> = command
+                .iter()
+                .map(|arg| {
+                    if arg.contains(' ') || arg.contains('\'') || arg.contains('"') {
+                        format!("'{}'", arg.replace('\'', "'\\''"))
+                    } else {
+                        arg.clone()
+                    }
+                })
+                .collect();
+            script.push_str(&format!("exec {}", quoted.join(" ")));
+        }
+
+        cmd.arg(script);
     } else {
-        cmd.args(command);
+        // No workdir or env, just run the command directly
+        if command.is_empty() {
+            cmd.arg("/bin/sh");
+        } else {
+            cmd.args(command);
+        }
     }
 
-    // Set working directory if specified
-    if let Some(ref workdir) = opts.workdir {
-        cmd.current_dir(workdir);
-    }
-
-    // Handle environment
-    if opts.clear_env {
-        cmd.env_clear();
-    }
-    for (key, value) in &opts.env {
-        cmd.env(key, value);
-    }
+    // Note: We pass environment through the shell script above, not here
+    // This ensures the env is set inside the jail, not on the host side
 
     // Inherit stdio for interactive use
     cmd.stdin(Stdio::inherit())

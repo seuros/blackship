@@ -43,9 +43,6 @@ zstd = "0.13"
 # Networking
 ipnet = "2.11"
 
-# Concurrency (healthchecks)
-crossbeam = "0.8"
-
 # Template parsing
 nom = "8.0"
 
