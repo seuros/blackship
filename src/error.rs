@@ -35,6 +35,12 @@ pub enum Error {
     #[error("Jail '{0}' is not running")]
     JailNotRunning(String),
 
+    #[error("Jail '{0}' already exists")]
+    JailExists(String),
+
+    #[error("Jail creation failed: {0}")]
+    JailCreationFailed(String),
+
     #[error("Jail path does not exist: {0}")]
     JailPathNotFound(PathBuf),
 
@@ -143,6 +149,14 @@ pub enum Error {
 
     #[error("Build failed at step '{step}': {message}")]
     BuildFailed { step: String, message: String },
+
+    // Copy errors
+    #[error("Copy failed: {0}")]
+    CopyFailed(String),
+
+    // Argument errors
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
 }
 
 /// Result type alias for Blackship operations

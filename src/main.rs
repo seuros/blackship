@@ -49,14 +49,42 @@ fn run() -> Result<()> {
         Commands::Exec {
             jail,
             user,
+            workdir,
+            env,
             command,
         } => {
             let opts = console::ExecOptions {
                 user,
+                workdir,
+                env,
                 ..Default::default()
             };
             let status = console::exec_in_jail(&jail, &command, &opts)?;
             std::process::exit(status.code().unwrap_or(1));
+        }
+        Commands::Run {
+            name,
+            release,
+            detach,
+            network,
+            rm,
+            command,
+        } => {
+            return run_ephemeral_jail(&name, &release, detach, network.as_deref(), rm, &command);
+        }
+        Commands::Cp {
+            source,
+            dest,
+            preserve,
+        } => {
+            return copy_files(&source, &dest, preserve);
+        }
+        Commands::Rm {
+            jails,
+            force,
+            volumes,
+        } => {
+            return remove_jails(&jails, force, volumes);
         }
         Commands::Console { jail, user } => {
             let status = console::console(&jail, &user)?;
@@ -1653,9 +1681,314 @@ data_dir = "/var/blackship"
                 | Commands::Export { .. }
                 | Commands::Import { .. }
                 | Commands::Snapshot { .. }
-                | Commands::Clone { .. } => unreachable!(),
+                | Commands::Clone { .. }
+                | Commands::Run { .. }
+                | Commands::Cp { .. }
+                | Commands::Rm { .. } => unreachable!(),
             }
         }
+    }
+
+    Ok(())
+}
+
+/// Run a command in an ephemeral jail
+///
+/// Creates a jail from a release, runs the command, and optionally cleans up.
+fn run_ephemeral_jail(
+    name: &str,
+    release: &str,
+    detach: bool,
+    network: Option<&str>,
+    auto_rm: bool,
+    command: &[String],
+) -> Result<()> {
+    use std::process::Command;
+
+    // Check if release is bootstrapped
+    let release_path = std::path::Path::new("/usr/local/jails/releases").join(release);
+    if !release_path.exists() {
+        return Err(error::Error::ReleaseNotFound(release.to_string()));
+    }
+
+    // Create jail root using ZFS clone if available, otherwise copy
+    let jail_root = std::path::Path::new("/usr/local/jails/containers").join(name);
+
+    if jail_root.exists() {
+        return Err(error::Error::JailExists(name.to_string()));
+    }
+
+    // Try ZFS clone first
+    let zfs_dataset = format!("zroot/jails/releases/{}", release);
+    let new_dataset = format!("zroot/jails/containers/{}", name);
+
+    let clone_result = Command::new("zfs")
+        .args(["clone", "-p", &format!("{}@base", zfs_dataset), &new_dataset])
+        .status();
+
+    let using_zfs = match clone_result {
+        Ok(status) if status.success() => true,
+        _ => {
+            // Fall back to copying
+            println!("ZFS clone not available, copying release (this may take a while)...");
+            std::fs::create_dir_all(&jail_root)?;
+            let status = Command::new("cp")
+                .args(["-a", release_path.to_str().unwrap(), jail_root.to_str().unwrap()])
+                .status()?;
+            if !status.success() {
+                return Err(error::Error::JailCreationFailed(
+                    "Failed to copy release".to_string(),
+                ));
+            }
+            false
+        }
+    };
+
+    // Determine the command to run
+    let jail_command = if command.is_empty() {
+        vec!["/bin/sh".to_string()]
+    } else {
+        command.to_vec()
+    };
+
+    // Build jail.conf parameters
+    let mut jail_params = vec![
+        format!("name={}", name),
+        format!("path={}", jail_root.display()),
+        "exec.start=/bin/sh /etc/rc".to_string(),
+        "exec.stop=/bin/sh /etc/rc.shutdown jail".to_string(),
+        "mount.devfs".to_string(),
+        "allow.raw_sockets".to_string(),
+        "allow.socket_af".to_string(),
+        "allow.chflags".to_string(),
+    ];
+
+    // Add network configuration
+    if let Some(net) = network {
+        jail_params.push(format!("vnet={}", net));
+    } else {
+        // Use shared IP mode with loopback
+        jail_params.push("ip4=inherit".to_string());
+    }
+
+    // Start the jail
+    let mut jail_cmd = Command::new("jail");
+    jail_cmd.arg("-c");
+    for param in &jail_params {
+        jail_cmd.arg(param);
+    }
+
+    let status = jail_cmd.status()?;
+    if !status.success() {
+        // Cleanup on failure
+        if using_zfs {
+            let _ = Command::new("zfs").args(["destroy", "-r", &new_dataset]).status();
+        } else {
+            let _ = std::fs::remove_dir_all(&jail_root);
+        }
+        return Err(error::Error::JailCreationFailed(
+            "Failed to start jail".to_string(),
+        ));
+    }
+
+    println!("Jail '{}' started from release '{}'", name, release);
+
+    if detach {
+        // In detach mode, just return - jail keeps running
+        println!("Running in detached mode. Use 'blackship exec {}' to run commands.", name);
+        println!("Use 'blackship rm {}' to stop and remove.", name);
+        return Ok(());
+    }
+
+    // Execute the command
+    let opts = console::ExecOptions::default();
+    let exec_status = console::exec_in_jail(name, &jail_command, &opts);
+
+    // Cleanup if auto_rm is set or command finished
+    if auto_rm {
+        println!("Cleaning up jail '{}'...", name);
+        // Stop the jail
+        let _ = Command::new("jail").args(["-r", name]).status();
+
+        // Remove the jail root
+        if using_zfs {
+            let _ = Command::new("zfs").args(["destroy", "-r", &new_dataset]).status();
+        } else {
+            let _ = std::fs::remove_dir_all(&jail_root);
+        }
+    }
+
+    match exec_status {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(e) => Err(e),
+    }
+}
+
+/// Copy files between host and jail
+///
+/// Supports paths in format:
+/// - `jail:path` - path inside a jail
+/// - `path` - path on the host
+fn copy_files(source: &str, dest: &str, preserve: bool) -> Result<()> {
+    use std::process::Command;
+
+    let (src_jail, src_path) = parse_jail_path(source);
+    let (dst_jail, dst_path) = parse_jail_path(dest);
+
+    // Can't copy from jail to jail directly
+    if src_jail.is_some() && dst_jail.is_some() {
+        return Err(error::Error::InvalidArgument(
+            "Cannot copy directly between two jails. Copy to host first.".to_string(),
+        ));
+    }
+
+    // Get jail root paths
+    let src_full = if let Some(jail) = src_jail {
+        let jail_root = get_jail_root(&jail)?;
+        jail_root.join(src_path.trim_start_matches('/'))
+    } else {
+        std::path::PathBuf::from(src_path)
+    };
+
+    let dst_full = if let Some(jail) = dst_jail {
+        let jail_root = get_jail_root(&jail)?;
+        jail_root.join(dst_path.trim_start_matches('/'))
+    } else {
+        std::path::PathBuf::from(dst_path)
+    };
+
+    // Build cp command
+    let mut cmd = Command::new("cp");
+    if preserve {
+        cmd.arg("-a");
+    }
+    cmd.arg("-r");
+    cmd.arg(&src_full);
+    cmd.arg(&dst_full);
+
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(error::Error::CopyFailed(format!(
+            "Failed to copy {} to {}",
+            src_full.display(),
+            dst_full.display()
+        )));
+    }
+
+    println!(
+        "Copied {} -> {}",
+        source,
+        dest
+    );
+    Ok(())
+}
+
+/// Parse a jail:path format string
+fn parse_jail_path(s: &str) -> (Option<String>, &str) {
+    if let Some(colon_pos) = s.find(':') {
+        // Check if it looks like a Windows path (C:\) or jail:path
+        if colon_pos == 1 && s.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+            // Looks like Windows path, treat as local
+            (None, s)
+        } else {
+            let jail = &s[..colon_pos];
+            let path = &s[colon_pos + 1..];
+            (Some(jail.to_string()), path)
+        }
+    } else {
+        (None, s)
+    }
+}
+
+/// Get the root path of a jail
+fn get_jail_root(jail: &str) -> Result<std::path::PathBuf> {
+    use std::process::Command;
+
+    // Try to get jail path from jls
+    let output = Command::new("jls")
+        .args(["-j", jail, "-h", "path"])
+        .output()?;
+
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .nth(1) // Skip header
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !path.is_empty() {
+            return Ok(std::path::PathBuf::from(path));
+        }
+    }
+
+    // Fall back to checking common locations
+    let containers_path = std::path::Path::new("/usr/local/jails/containers").join(jail);
+    if containers_path.exists() {
+        return Ok(containers_path);
+    }
+
+    let jails_path = std::path::Path::new("/usr/local/jails").join(jail);
+    if jails_path.exists() {
+        return Ok(jails_path);
+    }
+
+    Err(error::Error::JailNotFound(jail.to_string()))
+}
+
+/// Remove/destroy jails
+fn remove_jails(jails: &[String], force: bool, volumes: bool) -> Result<()> {
+    use std::process::Command;
+
+    for jail in jails {
+        println!("Removing jail '{}'...", jail);
+
+        // Check if jail is running
+        let jls_output = Command::new("jls")
+            .args(["-j", jail])
+            .output();
+
+        let is_running = jls_output.map(|o| o.status.success()).unwrap_or(false);
+
+        if is_running {
+            if !force {
+                eprintln!("Error: Jail '{}' is running. Use --force to stop and remove.", jail);
+                continue;
+            }
+            // Stop the jail
+            println!("  Stopping jail...");
+            let stop_status = Command::new("jail")
+                .args(["-r", jail])
+                .status()?;
+            if !stop_status.success() {
+                eprintln!("  Warning: Failed to stop jail cleanly");
+            }
+        }
+
+        // Get jail path before removing
+        let jail_root = get_jail_root(jail);
+
+        // Try to remove ZFS dataset if volumes flag is set
+        if volumes {
+            let dataset = format!("zroot/jails/containers/{}", jail);
+            let zfs_result = Command::new("zfs")
+                .args(["destroy", "-r", &dataset])
+                .status();
+
+            if zfs_result.map(|s| s.success()).unwrap_or(false) {
+                println!("  Removed ZFS dataset: {}", dataset);
+                continue;
+            }
+        }
+
+        // Fall back to removing directory
+        if let Ok(root) = jail_root
+            && root.exists()
+        {
+            std::fs::remove_dir_all(&root)?;
+            println!("  Removed jail root: {}", root.display());
+        }
+
+        println!("Jail '{}' removed.", jail);
     }
 
     Ok(())

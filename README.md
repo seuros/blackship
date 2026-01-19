@@ -209,7 +209,15 @@ on_failure = "continue"
 | Command | Description |
 |---------|-------------|
 | `blackship console <jail> [-u user]` | Open interactive shell |
-| `blackship exec <jail> [-u user] -- <cmd>` | Execute command in jail |
+| `blackship exec <jail> [-u user] [-w dir] [-e K=V] -- <cmd>` | Execute command in jail |
+| `blackship run --name <n> --release <r> [-d] [--rm] -- <cmd>` | Run command in ephemeral jail |
+
+### File Operations
+
+| Command | Description |
+|---------|-------------|
+| `blackship cp <src> <dest>` | Copy files (use `jail:path` for jail paths) |
+| `blackship rm <jails...> [-f] [--volumes]` | Remove/destroy jails |
 
 ### Bootstrap & Releases
 
@@ -597,6 +605,34 @@ blackship import webapp-v1.0.tar.zst --name webapp
 # Edit blackship.toml to add jail config
 blackship up webapp
 ```
+
+## CI/CD Integration
+
+Blackship can be used as a backend for [Gitea Actions](https://docs.gitea.com/usage/actions/overview) via [act_runner](https://gitea.com/gitea/act_runner).
+
+### Setup
+
+1. Bootstrap a release:
+```sh
+blackship bootstrap 15.0-RELEASE
+```
+
+2. Configure act_runner with jail labels:
+```yaml
+runner:
+  labels:
+    - "freebsd-15:jail://15.0-RELEASE"
+```
+
+3. Workflows targeting `runs-on: freebsd-15` will execute in ephemeral jails.
+
+### How it Works
+
+When act_runner receives a job with a `jail://` label:
+1. Creates an ephemeral jail via `blackship run --name gitea-runner-<id> --release <release> --detach`
+2. Clones the repository into the jail
+3. Executes each step via `blackship exec <jail> --workdir /workspace -- <command>`
+4. Cleans up via `blackship rm <jail>`
 
 ## Troubleshooting
 
