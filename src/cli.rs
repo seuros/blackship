@@ -133,7 +133,7 @@ pub enum Commands {
         command: Vec<String>,
     },
 
-    /// Run a command in a new ephemeral jail
+    /// Run a command in a new ephemeral jail (always cleans up when command exits)
     Run {
         /// Jail name
         #[arg(long)]
@@ -143,17 +143,13 @@ pub enum Commands {
         #[arg(long)]
         release: String,
 
-        /// Run in background (detached mode)
+        /// Run in background (detached mode) - jail persists until removed with 'blackship rm'
         #[arg(short = 'd', long)]
         detach: bool,
 
         /// Network to attach to
         #[arg(long)]
         network: Option<String>,
-
-        /// Automatically remove jail when command exits
-        #[arg(long)]
-        rm: bool,
 
         /// Command to execute (use -- to separate from options)
         #[arg(last = true)]
