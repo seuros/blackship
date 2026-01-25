@@ -194,7 +194,9 @@ FROM {}
 # https://github.com/seuros/blackship
 
 [config]
-data_dir = "/var/blackship"
+# data_dir defaults to ~/.local/share/blackship (XDG_DATA_HOME)
+# Uncomment to override:
+# data_dir = "/var/blackship"
 # zfs_enabled = true
 # zpool = "zroot"
 
@@ -1718,14 +1720,14 @@ fn run_ephemeral_jail(
 ) -> Result<()> {
     use std::process::Command;
 
-    // Get paths from config or use defaults
+    // Get paths from config or use XDG defaults
     let releases_dir = config
         .map(|c| c.config.releases_dir.clone())
-        .unwrap_or_else(|| std::path::PathBuf::from("/var/blackship/releases"));
+        .unwrap_or_else(|| manifest::get_xdg_data_dir().join("releases"));
 
     let data_dir = config
         .map(|c| c.config.data_dir.clone())
-        .unwrap_or_else(|| std::path::PathBuf::from("/var/blackship"));
+        .unwrap_or_else(manifest::default_data_dir);
 
     let (zpool, dataset) = config
         .map(|c| {
@@ -1988,10 +1990,10 @@ fn get_jail_root(jail: &str, config: Option<&manifest::BlackshipConfig>) -> Resu
         }
     }
 
-    // Get data_dir from config or use default
+    // Get data_dir from config or use XDG default
     let data_dir = config
         .map(|c| c.config.data_dir.clone())
-        .unwrap_or_else(|| std::path::PathBuf::from("/var/blackship"));
+        .unwrap_or_else(manifest::default_data_dir);
 
     // Fall back to checking common locations
     let containers_path = data_dir.join("containers").join(jail);

@@ -38,6 +38,27 @@ blackship completion zsh > /usr/local/share/zsh/site-functions/_blackship
 blackship completion fish > ~/.config/fish/completions/blackship.fish
 ```
 
+## Default Paths
+
+Blackship uses XDG-compliant user directories by default:
+
+| Path | Default | Environment Override |
+|------|---------|---------------------|
+| `data_dir` | `~/.local/share/blackship` | `XDG_DATA_HOME` |
+| `releases_dir` | `~/.local/share/blackship/releases` | - |
+| `cache_dir` | `~/.cache/blackship` | `XDG_CACHE_HOME` |
+
+These defaults allow running blackship without root for most operations. Override in `blackship.toml` for system-wide paths:
+
+```toml
+[config]
+data_dir = "/var/blackship"
+releases_dir = "/var/blackship/releases"
+cache_dir = "/var/blackship/cache"
+```
+
+> **Note:** While paths are user-writable by default, `bootstrap` extraction requires root privileges because FreeBSD base archives contain root-owned files with special permissions (setuid binaries, etc.). Use `sudo blackship bootstrap <release>` for extraction.
+
 ## Quick Start
 
 ### 1. Initialize Jailfile
@@ -59,9 +80,9 @@ Create `blackship.toml`:
 
 ```toml
 [config]
-data_dir = "/var/blackship"
-releases_dir = "/var/blackship/releases"
-cache_dir = "/var/blackship/cache"
+# Paths default to XDG directories (~/.local/share/blackship, ~/.cache/blackship)
+# Uncomment to use system-wide paths:
+# data_dir = "/var/blackship"
 zfs_enabled = true
 zpool = "zroot"
 dataset = "blackship"
@@ -83,8 +104,11 @@ Or use `blackship armada init` to generate a template.
 ### 3. Bootstrap a Release
 
 ```sh
-# Download and extract FreeBSD base
-blackship bootstrap 15.0-RELEASE
+# Download and extract FreeBSD base (requires root for extraction)
+sudo blackship bootstrap 15.0-RELEASE
+
+# Dry run to see what would be downloaded
+blackship bootstrap 15.0-RELEASE --dry-run
 
 # List available releases
 blackship releases
@@ -130,13 +154,14 @@ blackship ps --json
 
 ```toml
 [config]
-data_dir = "/var/blackship"           # Base data directory
-releases_dir = "/var/blackship/releases"  # FreeBSD releases
-cache_dir = "/var/blackship/cache"    # Download cache
+# All paths are optional - defaults to XDG directories
+data_dir = "~/.local/share/blackship"      # Base data directory (default)
+releases_dir = "~/.local/share/blackship/releases"  # FreeBSD releases (default)
+cache_dir = "~/.cache/blackship"           # Download cache (default)
 mirror_url = "https://download.freebsd.org"  # FreeBSD mirror
-zfs_enabled = true                    # Enable ZFS features
-zpool = "zroot"                       # ZFS pool name
-dataset = "blackship"                 # Base dataset name
+zfs_enabled = true                         # Enable ZFS features
+zpool = "zroot"                            # ZFS pool name
+dataset = "blackship"                      # Base dataset name
 ```
 
 ### Jail Definition
@@ -275,7 +300,7 @@ on_failure = "continue"
 | Command | Description |
 |---------|-------------|
 | `blackship armada init [-f file]` | Create a new blackship.toml |
-| `blackship armada up [-d] [--build] [--no-build] [jails...]` | Start all jails (auto-builds if needed) |
+| `blackship armada up [-d] [jails...]` | Start all jails |
 | `blackship armada down [jails...]` | Stop all jails |
 | `blackship armada build [jails...]` | Build jails from Jailfiles |
 | `blackship armada ps [--json]` | Show status of all jails |
@@ -542,7 +567,7 @@ blackship down app
 
 ```toml
 [config]
-data_dir = "/var/blackship"
+# data_dir defaults to ~/.local/share/blackship
 zfs_enabled = true
 zpool = "zroot"
 dataset = "blackship"
