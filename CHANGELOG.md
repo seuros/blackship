@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.4](https://github.com/seuros/blackship/compare/blackship-v0.1.3...blackship-v0.1.4) (2026-01-25)
+
+
+### Features
+
+* add Docker-style run, cp, and rm commands ([#5](https://github.com/seuros/blackship/issues/5)) ([96fb395](https://github.com/seuros/blackship/commit/96fb395fc6a25e38612ae81c6897b71a97cff951))
+* use XDG-compliant user directories as default paths ([#7](https://github.com/seuros/blackship/issues/7)) ([cd3f5a3](https://github.com/seuros/blackship/commit/cd3f5a3c569bc07b51a08d5ceea13ce2e3232d91))
+
 ## [0.1.3](https://github.com/seuros/blackship/compare/blackship-v0.1.2...blackship-v0.1.3) (2026-01-02)
 
 
