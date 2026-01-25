@@ -3,8 +3,8 @@
 //! Parses `blackship.toml` configuration files using serde
 
 use crate::error::{Error, Result};
-use crate::sickbay::checker::HealthCheckConfig;
 use crate::hooks::Hook;
+use crate::sickbay::checker::HealthCheckConfig;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
@@ -23,14 +23,16 @@ pub fn load(path: &Path) -> Result<BlackshipConfig> {
     // Set default project name from directory if not specified
     if config.config.project.is_none() {
         // Try to get directory name from config path, or current working directory
-        let project_name = path.parent()
+        let project_name = path
+            .parent()
             .filter(|p| !p.as_os_str().is_empty() && p.as_os_str() != ".")
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .map(|s| s.to_string())
             .or_else(|| {
                 // Config in current directory - use cwd name
-                std::env::current_dir().ok()
+                std::env::current_dir()
+                    .ok()
                     .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
             })
             .unwrap_or_else(|| black_ship_name_from_path(path));
@@ -48,7 +50,9 @@ pub fn load(path: &Path) -> Result<BlackshipConfig> {
 /// Uses Docker Compose-style deep merge: later files only override fields they specify.
 pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
     if paths.is_empty() {
-        return Err(Error::ConfigValidation("No configuration files provided".into()));
+        return Err(Error::ConfigValidation(
+            "No configuration files provided".into(),
+        ));
     }
 
     let mut base: Option<BlackshipConfig> = None;
@@ -73,14 +77,16 @@ pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
     // Set default project name from first config's directory if not specified
     if config.config.project.is_none() {
         // Try to get directory name from config path, or current working directory
-        let project_name = first_path.parent()
+        let project_name = first_path
+            .parent()
             .filter(|p| !p.as_os_str().is_empty() && p.as_os_str() != ".")
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .map(|s| s.to_string())
             .or_else(|| {
                 // Config in current directory - use cwd name
-                std::env::current_dir().ok()
+                std::env::current_dir()
+                    .ok()
                     .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
             })
             .unwrap_or_else(|| black_ship_name_from_path(first_path));
@@ -157,9 +163,7 @@ impl BlackshipConfig {
             return Some(jail);
         }
         // Then try matching the full prefixed name
-        self.jails
-            .iter()
-            .find(|j| self.jail_name(&j.name) == name)
+        self.jails.iter().find(|j| self.jail_name(&j.name) == name)
     }
 
     /// Resolve a jail identifier to (service_name, full_name)
@@ -169,11 +173,7 @@ impl BlackshipConfig {
             return Some((jail.name.clone(), full));
         }
 
-        if let Some(jail) = self
-            .jails
-            .iter()
-            .find(|j| self.jail_name(&j.name) == name)
-        {
+        if let Some(jail) = self.jails.iter().find(|j| self.jail_name(&j.name) == name) {
             let full = self.jail_name(&jail.name);
             return Some((jail.name.clone(), full));
         }
@@ -250,9 +250,9 @@ pub fn black_ship_name(seed: usize) -> String {
 
 /// Generate a Black Ship name from a path (uses path hash for determinism)
 pub fn black_ship_name_from_path(path: &Path) -> String {
-    let hash = path.to_string_lossy()
-        .bytes()
-        .fold(0usize, |acc, b| acc.wrapping_add(b as usize).wrapping_mul(31));
+    let hash = path.to_string_lossy().bytes().fold(0usize, |acc, b| {
+        acc.wrapping_add(b as usize).wrapping_mul(31)
+    });
     black_ship_name(hash)
 }
 
@@ -263,7 +263,8 @@ pub struct GlobalConfig {
     /// If not set, a random Black Ship name will be used
     pub project: Option<String>,
 
-    /// Base data directory for Blackship
+    /// Base data directory for Blackship (defaults to ~/.local/share/blackship)
+    #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
 
     /// Enable ZFS dataset management
@@ -314,7 +315,9 @@ impl GlobalConfig {
     /// Get the effective project name
     /// Should always be set by load/load_merged, but falls back to "blackship" if not
     pub fn project_name(&self) -> String {
-        self.project.clone().unwrap_or_else(|| "blackship".to_string())
+        self.project
+            .clone()
+            .unwrap_or_else(|| "blackship".to_string())
     }
 
     /// Merge another GlobalConfig into this one
@@ -322,17 +325,41 @@ impl GlobalConfig {
     fn merge(self, other: GlobalConfig) -> GlobalConfig {
         GlobalConfig {
             project: other.project.or(self.project),
-            data_dir: other.data_dir, // Required field, always take other
+            data_dir: if other.data_dir != default_data_dir() {
+                other.data_dir
+            } else {
+                self.data_dir
+            },
             zfs_enabled: other.zfs_enabled,
             zpool: other.zpool.or(self.zpool),
-            dataset: if other.dataset != default_dataset() { other.dataset } else { self.dataset },
-            releases_dir: if other.releases_dir != default_releases_dir() { other.releases_dir } else { self.releases_dir },
-            cache_dir: if other.cache_dir != default_cache_dir() { other.cache_dir } else { self.cache_dir },
-            mirror_url: if other.mirror_url != default_mirror_url() { other.mirror_url } else { self.mirror_url },
-            bootstrap_archives: if other.bootstrap_archives != default_bootstrap_archives() { other.bootstrap_archives } else { self.bootstrap_archives },
+            dataset: if other.dataset != default_dataset() {
+                other.dataset
+            } else {
+                self.dataset
+            },
+            releases_dir: if other.releases_dir != default_releases_dir() {
+                other.releases_dir
+            } else {
+                self.releases_dir
+            },
+            cache_dir: if other.cache_dir != default_cache_dir() {
+                other.cache_dir
+            } else {
+                self.cache_dir
+            },
+            mirror_url: if other.mirror_url != default_mirror_url() {
+                other.mirror_url
+            } else {
+                self.mirror_url
+            },
+            bootstrap_archives: if other.bootstrap_archives != default_bootstrap_archives() {
+                other.bootstrap_archives
+            } else {
+                self.bootstrap_archives
+            },
             rate_limit: other.rate_limit, // Take other's rate limit config
-            health: other.health, // Take other's health defaults
-            retry: other.retry, // Take other's retry config
+            health: other.health,         // Take other's health defaults
+            retry: other.retry,           // Take other's retry config
             bridge: other.bridge.or(self.bridge), // Merge bridge VLAN config
         }
     }
@@ -342,12 +369,40 @@ fn default_dataset() -> String {
     "blackship".into()
 }
 
+/// Get user's home directory, falling back to /root
+fn get_home_dir() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/root"))
+}
+
+/// Get XDG data directory for blackship (~/.local/share/blackship)
+pub fn get_xdg_data_dir() -> PathBuf {
+    std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| get_home_dir().join(".local/share"))
+        .join("blackship")
+}
+
+/// Get XDG cache directory for blackship (~/.cache/blackship)
+pub fn get_xdg_cache_dir() -> PathBuf {
+    std::env::var("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| get_home_dir().join(".cache"))
+        .join("blackship")
+}
+
+/// Default data directory (XDG compliant)
+pub fn default_data_dir() -> PathBuf {
+    get_xdg_data_dir()
+}
+
 fn default_releases_dir() -> PathBuf {
-    PathBuf::from("/var/blackship/releases")
+    get_xdg_data_dir().join("releases")
 }
 
 fn default_cache_dir() -> PathBuf {
-    PathBuf::from("/var/blackship/cache")
+    get_xdg_cache_dir()
 }
 
 fn default_mirror_url() -> String {
@@ -631,7 +686,11 @@ impl JailDef {
             build: other.build.or(self.build),
             jailfile: other.jailfile.or(self.jailfile),
             hostname: other.hostname.or(self.hostname),
-            depends_on: if other.depends_on.is_empty() { self.depends_on } else { other.depends_on },
+            depends_on: if other.depends_on.is_empty() {
+                self.depends_on
+            } else {
+                other.depends_on
+            },
             params: {
                 let mut merged = self.params;
                 merged.extend(other.params);
@@ -639,7 +698,11 @@ impl JailDef {
             },
             network: other.network.or(self.network),
             mount: other.mount.or(self.mount),
-            hooks: if other.hooks.is_empty() { self.hooks } else { other.hooks },
+            hooks: if other.hooks.is_empty() {
+                self.hooks
+            } else {
+                other.hooks
+            },
             healthcheck: if other.healthcheck.enabled || !other.healthcheck.checks.is_empty() {
                 other.healthcheck
             } else {
@@ -842,5 +905,36 @@ depends_on = ["nonexistent"]
 
         let config: BlackshipConfig = toml::from_str(toml).unwrap();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_parse_config_without_data_dir() {
+        // data_dir should default to XDG path when not specified
+        let toml = r#"
+[config]
+
+[[jails]]
+name = "test"
+path = "/jails/test"
+"#;
+
+        let config: BlackshipConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.jails.len(), 1);
+        // data_dir should be set to XDG default
+        assert!(config
+            .config
+            .data_dir
+            .to_string_lossy()
+            .contains("blackship"));
+    }
+
+    #[test]
+    fn test_xdg_paths() {
+        // Test that XDG functions return expected structure
+        let data_dir = get_xdg_data_dir();
+        let cache_dir = get_xdg_cache_dir();
+
+        assert!(data_dir.to_string_lossy().ends_with("blackship"));
+        assert!(cache_dir.to_string_lossy().ends_with("blackship"));
     }
 }
