@@ -1736,7 +1736,13 @@ fn run_ephemeral_jail(
         })
         .unwrap_or_else(|| ("zroot".to_string(), "blackship".to_string()));
 
-    // Check if release is bootstrapped
+    // Validate arguments before creating any resources
+    if detach && !command.is_empty() {
+        return Err(error::Error::InvalidArgument(
+            "Cannot use --detach with a command. Use 'blackship exec' after jail starts.".to_string(),
+        ));
+    }
+
     let release_path = releases_dir.join(release);
     if !release_path.exists() {
         return Err(error::Error::ReleaseNotFound(release.to_string()));
@@ -1771,8 +1777,10 @@ fn run_ephemeral_jail(
                 .to_str()
                 .ok_or_else(|| error::Error::JailCreationFailed("Invalid UTF-8 in jail root path".into()))?;
 
+            // Use "/." suffix to copy contents of release into jail_root, not the directory itself
+            let release_cp_src = format!("{}/.", release_path_str);
             let status = Command::new("cp")
-                .args(["-a", release_path_str, jail_root_str])
+                .args(["-a", &release_cp_src, jail_root_str])
                 .status()?;
             if !status.success() {
                 return Err(error::Error::JailCreationFailed(
@@ -1782,19 +1790,6 @@ fn run_ephemeral_jail(
             false
         }
     };
-
-    // Error if command provided with --detach
-    if detach && !command.is_empty() {
-        // Cleanup the created jail
-        if using_zfs {
-            let _ = Command::new("zfs").args(["destroy", "-r", &new_dataset]).status();
-        } else {
-            let _ = std::fs::remove_dir_all(&jail_root);
-        }
-        return Err(error::Error::InvalidArgument(
-            "Cannot use --detach with a command. Use 'blackship exec' after jail starts.".to_string(),
-        ));
-    }
 
     // Determine the command to run
     let jail_command = if command.is_empty() {

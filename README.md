@@ -210,7 +210,7 @@ on_failure = "continue"
 |---------|-------------|
 | `blackship console <jail> [-u user]` | Open interactive shell |
 | `blackship exec <jail> [-u user] [-w dir] [-e K=V] -- <cmd>` | Execute command in jail |
-| `blackship run --name <n> --release <r> [-d] [--rm] -- <cmd>` | Run command in ephemeral jail |
+| `blackship run --name <n> --release <r> [-d] -- <cmd>` | Run ephemeral jail (auto-cleanup unless -d) |
 
 ### File Operations
 
