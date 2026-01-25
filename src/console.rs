@@ -5,6 +5,25 @@
 //! - Open an interactive console session
 
 use crate::error::{Error, Result};
+
+/// Validate that an environment variable key is safe for shell use.
+/// Keys must start with a letter or underscore, followed by alphanumerics or underscores.
+fn is_valid_env_key(key: &str) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Escape a string for safe use in single quotes
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
 use crate::jail::{jail_attach, jail_getid};
 use std::ffi::CString;
 use std::os::unix::process::ExitStatusExt;
@@ -20,6 +39,7 @@ pub struct ExecOptions {
     /// Environment variables to set
     pub env: Vec<(String, String)>,
     /// Clear environment before setting new vars
+    #[allow(dead_code)]
     pub clear_env: bool,
 }
 
@@ -48,26 +68,53 @@ pub fn exec_in_jail(jail: &str, command: &[String], opts: &ExecOptions) -> Resul
     // Add jail ID
     cmd.arg(jid.to_string());
 
-    // Add command and arguments
-    if command.is_empty() {
-        // Default to shell
+    // Build the actual command to run
+    // If we have a workdir or env, wrap in shell
+    if opts.workdir.is_some() || !opts.env.is_empty() {
         cmd.arg("/bin/sh");
+        cmd.arg("-c");
+
+        let mut script = String::new();
+
+        // Add environment exports (with validation)
+        for (key, value) in &opts.env {
+            if !is_valid_env_key(key) {
+                return Err(Error::JailExecFailed(format!(
+                    "Invalid environment variable key: '{}'. Keys must start with a letter or underscore, followed by alphanumerics or underscores.",
+                    key
+                )));
+            }
+            let escaped = shell_quote(value);
+            script.push_str(&format!("export {}={}; ", key, escaped));
+        }
+
+        // Add working directory change (properly escaped)
+        if let Some(ref workdir) = opts.workdir {
+            let escaped_workdir = shell_quote(workdir);
+            script.push_str(&format!("cd {} || exit 1; ", escaped_workdir));
+        }
+
+        // Add the actual command
+        if command.is_empty() {
+            script.push_str("exec /bin/sh");
+        } else {
+            // Always quote each argument for safety
+            let quoted: Vec<String> = command.iter().map(|arg| shell_quote(arg)).collect();
+            script.push_str(&format!("exec {}", quoted.join(" ")));
+        }
+
+        cmd.arg(script);
     } else {
-        cmd.args(command);
+        // No workdir or env, just run the command directly
+        if command.is_empty() {
+            cmd.arg("/bin/sh");
+        } else {
+            cmd.args(command);
+        }
     }
 
-    // Set working directory if specified
-    if let Some(ref workdir) = opts.workdir {
-        cmd.current_dir(workdir);
-    }
-
-    // Handle environment
-    if opts.clear_env {
-        cmd.env_clear();
-    }
-    for (key, value) in &opts.env {
-        cmd.env(key, value);
-    }
+    // Note: We pass environment through the shell script above, not here
+    // This ensures the env is set inside the jail, not on the host side
 
     // Inherit stdio for interactive use
     cmd.stdin(Stdio::inherit())
@@ -219,5 +266,47 @@ mod tests {
         assert_eq!(opts.user, "root");
         assert!(opts.workdir.is_none());
         assert!(opts.env.is_empty());
+    }
+
+    #[test]
+    fn test_is_valid_env_key() {
+        // Valid keys
+        assert!(is_valid_env_key("PATH"));
+        assert!(is_valid_env_key("_PRIVATE"));
+        assert!(is_valid_env_key("HOME"));
+        assert!(is_valid_env_key("MY_VAR_123"));
+        assert!(is_valid_env_key("a"));
+        assert!(is_valid_env_key("_"));
+        assert!(is_valid_env_key("_1"));
+
+        // Invalid keys
+        assert!(!is_valid_env_key(""));
+        assert!(!is_valid_env_key("123ABC"));
+        assert!(!is_valid_env_key("MY-VAR"));
+        assert!(!is_valid_env_key("MY VAR"));
+        assert!(!is_valid_env_key("MY.VAR"));
+        assert!(!is_valid_env_key("$(whoami)"));
+        assert!(!is_valid_env_key("VAR;rm -rf /"));
+    }
+
+    #[test]
+    fn test_shell_quote() {
+        assert_eq!(shell_quote("hello"), "'hello'");
+        assert_eq!(shell_quote("hello world"), "'hello world'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(shell_quote(""), "''");
+        assert_eq!(shell_quote("a'b'c"), "'a'\\''b'\\''c'");
+    }
+
+    #[test]
+    fn test_shell_quote_special_chars() {
+        // These should be safely quoted
+        assert_eq!(shell_quote("$(whoami)"), "'$(whoami)'");
+        assert_eq!(shell_quote("`id`"), "'`id`'");
+        assert_eq!(shell_quote("$HOME"), "'$HOME'");
+        assert_eq!(shell_quote("foo;bar"), "'foo;bar'");
+        assert_eq!(shell_quote("foo|bar"), "'foo|bar'");
+        assert_eq!(shell_quote("foo&bar"), "'foo&bar'");
+        assert_eq!(shell_quote("foo\nbar"), "'foo\nbar'");
     }
 }

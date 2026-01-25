@@ -120,9 +120,67 @@ pub enum Commands {
         #[arg(short, long, default_value = "root")]
         user: String,
 
+        /// Working directory inside the jail
+        #[arg(short = 'w', long)]
+        workdir: Option<String>,
+
+        /// Environment variables (KEY=VALUE format, can be repeated)
+        #[arg(short = 'e', long = "env", value_parser = parse_key_val)]
+        env: Vec<(String, String)>,
+
         /// Command to execute (use -- to separate from options)
         #[arg(last = true, required = true)]
         command: Vec<String>,
+    },
+
+    /// Run a command in a new ephemeral jail (always cleans up when command exits)
+    Run {
+        /// Jail name
+        #[arg(long)]
+        name: String,
+
+        /// FreeBSD release to use (e.g., 15.0-RELEASE)
+        #[arg(long)]
+        release: String,
+
+        /// Run in background (detached mode) - jail persists until removed with 'blackship rm'
+        #[arg(short = 'd', long)]
+        detach: bool,
+
+        /// Network to attach to
+        #[arg(long)]
+        network: Option<String>,
+
+        /// Command to execute (use -- to separate from options)
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
+
+    /// Copy files between host and jail
+    Cp {
+        /// Source path (use jail:path for jail paths)
+        source: String,
+
+        /// Destination path (use jail:path for jail paths)
+        dest: String,
+
+        /// Preserve file attributes
+        #[arg(short, long)]
+        preserve: bool,
+    },
+
+    /// Remove/destroy jails
+    Rm {
+        /// Jail names to remove
+        jails: Vec<String>,
+
+        /// Force removal even if jail is running
+        #[arg(short, long)]
+        force: bool,
+
+        /// Remove associated ZFS datasets
+        #[arg(long)]
+        volumes: bool,
     },
 
     /// Open an interactive console in a running jail

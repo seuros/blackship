@@ -209,7 +209,15 @@ on_failure = "continue"
 | Command | Description |
 |---------|-------------|
 | `blackship console <jail> [-u user]` | Open interactive shell |
-| `blackship exec <jail> [-u user] -- <cmd>` | Execute command in jail |
+| `blackship exec <jail> [-u user] [-w dir] [-e K=V] -- <cmd>` | Execute command in jail |
+| `blackship run --name <n> --release <r> [-d] -- <cmd>` | Run ephemeral jail (auto-cleanup unless -d) |
+
+### File Operations
+
+| Command | Description |
+|---------|-------------|
+| `blackship cp <src> <dest>` | Copy files (use `jail:path` for jail paths) |
+| `blackship rm <jails...> [-f] [--volumes]` | Remove/destroy jails |
 
 ### Bootstrap & Releases
 
@@ -597,6 +605,40 @@ blackship import webapp-v1.0.tar.zst --name webapp
 # Edit blackship.toml to add jail config
 blackship up webapp
 ```
+
+## CI/CD Integration (Example)
+
+This is an example of how Blackship could be used as a backend for CI/CD systems. This is not a built-in integration - it demonstrates how the `run`, `exec`, `cp`, and `rm` commands can be combined for CI/CD workflows.
+
+### Example: Gitea Actions with act_runner
+
+Blackship could be used as a backend for [Gitea Actions](https://docs.gitea.com/usage/actions/overview) via [act_runner](https://gitea.com/gitea/act_runner).
+
+#### Setup
+
+1. Bootstrap a release:
+```sh
+blackship bootstrap 15.0-RELEASE
+```
+
+2. Configure act_runner with jail labels:
+```yaml
+runner:
+  labels:
+    - "freebsd-15:jail://15.0-RELEASE"
+```
+
+3. Workflows targeting `runs-on: freebsd-15` would execute in ephemeral jails.
+
+#### How it Would Work
+
+When act_runner receives a job with a `jail://` label, the runner could:
+1. Create an ephemeral jail via `blackship run --name gitea-runner-<id> --release <release> --detach`
+2. Clone the repository into the jail using `blackship cp`
+3. Execute each step via `blackship exec <jail> --workdir /workspace -- <command>`
+4. Clean up via `blackship rm <jail> --force`
+
+**Note:** This requires custom act_runner configuration or a wrapper script - it is not built into act_runner by default.
 
 ## Troubleshooting
 
