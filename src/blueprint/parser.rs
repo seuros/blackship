@@ -4,17 +4,17 @@
 //! 1. Line-based format (similar to Dockerfile)
 //! 2. TOML format
 
-use crate::error::{Error, Result};
 use crate::blueprint::instructions::{
     BuildArg, CopySpec, ExposePort, Instruction, Jailfile, JailfileMetadata,
 };
+use crate::error::{Error, Result};
 use nom::{
+    Parser,
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_till, take_while1},
     character::complete::{char, space0, space1},
     combinator::{map, opt, rest},
     sequence::{delimited, pair, preceded},
-    Parser,
 };
 use serde::Deserialize;
 use std::collections::HashMap;

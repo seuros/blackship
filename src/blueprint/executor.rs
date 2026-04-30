@@ -46,9 +46,10 @@ impl TemplateExecutor {
         // Process ARG instructions first to set defaults
         for arg in &jailfile.args {
             if self.context.get_arg(&arg.name).is_none()
-                && let Some(default) = &arg.default {
-                    self.context.set_arg(&arg.name, default);
-                }
+                && let Some(default) = &arg.default
+            {
+                self.context.set_arg(&arg.name, default);
+            }
         }
 
         // Execute each instruction
@@ -186,9 +187,10 @@ impl TemplateExecutor {
 
         // Copy host resolv.conf if jail doesn't have one
         if !resolv_path.exists()
-            && let Ok(content) = fs::read_to_string("/etc/resolv.conf") {
-                let _ = fs::write(&resolv_path, content);
-            }
+            && let Ok(content) = fs::read_to_string("/etc/resolv.conf")
+        {
+            let _ = fs::write(&resolv_path, content);
+        }
 
         // Mount devfs for the chroot environment
         let need_devfs = !dev_path.join("null").exists();
@@ -210,7 +212,10 @@ impl TemplateExecutor {
             };
 
             if result != 0 {
-                eprintln!("Warning: Failed to mount devfs: {}", std::io::Error::last_os_error());
+                eprintln!(
+                    "Warning: Failed to mount devfs: {}",
+                    std::io::Error::last_os_error()
+                );
             }
         }
 
@@ -242,7 +247,10 @@ impl TemplateExecutor {
             let stderr_str = String::from_utf8_lossy(&stderr);
             return Err(Error::BuildFailed {
                 step: "RUN".to_string(),
-                message: format!("Command failed with exit code {}: {}", exit_code, stderr_str),
+                message: format!(
+                    "Command failed with exit code {}: {}",
+                    exit_code, stderr_str
+                ),
             });
         }
 
@@ -277,12 +285,13 @@ impl TemplateExecutor {
 
         // Create destination parent directory if needed
         if let Some(parent) = dest_path.parent()
-            && !parent.exists() {
-                fs::create_dir_all(parent).map_err(|e| Error::BuildFailed {
-                    step: "COPY".to_string(),
-                    message: format!("Failed to create directory {}: {}", parent.display(), e),
-                })?;
-            }
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent).map_err(|e| Error::BuildFailed {
+                step: "COPY".to_string(),
+                message: format!("Failed to create directory {}: {}", parent.display(), e),
+            })?;
+        }
 
         // Copy file or directory
         if src_path.is_dir() {

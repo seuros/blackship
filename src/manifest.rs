@@ -651,6 +651,10 @@ pub struct JailDef {
     /// Health check configuration
     #[serde(default)]
     pub healthcheck: HealthCheckConfig,
+
+    /// Resource limits (RCTL)
+    #[serde(default)]
+    pub resources: crate::rctl::ResourceConfig,
 }
 
 impl JailDef {
@@ -707,6 +711,11 @@ impl JailDef {
                 other.healthcheck
             } else {
                 self.healthcheck
+            },
+            resources: if other.resources.is_empty() {
+                self.resources
+            } else {
+                other.resources
             },
         }
     }
@@ -921,11 +930,13 @@ path = "/jails/test"
         let config: BlackshipConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.jails.len(), 1);
         // data_dir should be set to XDG default
-        assert!(config
-            .config
-            .data_dir
-            .to_string_lossy()
-            .contains("blackship"));
+        assert!(
+            config
+                .config
+                .data_dir
+                .to_string_lossy()
+                .contains("blackship")
+        );
     }
 
     #[test]

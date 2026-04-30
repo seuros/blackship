@@ -159,9 +159,8 @@ impl Bridge {
         let modules = ["if_bridge", "bridgestp", "if_epair"];
 
         for module in modules {
-            let module_cstr = CString::new(module).map_err(|e| {
-                Error::Network(format!("Invalid module name {}: {}", module, e))
-            })?;
+            let module_cstr = CString::new(module)
+                .map_err(|e| Error::Network(format!("Invalid module name {}: {}", module, e)))?;
 
             // Use native kldload(2) syscall instead of spawning process
             let result = unsafe { kldload(module_cstr.as_ptr()) };

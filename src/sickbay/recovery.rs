@@ -21,7 +21,6 @@ pub enum RecoveryAction {
     Command(String),
 }
 
-
 /// Recovery configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct RecoveryConfig {

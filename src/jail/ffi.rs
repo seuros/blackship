@@ -74,8 +74,21 @@ bitflags! {
         const ATTACH = 0x04;
         /// Allow getting a dying jail
         const DYING = 0x08;
+        /// Get/set jail in descriptor (FreeBSD 16+)
+        const USE_DESC = 0x10;
+        /// Find/add jail under descriptor (FreeBSD 16+)
+        const AT_DESC = 0x20;
+        /// Return a new jail descriptor (FreeBSD 16+)
+        const GET_DESC = 0x40;
+        /// Return a new owning jail descriptor (FreeBSD 16+)
+        const OWN_DESC = 0x80;
     }
 }
+
+// Syscall numbers for FreeBSD 16 jail descriptor operations
+#[allow(dead_code)]
+const SYS_JAIL_ATTACH_JD: libc::c_int = 597;
+const SYS_JAIL_REMOVE_JD: libc::c_int = 598;
 
 /// Create a jail with the given path and parameters
 ///
@@ -234,6 +247,133 @@ pub fn jail_attach(jid: i32) -> Result<(), Error> {
         0 => Ok(()),
         -1 => Err(Error::JailAttachFailed(jid)),
         _ => Err(Error::JailAttachFailed(jid)),
+    }
+}
+
+/// Create a jail and return an owning descriptor (FreeBSD 16+)
+///
+/// The returned `JailDescriptor` holds an owning fd — if it is dropped or
+/// blackship crashes, the kernel automatically removes the jail.
+/// Returns (jid, descriptor) on success.
+pub fn jail_create_with_descriptor(
+    path: &Path,
+    params: HashMap<String, ParamValue>,
+) -> Result<(i32, JailDescriptor), Error> {
+    let raw_params: Vec<(Vec<u8>, Vec<u8>)> = params
+        .iter()
+        .map(|(key, value)| {
+            Ok((
+                CString::new(key.clone())?.into_bytes_with_nul(),
+                value.as_bytes()?,
+            ))
+        })
+        .collect::<Result<_, Error>>()?;
+
+    let mut jiov: Vec<libc::iovec> = raw_params
+        .iter()
+        .flat_map(|(key, value)| iovec!(key => value))
+        .collect();
+
+    let pathstr = path
+        .to_str()
+        .ok_or_else(|| Error::JailSet("Invalid path encoding".into()))?;
+    let pathstr = CString::new(pathstr)?.into_bytes_with_nul();
+
+    // desc parameter receives the file descriptor
+    let mut desc_fd: i32 = -1;
+    let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
+
+    jiov.append(
+        &mut vec![
+            iovec!(b"path\0" => pathstr),
+            iovec!(b"errmsg\0" => mut errmsg),
+            iovec!(b"persist\0" => ()),
+            iovec!(b"desc\0" => (&mut desc_fd as *mut i32 as *mut u8, mem::size_of::<i32>())),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    );
+
+    let flags = JailFlags::CREATE | JailFlags::GET_DESC | JailFlags::OWN_DESC;
+    let jid = unsafe { libc::jail_set(jiov[..].as_mut_ptr(), jiov.len() as u32, flags.bits()) };
+
+    let err = unsafe { CStr::from_ptr(errmsg.as_ptr() as *mut libc::c_char) }
+        .to_string_lossy()
+        .to_string();
+
+    match jid {
+        e if e < 0 => match errmsg[0] {
+            0 => Err(Error::Io(std::io::Error::last_os_error())),
+            _ => Err(Error::JailSet(err)),
+        },
+        _ => {
+            use std::os::unix::io::FromRawFd;
+            let owned_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(desc_fd) };
+            Ok((jid, JailDescriptor { fd: owned_fd }))
+        }
+    }
+}
+
+/// Remove a jail via its owning descriptor (FreeBSD 16+)
+#[allow(dead_code)]
+pub fn jail_remove_jd(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Error> {
+    use std::os::unix::io::AsRawFd;
+    let ret = unsafe { libc::syscall(SYS_JAIL_REMOVE_JD, fd.as_raw_fd()) };
+    if ret != 0 {
+        return Err(Error::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+/// Attach to a jail via its descriptor (FreeBSD 16+)
+#[allow(dead_code)]
+pub fn jail_attach_jd(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Error> {
+    use std::os::unix::io::AsRawFd;
+    let ret = unsafe { libc::syscall(SYS_JAIL_ATTACH_JD, fd.as_raw_fd()) };
+    if ret != 0 {
+        return Err(Error::JailAttachFailed(-1));
+    }
+    Ok(())
+}
+
+/// Owning jail descriptor (FreeBSD 16+)
+///
+/// Wraps an owning file descriptor. When dropped, the kernel
+/// automatically removes the associated jail.
+#[allow(dead_code)]
+pub struct JailDescriptor {
+    fd: std::os::fd::OwnedFd,
+}
+
+#[allow(dead_code)]
+impl JailDescriptor {
+    /// Get the raw fd for use with kqueue or other operations
+    pub fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        use std::os::unix::io::AsFd;
+        self.fd.as_fd()
+    }
+
+    /// Get the raw fd number
+    pub fn as_raw_fd(&self) -> i32 {
+        use std::os::unix::io::AsRawFd;
+        self.fd.as_raw_fd()
+    }
+
+    /// Explicitly remove the jail via descriptor syscall
+    pub fn remove(self) -> Result<(), Error> {
+        jail_remove_jd(self.as_fd())?;
+        // fd is dropped after this, but jail is already removed
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for JailDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::os::unix::io::AsRawFd;
+        f.debug_struct("JailDescriptor")
+            .field("fd", &self.fd.as_raw_fd())
+            .finish()
     }
 }
 

@@ -479,10 +479,10 @@ impl HookRunner {
 }
 
 /// Filter hooks by phase
-/// 
+///
 /// Utility function for filtering hooks when you need to process
 /// hooks for a specific phase outside of HookRunner.
-/// 
+///
 /// # Example
 /// ```ignore
 /// let pre_start_hooks = filter_by_phase(&jail.hooks, HookPhase::PreStart);

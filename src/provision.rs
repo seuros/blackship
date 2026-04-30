@@ -6,8 +6,8 @@
 //! - Support for different architectures
 //! - Retry with exponential backoff for network operations
 
-use crate::manifest::RetryConfig;
 use crate::error::{Error, Result};
+use crate::manifest::RetryConfig;
 use crate::supply::{download_file, fetch_text, url_exists};
 use chrono_machines::{BackoffStrategy, ExponentialBackoff};
 use rand::rng;
@@ -180,14 +180,16 @@ impl Provisioner {
 
             if path.is_dir() {
                 // Check if it looks like a valid release
-                if path.join("bin").exists() && path.join("usr").exists()
-                    && let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        releases.push(Release {
-                            name: name.to_string(),
-                            path: path.clone(),
-                            arch: self.arch,
-                        });
-                    }
+                if path.join("bin").exists()
+                    && path.join("usr").exists()
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    releases.push(Release {
+                        name: name.to_string(),
+                        path: path.clone(),
+                        arch: self.arch,
+                    });
+                }
             }
         }
 

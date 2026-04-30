@@ -96,10 +96,7 @@ impl ZfsManager {
         let dataset = self.jail_dataset(name);
 
         if self.dataset_exists(&dataset)? {
-            return Err(Error::Zfs(format!(
-                "Dataset '{}' already exists",
-                dataset
-            )));
+            return Err(Error::Zfs(format!("Dataset '{}' already exists", dataset)));
         }
 
         self.create_dataset(&dataset)?;
@@ -352,10 +349,7 @@ impl ZfsManager {
 
         // Check if target already exists
         if self.dataset_exists(&target_dataset)? {
-            return Err(Error::Zfs(format!(
-                "Jail '{}' already exists",
-                new_jail
-            )));
+            return Err(Error::Zfs(format!("Jail '{}' already exists", new_jail)));
         }
 
         let status = Command::new("zfs")

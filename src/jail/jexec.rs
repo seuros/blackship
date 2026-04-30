@@ -5,8 +5,8 @@
 //! providing ~150x performance improvement.
 
 use crate::error::{Error, Result};
-use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{close, fork, pipe, ForkResult};
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+use nix::unistd::{ForkResult, close, fork, pipe};
 use std::ffi::CString;
 use std::io::Read;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
@@ -99,7 +99,11 @@ pub fn jexec_with_output(jid: i32, command: &[&str]) -> Result<(i32, Vec<u8>, Ve
             // Attach to jail using jail_attach(2) syscall
             let result = unsafe { jail_attach(jid) };
             if result != 0 {
-                eprintln!("jail_attach({}) failed: {}", jid, std::io::Error::last_os_error());
+                eprintln!(
+                    "jail_attach({}) failed: {}",
+                    jid,
+                    std::io::Error::last_os_error()
+                );
                 std::process::exit(1);
             }
 
@@ -272,7 +276,11 @@ pub fn jexec_with_timeout(
             // Attach to jail
             let result = unsafe { jail_attach(jid) };
             if result != 0 {
-                eprintln!("jail_attach({}) failed: {}", jid, std::io::Error::last_os_error());
+                eprintln!(
+                    "jail_attach({}) failed: {}",
+                    jid,
+                    std::io::Error::last_os_error()
+                );
                 std::process::exit(1);
             }
 
@@ -384,7 +392,11 @@ pub fn chroot_exec(
             // chroot(2) syscall
             let result = unsafe { libc::chroot(root_cstring.as_ptr()) };
             if result != 0 {
-                eprintln!("chroot({}) failed: {}", root_path, std::io::Error::last_os_error());
+                eprintln!(
+                    "chroot({}) failed: {}",
+                    root_path,
+                    std::io::Error::last_os_error()
+                );
                 std::process::exit(1);
             }
 

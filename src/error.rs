@@ -154,6 +154,10 @@ pub enum Error {
     #[error("Copy failed: {0}")]
     CopyFailed(String),
 
+    // Resource control errors
+    #[error("RCTL error: {0}")]
+    Rctl(String),
+
     // Argument errors
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),

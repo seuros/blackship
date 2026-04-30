@@ -170,17 +170,19 @@ pub fn exec_in_jail_direct(
 
             // Change user if not root
             if opts.user != "root"
-                && let Err(e) = set_user(&opts.user) {
-                    eprintln!("Failed to set user: {}", e);
-                    std::process::exit(1);
-                }
+                && let Err(e) = set_user(&opts.user)
+            {
+                eprintln!("Failed to set user: {}", e);
+                std::process::exit(1);
+            }
 
             // Change working directory
             if let Some(ref workdir) = opts.workdir
-                && let Err(e) = std::env::set_current_dir(workdir) {
-                    eprintln!("Failed to change directory: {}", e);
-                    std::process::exit(1);
-                }
+                && let Err(e) = std::env::set_current_dir(workdir)
+            {
+                eprintln!("Failed to change directory: {}", e);
+                std::process::exit(1);
+            }
 
             // Build command
             let program = CString::new(command[0].as_str()).unwrap();

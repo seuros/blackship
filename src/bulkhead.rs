@@ -210,13 +210,7 @@ mod tests {
 
     #[test]
     fn test_port_forward_creation() {
-        let forward = PortForward::new(
-            3000,
-            3000,
-            "tcp",
-            "10.0.1.5".parse().unwrap(),
-            "myjail",
-        );
+        let forward = PortForward::new(3000, 3000, "tcp", "10.0.1.5".parse().unwrap(), "myjail");
 
         assert_eq!(forward.external_port, 3000);
         assert_eq!(forward.internal_port, 3000);
