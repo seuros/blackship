@@ -97,7 +97,7 @@ impl Bridge {
 
     /// Set an IP address on the bridge
     ///
-    /// Uses native SIOCSIFADDR ioctl syscall.
+    /// Uses native SIOCAIFADDR ioctl syscall.
     pub fn set_address(&self, addr: &str) -> Result<()> {
         ioctl::set_ipv4_address(&self.name, addr)
     }
@@ -208,13 +208,6 @@ pub fn destroy_bridge(name: &str, force: bool) -> Result<()> {
 
     // Destroy the bridge
     bridge.destroy()
-}
-
-/// List all bridge interfaces on the system
-///
-/// Uses native if_nameindex(3) to enumerate interfaces.
-pub fn list_bridges() -> Result<Vec<String>> {
-    ioctl::list_bridges()
 }
 
 #[cfg(test)]

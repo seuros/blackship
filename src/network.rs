@@ -10,9 +10,11 @@ pub mod bridge;
 pub mod epair;
 pub mod ioctl;
 pub mod ip;
+pub mod store;
 pub mod vnet;
 
 pub use bridge::Bridge;
 pub use epair::EpairInterface;
 pub use ip::{IpAllocator, IpPool};
+pub use store::{NetworkRecord, NetworkStore};
 pub use vnet::{VnetConfig, VnetSetup};

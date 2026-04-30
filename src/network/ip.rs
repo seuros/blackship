@@ -144,7 +144,6 @@ impl IpPool {
         self.subnet
     }
 
-    #[cfg(test)]
     pub fn gateway(&self) -> IpAddr {
         self.gateway
     }

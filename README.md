@@ -57,7 +57,7 @@ releases_dir = "/var/blackship/releases"
 cache_dir = "/var/blackship/cache"
 ```
 
-> **Note:** While paths are user-writable by default, `bootstrap` extraction requires root privileges because FreeBSD base archives contain root-owned files with special permissions (setuid binaries, etc.). Use `sudo blackship bootstrap <release>` for extraction.
+> **Note:** While paths are user-writable by default, `bootstrap` extraction requires root privileges because FreeBSD base archives contain root-owned files with special permissions (setuid binaries, etc.). Blackship will re-exec through `sudo` or `doas` if needed.
 
 ## Quick Start
 
@@ -105,7 +105,7 @@ Or use `blackship armada init` to generate a template.
 
 ```sh
 # Download and extract FreeBSD base (requires root for extraction)
-sudo blackship bootstrap 15.0-RELEASE
+blackship bootstrap 15.0-RELEASE
 
 # Dry run to see what would be downloaded
 blackship bootstrap 15.0-RELEASE --dry-run
@@ -117,9 +117,13 @@ blackship releases
 ### 4. Create Network
 
 ```sh
-# Create bridge with gateway
+# Create bridge with gateway (requires root)
 blackship network create default --subnet 10.0.1.0/24 --gateway 10.0.1.1 --bridge blackship0
 ```
+
+Creating or destroying a network requires root because Blackship creates and
+configures a FreeBSD bridge interface on the host. Blackship will re-exec
+through `sudo` or `doas` if needed.
 
 ### 5. Start Jails
 
@@ -255,9 +259,9 @@ on_failure = "continue"
 
 | Command | Description |
 |---------|-------------|
-| `blackship network create <name> -s <subnet> [-g gw] [-b bridge]` | Create network |
-| `blackship network destroy <name> [--force]` | Destroy network |
-| `blackship network list` | List networks |
+| `blackship network create <name> -s <subnet> [-g gw] [-b bridge]` | Create network (requires root) |
+| `blackship network destroy <name> [--force]` | Destroy network (requires root) |
+| `blackship network list` | List Blackship-managed networks |
 | `blackship expose <jail> -p <port> [-I bind-ip] [--proto tcp\|udp]` | Expose port |
 | `blackship ports [jail]` | List exposed ports |
 
@@ -683,7 +687,7 @@ blackship cleanup myjail --force
 ### Network issues
 
 ```sh
-# List bridges
+# List Blackship-managed networks
 blackship network list
 
 # Check jail IP
