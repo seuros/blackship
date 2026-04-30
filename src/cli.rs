@@ -602,6 +602,69 @@ pub enum NetworkAction {
     },
 }
 
+impl Commands {
+    pub fn requires_root(&self) -> bool {
+        match self {
+            Self::Up { .. }
+            | Self::Down { .. }
+            | Self::Restart { .. }
+            | Self::Setup
+            | Self::Exec { .. }
+            | Self::Run { .. }
+            | Self::Cp { .. }
+            | Self::Rm { .. }
+            | Self::Console { .. }
+            | Self::Bootstrap { .. }
+            | Self::Expose { .. }
+            | Self::Unexpose { .. }
+            | Self::Cleanup { .. }
+            | Self::Export { .. }
+            | Self::Import { .. }
+            | Self::Clone { .. }
+            | Self::Supervise => true,
+            Self::Armada { action, .. } => action.requires_root(),
+            Self::Releases { action, .. } => {
+                action.as_ref().is_some_and(ReleasesAction::requires_root)
+            }
+            Self::Network { action } => action.requires_root(),
+            Self::Snapshot { action } => action.requires_root(),
+            Self::Ps { .. }
+            | Self::Check
+            | Self::Init { .. }
+            | Self::Health { .. }
+            | Self::Build { .. }
+            | Self::Template { .. }
+            | Self::Ports { .. }
+            | Self::Logs { .. }
+            | Self::Completion { .. } => false,
+        }
+    }
+}
+
+impl ReleasesAction {
+    fn requires_root(&self) -> bool {
+        matches!(self, Self::Delete { .. })
+    }
+}
+
+impl SnapshotAction {
+    fn requires_root(&self) -> bool {
+        !matches!(self, Self::List { .. })
+    }
+}
+
+impl ArmadaAction {
+    fn requires_root(&self) -> bool {
+        matches!(self, Self::Up { .. } | Self::Down { .. })
+    }
+}
+
+impl NetworkAction {
+    fn requires_root(&self) -> bool {
+        matches!(self, Self::Create { .. } | Self::Destroy { .. })
+    }
+}
+
 impl Cli {
     /// Parse CLI arguments
     pub fn parse_args() -> Self {
@@ -612,5 +675,44 @@ impl Cli {
     pub fn generate_completion(shell: Shell) {
         let mut cmd = Self::command();
         clap_complete::generate(shell, &mut cmd, "blackship", &mut std::io::stdout());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_network_create_requires_root() {
+        let command = Commands::Network {
+            action: NetworkAction::Create {
+                name: "default".into(),
+                subnet: "10.0.1.0/24".into(),
+                gateway: None,
+                bridge: "blackship0".into(),
+            },
+        };
+
+        assert!(command.requires_root());
+    }
+
+    #[test]
+    fn test_network_list_does_not_require_root() {
+        let command = Commands::Network {
+            action: NetworkAction::List,
+        };
+
+        assert!(!command.requires_root());
+    }
+
+    #[test]
+    fn test_bootstrap_requires_root() {
+        let command = Commands::Bootstrap {
+            release: "15.0-RELEASE".into(),
+            force: false,
+            archives: None,
+        };
+
+        assert!(command.requires_root());
     }
 }

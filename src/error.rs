@@ -114,6 +114,12 @@ pub enum Error {
     #[error("Network error: {0}")]
     Network(String),
 
+    #[error("Network '{0}' already exists")]
+    NetworkAlreadyExists(String),
+
+    #[error("Network '{0}' not found")]
+    NetworkNotFound(String),
+
     #[error("Interface '{0}' not found")]
     InterfaceNotFound(String),
 
@@ -161,6 +167,9 @@ pub enum Error {
     // Argument errors
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
+
+    #[error("{0}")]
+    User(String),
 }
 
 /// Result type alias for Blackship operations

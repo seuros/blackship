@@ -2,13 +2,18 @@
 
 use crate::bridge::Bridge;
 use crate::cli::{Cli, Commands};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::{commands, console, manifest};
+use std::ffi::OsString;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
 
 /// Run the Blackship CLI application.
 pub fn run() -> Result<()> {
     let cli = Cli::parse_args();
+    maybe_escalate_to_root(&cli.command)?;
     let ctx = AppContext::new(cli.config, cli.verbose);
     ctx.dispatch(cli.command)
 }
@@ -121,7 +126,9 @@ impl AppContext {
                 commands::bootstrap::handle_releases(&self.config_path, action, json)
             }
 
-            Commands::Network { action } => commands::network::handle(action),
+            Commands::Network { action } => {
+                commands::network::handle(self.load_optional_config().as_ref(), action)
+            }
 
             Commands::Health {
                 jail,
@@ -246,4 +253,47 @@ impl AppContext {
     fn verbose_bridge(&self) -> Result<Bridge> {
         Ok(Bridge::new(self.load_config()?)?.verbose(self.verbose))
     }
+}
+
+fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
+    if !command.requires_root() || unsafe { libc::geteuid() } == 0 {
+        return Ok(());
+    }
+
+    let escalator = find_escalator().ok_or_else(|| {
+        Error::User(
+            "This command requires root privileges. Blackship could not find 'sudo' or 'doas' in PATH. Install one of them, or run this command as root.".into(),
+        )
+    })?;
+
+    let executable = std::env::current_exe()
+        .map_err(|e| Error::User(format!("Failed to locate current executable: {}", e)))?;
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+
+    let err = ProcessCommand::new(escalator)
+        .arg(&executable)
+        .args(args)
+        .exec();
+
+    Err(Error::User(format!(
+        "Failed to re-exec through '{}': {}",
+        escalator, err
+    )))
+}
+
+fn find_escalator() -> Option<&'static str> {
+    ["sudo", "doas"]
+        .into_iter()
+        .find(|name| command_exists(name))
+}
+
+fn command_exists(command: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path_var| {
+        std::env::split_paths(&path_var).any(|dir| {
+            let candidate = dir.join(command);
+            std::fs::metadata(&candidate).is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            })
+        })
+    })
 }
