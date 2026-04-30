@@ -6,6 +6,7 @@
 //! - Destroy datasets on jail removal
 
 use crate::error::{Error, Result};
+use jiff::Zoned;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -181,14 +182,7 @@ impl ZfsManager {
 
         let snap_name = match name {
             Some(n) => n.to_string(),
-            None => {
-                use std::time::{SystemTime, UNIX_EPOCH};
-                let ts = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                format!("snap-{}", ts)
-            }
+            None => default_snapshot_name(),
         };
 
         let snapshot = format!("{}@{}", dataset, snap_name);
@@ -372,6 +366,10 @@ impl ZfsManager {
     pub fn get_jail_dataset(&self, name: &str) -> String {
         self.jail_dataset(name)
     }
+}
+
+fn default_snapshot_name() -> String {
+    format!("snap-{}", Zoned::now().strftime("%Y%m%d-%H%M%S"))
 }
 
 /// Information about a ZFS snapshot

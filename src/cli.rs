@@ -605,10 +605,10 @@ pub enum NetworkAction {
 impl Commands {
     pub fn requires_root(&self) -> bool {
         match self {
-            Self::Up { .. }
-            | Self::Down { .. }
-            | Self::Restart { .. }
-            | Self::Setup
+            Self::Up { dry_run, .. }
+            | Self::Down { dry_run, .. }
+            | Self::Restart { dry_run, .. } => !dry_run,
+            Self::Setup
             | Self::Exec { .. }
             | Self::Run { .. }
             | Self::Cp { .. }
@@ -655,7 +655,10 @@ impl SnapshotAction {
 
 impl ArmadaAction {
     fn requires_root(&self) -> bool {
-        matches!(self, Self::Up { .. } | Self::Down { .. })
+        match self {
+            Self::Up { dry_run, .. } | Self::Down { dry_run, .. } => !dry_run,
+            Self::Init { .. } | Self::Build { .. } | Self::Ps { .. } | Self::Config { .. } => false,
+        }
     }
 }
 
@@ -714,5 +717,32 @@ mod tests {
         };
 
         assert!(command.requires_root());
+    }
+
+    #[test]
+    fn test_up_dry_run_does_not_require_root() {
+        let command = Commands::Up {
+            jail: None,
+            all: true,
+            dry_run: true,
+        };
+
+        assert!(!command.requires_root());
+    }
+
+    #[test]
+    fn test_armada_up_dry_run_does_not_require_root() {
+        let command = Commands::Armada {
+            files: vec![PathBuf::from("blackship.toml")],
+            action: ArmadaAction::Up {
+                detach: false,
+                jails: Vec::new(),
+                build: false,
+                no_build: false,
+                dry_run: true,
+            },
+        };
+
+        assert!(!command.requires_root());
     }
 }
