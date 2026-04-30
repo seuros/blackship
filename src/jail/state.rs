@@ -97,6 +97,30 @@ impl JailConfig {
     }
 }
 
+/// Handle to a running jail — either a legacy JID or an owning descriptor
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum JailHandle {
+    /// Legacy JID-based reference (FreeBSD < 16)
+    Jid(i32),
+    /// Owning descriptor (FreeBSD 16+) — jail is removed when dropped
+    Descriptor {
+        fd: super::ffi::JailDescriptor,
+        jid: i32,
+    },
+}
+
+#[allow(dead_code)]
+impl JailHandle {
+    /// Get the JID regardless of handle type
+    pub fn jid(&self) -> i32 {
+        match self {
+            JailHandle::Jid(jid) => *jid,
+            JailHandle::Descriptor { jid, .. } => *jid,
+        }
+    }
+}
+
 /// Runtime data for a jail instance using dynamic dispatch
 pub struct JailInstance {
     /// The state machine (dynamic mode with unit context)
@@ -104,8 +128,10 @@ pub struct JailInstance {
     /// Configuration (stored for introspection via public field access)
     #[allow(dead_code)]
     pub config: JailConfig,
-    /// Jail ID (when running)
+    /// Jail ID (when running) — kept for backward compatibility
     pub jid: Option<i32>,
+    /// Jail handle (descriptor or JID)
+    pub handle: Option<JailHandle>,
 }
 
 impl JailInstance {
@@ -116,6 +142,7 @@ impl JailInstance {
             machine,
             config,
             jid: None,
+            handle: None,
         }
     }
 

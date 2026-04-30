@@ -120,12 +120,8 @@ impl OsVersion {
                     .unwrap_or(1);
                 ReleaseType::Rc(num)
             }
-            _ => {
-                return Err(Error::InvalidVersion(format!(
-                    "Unknown release type: {}",
-                    parts[1]
-                )))
-            }
+            // Treat unknown release types (e.g., custom kernels) as CURRENT
+            _ => ReleaseType::Current,
         };
 
         // Parse patch level (e.g., "p1" from "15.0-RELEASE-p1")
@@ -173,6 +169,20 @@ impl OsVersion {
     /// FreeBSD 16.0+ requires pkgbase; distribution sets are removed.
     #[allow(dead_code)]
     pub fn requires_pkgbase(&self) -> bool {
+        self.major >= 16
+    }
+
+    /// Check if jail descriptors are supported
+    ///
+    /// Jail descriptors (owning fds, EVFILT_JAILDESC) require FreeBSD 16.0+.
+    pub fn supports_jail_descriptors(&self) -> bool {
+        self.major >= 16
+    }
+
+    /// Check if kqueue EVFILT_JAIL is supported
+    ///
+    /// Kqueue jail event monitoring requires FreeBSD 16.0+.
+    pub fn supports_jail_kqueue(&self) -> bool {
         self.major >= 16
     }
 }
@@ -226,7 +236,6 @@ mod tests {
         assert_eq!(ver.release_type, ReleaseType::Stable);
     }
 
-
     #[test]
     fn test_parse_rc() {
         let ver = OsVersion::parse("15.0-RC2").unwrap();
@@ -237,15 +246,37 @@ mod tests {
 
     #[test]
     fn test_vlan_filtering_support() {
-        assert!(OsVersion::parse("15.0-RELEASE").unwrap().supports_vlan_filtering());
-        assert!(OsVersion::parse("16.0-CURRENT").unwrap().supports_vlan_filtering());
-        assert!(!OsVersion::parse("14.2-STABLE").unwrap().supports_vlan_filtering());
-        assert!(!OsVersion::parse("13.3-RELEASE").unwrap().supports_vlan_filtering());
+        assert!(
+            OsVersion::parse("15.0-RELEASE")
+                .unwrap()
+                .supports_vlan_filtering()
+        );
+        assert!(
+            OsVersion::parse("16.0-CURRENT")
+                .unwrap()
+                .supports_vlan_filtering()
+        );
+        assert!(
+            !OsVersion::parse("14.2-STABLE")
+                .unwrap()
+                .supports_vlan_filtering()
+        );
+        assert!(
+            !OsVersion::parse("13.3-RELEASE")
+                .unwrap()
+                .supports_vlan_filtering()
+        );
     }
 
     #[test]
     fn test_display() {
-        assert_eq!(OsVersion::parse("16.0-CURRENT").unwrap().to_string(), "16.0-CURRENT");
-        assert_eq!(OsVersion::parse("15.0-RELEASE-p1").unwrap().to_string(), "15.0-RELEASE-p1");
+        assert_eq!(
+            OsVersion::parse("16.0-CURRENT").unwrap().to_string(),
+            "16.0-CURRENT"
+        );
+        assert_eq!(
+            OsVersion::parse("15.0-RELEASE-p1").unwrap().to_string(),
+            "15.0-RELEASE-p1"
+        );
     }
 }

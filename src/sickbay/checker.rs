@@ -11,8 +11,8 @@ use breaker_machines::{CircuitBreaker, CircuitBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use throttle_machines::token_bucket;
 
@@ -252,7 +252,6 @@ impl Default for CheckState {
     }
 }
 
-
 /// Health checker for a single jail
 pub struct HealthChecker {
     /// Jail name
@@ -290,11 +289,7 @@ impl HealthChecker {
         rate_limit_refill_rate: f64,
     ) -> Self {
         let check_count = config.checks.len();
-        let interval = config
-            .checks
-            .first()
-            .map(|c| c.interval)
-            .unwrap_or(30);
+        let interval = config.checks.first().map(|c| c.interval).unwrap_or(30);
 
         // Initialize circuit breakers for each health check
         let circuit_breakers = config
@@ -645,9 +640,10 @@ impl HealthChecker {
 
         // Notify Warden of health failure
         if let Some(handle) = &self.warden_handle
-            && let Err(e) = handle.notify_health_failure_blocking(&self.jail_name) {
-                eprintln!("Warning: Failed to notify Warden of health failure: {}", e);
-            }
+            && let Err(e) = handle.notify_health_failure_blocking(&self.jail_name)
+        {
+            eprintln!("Warning: Failed to notify Warden of health failure: {}", e);
+        }
 
         // Execute recovery action
         match &config.action {
@@ -655,12 +651,12 @@ impl HealthChecker {
                 // Stop the jail first
                 match jail_getid(&self.jail_name) {
                     Ok(jid) => {
-                        println!("Recovery: Stopping jail '{}' (JID {})...", self.jail_name, jid);
+                        println!(
+                            "Recovery: Stopping jail '{}' (JID {})...",
+                            self.jail_name, jid
+                        );
                         if let Err(e) = jail_remove(jid) {
-                            eprintln!(
-                                "Recovery: Failed to stop jail '{}': {}",
-                                self.jail_name, e
-                            );
+                            eprintln!("Recovery: Failed to stop jail '{}': {}", self.jail_name, e);
                             return Err(Error::HealthCheckFailed {
                                 jail: self.jail_name.clone(),
                                 check: "recovery".to_string(),
@@ -688,12 +684,12 @@ impl HealthChecker {
             RecoveryAction::Stop => {
                 match jail_getid(&self.jail_name) {
                     Ok(jid) => {
-                        println!("Recovery: Stopping jail '{}' (JID {})...", self.jail_name, jid);
+                        println!(
+                            "Recovery: Stopping jail '{}' (JID {})...",
+                            self.jail_name, jid
+                        );
                         if let Err(e) = jail_remove(jid) {
-                            eprintln!(
-                                "Recovery: Failed to stop jail '{}': {}",
-                                self.jail_name, e
-                            );
+                            eprintln!("Recovery: Failed to stop jail '{}': {}", self.jail_name, e);
                             return Err(Error::HealthCheckFailed {
                                 jail: self.jail_name.clone(),
                                 check: "recovery".to_string(),
@@ -713,7 +709,10 @@ impl HealthChecker {
                 }
             }
             RecoveryAction::Command(cmd) => {
-                println!("Recovery: Executing command for jail '{}'...", self.jail_name);
+                println!(
+                    "Recovery: Executing command for jail '{}'...",
+                    self.jail_name
+                );
                 let output = Command::new("sh").args(["-c", cmd]).output().map_err(|e| {
                     Error::HealthCheckFailed {
                         jail: self.jail_name.clone(),
@@ -728,7 +727,10 @@ impl HealthChecker {
                         String::from_utf8_lossy(&output.stderr)
                     );
                 } else {
-                    println!("Recovery: Command executed successfully for jail '{}'", self.jail_name);
+                    println!(
+                        "Recovery: Command executed successfully for jail '{}'",
+                        self.jail_name
+                    );
                 }
             }
             RecoveryAction::None => {}

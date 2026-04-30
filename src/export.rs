@@ -42,9 +42,9 @@ pub fn read_metadata(archive_path: &Path) -> Result<ExportMetadata> {
         let mut reader = std::io::BufReader::new(&file);
         if reader.read_exact(&mut magic).is_ok() && &magic == b"BSZFS001" {
             let mut len_bytes = [0u8; 4];
-            reader
-                .read_exact(&mut len_bytes)
-                .map_err(|e| Error::JailOperation(format!("Failed to read metadata length: {}", e)))?;
+            reader.read_exact(&mut len_bytes).map_err(|e| {
+                Error::JailOperation(format!("Failed to read metadata length: {}", e))
+            })?;
             let len = u32::from_le_bytes(len_bytes) as usize;
             let mut buf = vec![0u8; len];
             reader

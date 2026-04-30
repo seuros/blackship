@@ -104,10 +104,7 @@ impl IpPool {
             }
         }
 
-        Err(Error::Network(format!(
-            "No available addresses in {}",
-            net
-        )))
+        Err(Error::Network(format!("No available addresses in {}", net)))
     }
 
     fn allocate_v6(&mut self, net: Ipv6Net) -> Result<IpAddr> {
@@ -123,10 +120,7 @@ impl IpPool {
             }
         }
 
-        Err(Error::Network(format!(
-            "No available addresses in {}",
-            net
-        )))
+        Err(Error::Network(format!("No available addresses in {}", net)))
     }
 
     fn first_usable(subnet: &IpNet) -> Result<IpAddr> {

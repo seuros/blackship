@@ -6,8 +6,8 @@
 //! - Resume support for interrupted downloads
 //! - Retry with exponential backoff
 
-use crate::manifest::RetryConfig;
 use crate::error::{Error, Result};
+use crate::manifest::RetryConfig;
 use chrono_machines::{BackoffStrategy, ExponentialBackoff};
 use rand::rng;
 use sha2::{Digest, Sha256};

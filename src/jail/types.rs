@@ -25,8 +25,7 @@ impl ParamValue {
         match self {
             ParamValue::Int(v) => {
                 let mut buf = Vec::with_capacity(4);
-                buf.write_i32::<LittleEndian>(*v)
-                    .map_err(Error::Io)?;
+                buf.write_i32::<LittleEndian>(*v).map_err(Error::Io)?;
                 Ok(buf)
             }
             ParamValue::String(s) => {

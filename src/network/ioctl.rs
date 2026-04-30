@@ -9,8 +9,8 @@ use std::os::unix::io::AsRawFd;
 /// Safely copy interface name into fixed-size buffer
 /// Returns error if name is too long (max 15 chars + null terminator)
 fn copy_ifname(dest: &mut [libc::c_char; libc::IF_NAMESIZE], name: &str) -> Result<()> {
-    let name_cstr = CString::new(name)
-        .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
+    let name_cstr =
+        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
     let name_bytes = name_cstr.as_bytes_with_nul();
 
     if name_bytes.len() > libc::IF_NAMESIZE {
@@ -81,10 +81,7 @@ pub fn create_interface(iftype: &str, name: Option<&str>) -> Result<String> {
         .iter()
         .position(|&c| c == 0)
         .unwrap_or(libc::IF_NAMESIZE);
-    let name_bytes: Vec<u8> = req.ifr_name[..name_len]
-        .iter()
-        .map(|&c| c as u8)
-        .collect();
+    let name_bytes: Vec<u8> = req.ifr_name[..name_len].iter().map(|&c| c as u8).collect();
 
     String::from_utf8(name_bytes)
         .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))
@@ -105,8 +102,8 @@ pub fn destroy_interface(name: &str) -> Result<()> {
 
     let mut req: IfReq = unsafe { std::mem::zeroed() };
 
-    let name_cstr = CString::new(name)
-        .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
+    let name_cstr =
+        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
     let name_bytes = name_cstr.as_bytes_with_nul();
     req.ifr_name[..name_bytes.len()].copy_from_slice(unsafe {
         std::slice::from_raw_parts(name_bytes.as_ptr() as *const i8, name_bytes.len())
@@ -143,8 +140,8 @@ pub fn set_interface_up(name: &str, up: bool) -> Result<()> {
 
     let mut req: IfReq = unsafe { std::mem::zeroed() };
 
-    let name_cstr = CString::new(name)
-        .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
+    let name_cstr =
+        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
     let name_bytes = name_cstr.as_bytes_with_nul();
     req.ifr_name[..name_bytes.len()].copy_from_slice(unsafe {
         std::slice::from_raw_parts(name_bytes.as_ptr() as *const i8, name_bytes.len())
@@ -233,7 +230,10 @@ pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
     // Parse MAC address
     let mac_parts: Vec<&str> = mac.split(':').collect();
     if mac_parts.len() != 6 {
-        return Err(Error::Network(format!("Invalid MAC address format: {}", mac)));
+        return Err(Error::Network(format!(
+            "Invalid MAC address format: {}",
+            mac
+        )));
     }
 
     let mut mac_bytes = [0u8; 6];
@@ -250,8 +250,8 @@ pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
 
     let mut req: IfReq = unsafe { std::mem::zeroed() };
 
-    let name_cstr = CString::new(name)
-        .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
+    let name_cstr =
+        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
     let name_bytes = name_cstr.as_bytes_with_nul();
     req.ifr_name[..name_bytes.len()].copy_from_slice(unsafe {
         std::slice::from_raw_parts(name_bytes.as_ptr() as *const i8, name_bytes.len())
@@ -299,8 +299,8 @@ pub fn move_to_vnet(name: &str, jid: i32) -> Result<()> {
 
     let mut req: IfReq = unsafe { std::mem::zeroed() };
 
-    let name_cstr = CString::new(name)
-        .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
+    let name_cstr =
+        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
     let name_bytes = name_cstr.as_bytes_with_nul();
     req.ifr_name[..name_bytes.len()].copy_from_slice(unsafe {
         std::slice::from_raw_parts(name_bytes.as_ptr() as *const i8, name_bytes.len())
@@ -345,16 +345,16 @@ pub fn bridge_add_member(bridge: &str, member: &str) -> Result<()> {
     let mut req: IfReq = unsafe { std::mem::zeroed() };
 
     // Set bridge name
-    let bridge_cstr = CString::new(bridge)
-        .map_err(|e| Error::Network(format!("Invalid bridge name: {}", e)))?;
+    let bridge_cstr =
+        CString::new(bridge).map_err(|e| Error::Network(format!("Invalid bridge name: {}", e)))?;
     let bridge_bytes = bridge_cstr.as_bytes_with_nul();
     req.ifr_name[..bridge_bytes.len()].copy_from_slice(unsafe {
         std::slice::from_raw_parts(bridge_bytes.as_ptr() as *const i8, bridge_bytes.len())
     });
 
     // Set member interface name
-    let member_cstr = CString::new(member)
-        .map_err(|e| Error::Network(format!("Invalid member name: {}", e)))?;
+    let member_cstr =
+        CString::new(member).map_err(|e| Error::Network(format!("Invalid member name: {}", e)))?;
     let member_bytes = member_cstr.as_bytes_with_nul();
     breq.ifbr_ifsname[..member_bytes.len()].copy_from_slice(unsafe {
         std::slice::from_raw_parts(member_bytes.as_ptr() as *const i8, member_bytes.len())
@@ -399,16 +399,16 @@ pub fn bridge_delete_member(bridge: &str, member: &str) -> Result<()> {
     let mut req: IfReq = unsafe { std::mem::zeroed() };
 
     // Set bridge name
-    let bridge_cstr = CString::new(bridge)
-        .map_err(|e| Error::Network(format!("Invalid bridge name: {}", e)))?;
+    let bridge_cstr =
+        CString::new(bridge).map_err(|e| Error::Network(format!("Invalid bridge name: {}", e)))?;
     let bridge_bytes = bridge_cstr.as_bytes_with_nul();
     req.ifr_name[..bridge_bytes.len()].copy_from_slice(unsafe {
         std::slice::from_raw_parts(bridge_bytes.as_ptr() as *const i8, bridge_bytes.len())
     });
 
     // Set member interface name
-    let member_cstr = CString::new(member)
-        .map_err(|e| Error::Network(format!("Invalid member name: {}", e)))?;
+    let member_cstr =
+        CString::new(member).map_err(|e| Error::Network(format!("Invalid member name: {}", e)))?;
     let member_bytes = member_cstr.as_bytes_with_nul();
     breq.ifbr_ifsname[..member_bytes.len()].copy_from_slice(unsafe {
         std::slice::from_raw_parts(member_bytes.as_ptr() as *const i8, member_bytes.len())
@@ -493,8 +493,8 @@ pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
 
     let mut req: IfReqAddr = unsafe { std::mem::zeroed() };
 
-    let name_cstr = CString::new(name)
-        .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
+    let name_cstr =
+        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
     let name_bytes = name_cstr.as_bytes_with_nul();
     req.ifr_name[..name_bytes.len()].copy_from_slice(unsafe {
         std::slice::from_raw_parts(name_bytes.as_ptr() as *const i8, name_bytes.len())
@@ -679,7 +679,11 @@ pub fn bridge_enable_vlan_filtering(bridge: &str) -> Result<()> {
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCGDRVSPEC, &mut get_req) };
 
     // Start with current flags or 0 if get failed
-    let current_flags = if result >= 0 { get_param.ifbrp_csize } else { 0 };
+    let current_flags = if result >= 0 {
+        get_param.ifbrp_csize
+    } else {
+        0
+    };
 
     // Set VLAN filtering flag
     const IFBRF_VLANFILTER: u32 = 1;

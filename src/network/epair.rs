@@ -113,8 +113,9 @@ impl EpairInterface {
         gateway: Option<&str>,
     ) -> Result<()> {
         // Configure IP address inside jail using native jexec syscall
-        let (exit_code, _stdout, stderr) = jexec_with_output(jid, &["ifconfig", interface, addr])
-            .map_err(|e| Error::Network(format!("Failed to configure interface: {}", e)))?;
+        let (exit_code, _stdout, stderr) =
+            jexec_with_output(jid, &["ifconfig", interface, addr])
+                .map_err(|e| Error::Network(format!("Failed to configure interface: {}", e)))?;
 
         if exit_code != 0 {
             let stderr_str = String::from_utf8_lossy(&stderr);
@@ -125,8 +126,9 @@ impl EpairInterface {
         }
 
         // Bring interface up using native jexec syscall
-        let (exit_code, _stdout, stderr) = jexec_with_output(jid, &["ifconfig", interface, "up"])
-            .map_err(|e| Error::Network(format!("Failed to bring up interface: {}", e)))?;
+        let (exit_code, _stdout, stderr) =
+            jexec_with_output(jid, &["ifconfig", interface, "up"])
+                .map_err(|e| Error::Network(format!("Failed to bring up interface: {}", e)))?;
 
         if exit_code != 0 {
             let stderr_str = String::from_utf8_lossy(&stderr);
@@ -138,8 +140,9 @@ impl EpairInterface {
 
         // Set default route if gateway provided using native jexec syscall
         if let Some(gw) = gateway {
-            let (exit_code, _stdout, stderr) = jexec_with_output(jid, &["route", "add", "default", gw])
-                .map_err(|e| Error::Network(format!("Failed to add route: {}", e)))?;
+            let (exit_code, _stdout, stderr) =
+                jexec_with_output(jid, &["route", "add", "default", gw])
+                    .map_err(|e| Error::Network(format!("Failed to add route: {}", e)))?;
 
             if exit_code != 0 {
                 let stderr_str = String::from_utf8_lossy(&stderr);
