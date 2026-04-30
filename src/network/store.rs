@@ -9,6 +9,7 @@ use crate::manifest;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,14 +42,26 @@ impl NetworkStore {
             .map_err(|e| Error::Network(format!("Failed to create network state dir: {}", e)))?;
 
         let path = self.record_path(&record.name)?;
-        if path.exists() {
-            return Err(Error::NetworkAlreadyExists(record.name.clone()));
-        }
-
         let content = toml::to_string(record)
             .map_err(|e| Error::Network(format!("Failed to serialize network metadata: {}", e)))?;
-        fs::write(&path, content)
-            .map_err(|e| Error::Network(format!("Failed to write network metadata: {}", e)))
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(content.as_bytes())
+                    .map_err(|e| Error::Network(format!("Failed to write network metadata: {}", e)))
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                Err(Error::NetworkAlreadyExists(record.name.clone()))
+            }
+            Err(err) => Err(Error::Network(format!(
+                "Failed to create network metadata file: {}",
+                err
+            ))),
+        }
     }
 
     pub fn get(&self, name: &str) -> Result<Option<NetworkRecord>> {
@@ -177,6 +190,24 @@ mod tests {
 
         assert!(store.delete("default").unwrap());
         assert_eq!(store.get("default").unwrap(), None);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_duplicate_create_fails() {
+        let root = temp_store_root();
+        let store = NetworkStore { root: root.clone() };
+        let record = NetworkRecord {
+            name: "default".into(),
+            bridge: "blackship0".into(),
+            subnet: "10.0.1.0/24".into(),
+            gateway: "10.0.1.1".into(),
+        };
+
+        store.create(&record).unwrap();
+        let err = store.create(&record).unwrap_err();
+        assert!(matches!(err, Error::NetworkAlreadyExists(ref name) if name == "default"));
 
         fs::remove_dir_all(root).unwrap();
     }

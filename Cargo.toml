@@ -58,3 +58,4 @@ rand = "0.10"
 
 # Async runtime for Warden
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal", "io-util", "net"] }
+jiff = "0.2.24"

@@ -6,6 +6,7 @@
 //! - ZFS send/receive for efficient transfers
 
 use crate::error::{Error, Result};
+use jiff::{Unit, Zoned};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -115,7 +116,7 @@ pub fn export_jail(
     let metadata = ExportMetadata {
         name: name.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        timestamp: chrono_lite_timestamp(),
+        timestamp: export_timestamp(),
         original_path: jail_path.to_string_lossy().to_string(),
         ip: ip.map(String::from),
         hostname: hostname.map(String::from),
@@ -189,7 +190,7 @@ pub fn export_jail_zfs(
     let metadata = ExportMetadata {
         name: name.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        timestamp: chrono_lite_timestamp(),
+        timestamp: export_timestamp(),
         original_path: format!("zfs:{}", dataset),
         ip: ip.map(String::from),
         hostname: hostname.map(String::from),
@@ -406,13 +407,12 @@ fn import_jail_zfs(
     Ok(jail_name.to_string())
 }
 
-/// Simple timestamp without external crate
-fn chrono_lite_timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}", duration.as_secs())
+/// Human-readable export timestamp in the system's local time zone.
+fn export_timestamp() -> String {
+    Zoned::now()
+        .round(Unit::Second)
+        .map(|zdt| zdt.to_string())
+        .unwrap_or_else(|_| Zoned::now().to_string())
 }
 
 #[cfg(test)]
