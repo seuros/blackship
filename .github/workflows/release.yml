@@ -28,7 +28,7 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created || inputs.force_build }}
       tag_name: ${{ steps.release.outputs.tag_name || inputs.tag }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         if: ${{ !inputs.force_build }}
         with:
@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: cross-platform-actions/action@v0.32.0
+      - uses: cross-platform-actions/action@v1
         with:
           operating_system: freebsd
           version: '15.0'
@@ -56,7 +56,7 @@ jobs:
             tar czf blackship-freebsd-amd64.tar.gz blackship
             mv blackship-freebsd-amd64.tar.gz ../../dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: blackship-freebsd-amd64
           path: dist/blackship-freebsd-amd64.tar.gz
@@ -67,7 +67,7 @@ jobs:
     if: ${{ always() && (needs.release-please.outputs.release_created || inputs.force_build) && needs.build-freebsd.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: blackship-*
@@ -78,7 +78,7 @@ jobs:
           cd artifacts
           sha256sum *.tar.gz > checksums.txt
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.release-please.outputs.tag_name }}
           files: artifacts/*
