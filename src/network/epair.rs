@@ -7,10 +7,6 @@
 use crate::error::{Error, Result};
 use crate::jail::jexec_with_output;
 use crate::network::ioctl;
-use std::sync::atomic::{AtomicU32, Ordering};
-
-/// Counter for generating unique epair names
-static EPAIR_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 /// An epair interface pair for connecting VNET jails to bridges
 #[derive(Debug, Clone)]
@@ -22,6 +18,13 @@ pub struct EpairInterface {
 }
 
 impl EpairInterface {
+    pub(crate) fn from_existing(host_side: String, jail_side: String) -> Self {
+        Self {
+            host_side,
+            jail_side,
+        }
+    }
+
     /// Create a new epair interface pair using native ioctl syscalls
     ///
     /// The epair is created with system-assigned names (epairNa, epairNb).
@@ -40,44 +43,16 @@ impl EpairInterface {
         // Bring host side up using native ioctl
         ioctl::set_interface_up(&host_side, true)?;
 
-        Ok(Self {
-            host_side,
-            jail_side,
-        })
+        Ok(Self::from_existing(host_side, jail_side))
     }
 
-    /// Create an epair with a specific naming pattern for a jail
+    /// Create an epair for a jail.
     ///
-    /// Creates interfaces named like "e0a_jailname" and "e0b_jailname"
-    pub fn create_for_jail(jail_name: &str) -> Result<Self> {
-        // First create a regular epair
-        let epair = Self::create()?;
-
-        // Generate a unique counter
-        let counter = EPAIR_COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        // Create the custom names
-        let new_host_name = format!("e{}a_{}", counter, Self::sanitize_name(jail_name));
-        let new_jail_name = format!("e{}b_{}", counter, Self::sanitize_name(jail_name));
-
-        // Rename host side using ioctl
-        if let Err(e) = ioctl::rename_interface(&epair.host_side, &new_host_name) {
-            // Clean up the original epair
-            let _ = ioctl::destroy_interface(&epair.host_side);
-            return Err(e);
-        }
-
-        // Rename jail side using ioctl
-        if let Err(e) = ioctl::rename_interface(&epair.jail_side, &new_jail_name) {
-            // Clean up
-            let _ = ioctl::destroy_interface(&new_host_name);
-            return Err(e);
-        }
-
-        Ok(Self {
-            host_side: new_host_name,
-            jail_side: new_jail_name,
-        })
+    /// Blackship intentionally keeps the kernel-assigned epair names instead
+    /// of renaming them. Renaming based on a process-local counter collides
+    /// across separate CLI invocations and breaks detached/cleanup workflows.
+    pub fn create_for_jail(_jail_name: &str) -> Result<Self> {
+        Self::create()
     }
 
     /// Get the host-side interface name
@@ -170,39 +145,5 @@ impl EpairInterface {
                 Err(e)
             }
         })
-    }
-
-    /// Sanitize a jail name for use in interface names
-    ///
-    /// Interface names have a max length of 15 characters on FreeBSD.
-    fn sanitize_name(name: &str) -> String {
-        // Keep only alphanumeric and underscore, truncate to fit
-        let sanitized: String = name
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
-            .take(10) // Leave room for e0a_ prefix
-            .collect();
-
-        if sanitized.is_empty() {
-            "jail".to_string()
-        } else {
-            sanitized
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sanitize_name() {
-        assert_eq!(EpairInterface::sanitize_name("myjail"), "myjail");
-        assert_eq!(EpairInterface::sanitize_name("my-jail"), "myjail");
-        assert_eq!(
-            EpairInterface::sanitize_name("verylongjailname"),
-            "verylongja"
-        );
-        assert_eq!(EpairInterface::sanitize_name(""), "jail");
     }
 }

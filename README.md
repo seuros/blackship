@@ -94,6 +94,7 @@ hostname = "web.local"
 
 [jails.network]
 vnet = true
+networks = ["default"]
 bridge = "blackship0"
 ip = "10.0.1.10"
 gateway = "10.0.1.1"
@@ -124,6 +125,10 @@ blackship network create default --subnet 10.0.1.0/24 --gateway 10.0.1.1 --bridg
 Creating or destroying a network requires root because Blackship creates and
 configures a FreeBSD bridge interface on the host. Blackship will re-exec
 through `sudo` or `doas` if needed.
+
+Named networks created this way can be referenced from `blackship.toml` with
+`[jails.network] networks = ["default"]`, and the same network can be used by
+ephemeral jails with `blackship run --network default`.
 
 ### 5. Start Jails
 
@@ -180,9 +185,10 @@ depends_on = ["database"]             # Dependencies
 
 [jails.network]
 vnet = true                           # Enable VNET
-bridge = "blackship0"                 # Bridge interface
-ip = "10.0.1.10"                      # Static IP
-gateway = "10.0.1.1"                  # Default gateway
+networks = ["default"]                # Named networks to attach to
+bridge = "blackship0"                 # Optional if runtime network state defines a bridge
+ip = "10.0.1.10"                      # Static IP, or omit for auto-assignment
+gateway = "10.0.1.1"                  # Optional if resolved from named network
 mac_address = "02:00:00:00:00:01"     # Static MAC (optional)
 
 [jails.network.dns]
@@ -229,7 +235,7 @@ on_failure = "continue"
 | `blackship restart [jail] [--all] [--dry-run]` | Restart jail(s) |
 | `blackship ps [--json]` | List jail status |
 | `blackship check` | Validate configuration |
-| `blackship setup` | Initialize PF firewall anchor |
+| `blackship setup` | Initialize PF firewall anchor and reapply persisted forwards |
 | `blackship cleanup <jail> [--force]` | Clean up failed jail resources |
 | `blackship init [-f file] [--release] [--toml]` | Create a new Jailfile |
 
@@ -239,7 +245,7 @@ on_failure = "continue"
 |---------|-------------|
 | `blackship console <jail> [-u user]` | Open interactive shell |
 | `blackship exec <jail> [-u user] [-w dir] [-e K=V] -- <cmd>` | Execute command in jail |
-| `blackship run --name <n> --release <r> [-d] -- <cmd>` | Run ephemeral jail (auto-cleanup unless -d) |
+| `blackship run --name <n> --release <r> [--network <net>] [-d] -- <cmd>` | Run ephemeral jail (auto-cleanup unless -d) |
 
 ### File Operations
 
@@ -494,6 +500,10 @@ Add to `/etc/pf.conf`:
 rdr-anchor "blackship"
 anchor "blackship"
 ```
+
+Port forwards are persisted under Blackship's data directory. After a PF
+restart or host reboot, run `blackship setup` to recreate the anchor and
+reapply the saved rules.
 
 ## Health Checks
 

@@ -12,6 +12,7 @@ mod graph;
 mod lifecycle;
 mod ports;
 mod status;
+#[cfg(test)]
 mod tests;
 
 pub use self::core::Bridge;
