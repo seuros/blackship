@@ -6,10 +6,10 @@
 
 use crate::error::{Error, Result};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
-use nix::unistd::{ForkResult, close, fork, pipe};
+use nix::unistd::{ForkResult, fork, pipe};
 use std::ffi::CString;
 use std::io::Read;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 // FreeBSD jail syscalls - not in libc crate
@@ -54,16 +54,14 @@ pub fn jexec_with_output(jid: i32, command: &[&str]) -> Result<(i32, Vec<u8>, Ve
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => {
             // Parent process: close write ends and read output
-            close(stdout_write.as_raw_fd()).ok();
-            close(stderr_write.as_raw_fd()).ok();
+            drop(stdout_write);
+            drop(stderr_write);
 
             // Read stdout
-            let stdout = read_fd_to_end(stdout_read.as_raw_fd());
-            close(stdout_read.as_raw_fd()).ok();
+            let stdout = read_fd_to_end(stdout_read);
 
             // Read stderr
-            let stderr = read_fd_to_end(stderr_read.as_raw_fd());
-            close(stderr_read.as_raw_fd()).ok();
+            let stderr = read_fd_to_end(stderr_read);
 
             // Wait for child process
             match waitpid(child, None) {
@@ -85,16 +83,16 @@ pub fn jexec_with_output(jid: i32, command: &[&str]) -> Result<(i32, Vec<u8>, Ve
         Ok(ForkResult::Child) => {
             // Child process: attach to jail and execute command
             // Close read ends
-            close(stdout_read.as_raw_fd()).ok();
-            close(stderr_read.as_raw_fd()).ok();
+            drop(stdout_read);
+            drop(stderr_read);
 
             // Redirect stdout and stderr to pipes
             unsafe {
                 libc::dup2(stdout_write.as_raw_fd(), 1); // STDOUT_FILENO = 1
                 libc::dup2(stderr_write.as_raw_fd(), 2); // STDERR_FILENO = 2
             }
-            close(stdout_write.as_raw_fd()).ok();
-            close(stderr_write.as_raw_fd()).ok();
+            drop(stdout_write);
+            drop(stderr_write);
 
             // Attach to jail using jail_attach(2) syscall
             let result = unsafe { jail_attach(jid) };
@@ -148,11 +146,10 @@ pub fn jexec_with_output(jid: i32, command: &[&str]) -> Result<(i32, Vec<u8>, Ve
 }
 
 /// Read all data from a file descriptor into a Vec<u8>
-fn read_fd_to_end(fd: RawFd) -> Vec<u8> {
+fn read_fd_to_end(fd: OwnedFd) -> Vec<u8> {
     let mut buffer = Vec::new();
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut file = std::fs::File::from(fd);
     file.read_to_end(&mut buffer).ok();
-    std::mem::forget(file); // Prevent double-close
     buffer
 }
 
@@ -196,8 +193,10 @@ pub fn jexec_with_timeout(
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => {
             // Parent process: close write ends
-            close(stdout_write.as_raw_fd()).ok();
-            close(stderr_write.as_raw_fd()).ok();
+            drop(stdout_write);
+            drop(stderr_write);
+            let mut stdout_read = Some(stdout_read);
+            let mut stderr_read = Some(stderr_read);
 
             let timeout = Duration::from_secs(timeout_secs);
             let start = Instant::now();
@@ -214,18 +213,14 @@ pub fn jexec_with_timeout(
                             }
                             // Reap the process
                             let _ = waitpid(child, None);
-                            close(stdout_read.as_raw_fd()).ok();
-                            close(stderr_read.as_raw_fd()).ok();
                             return Err(Error::JailTimeout(timeout_secs));
                         }
                         std::thread::sleep(Duration::from_millis(10));
                     }
                     Ok(WaitStatus::Exited(_, exit_code)) => {
                         // Read stdout and stderr
-                        let stdout = read_fd_to_end(stdout_read.as_raw_fd());
-                        close(stdout_read.as_raw_fd()).ok();
-                        let stderr = read_fd_to_end(stderr_read.as_raw_fd());
-                        close(stderr_read.as_raw_fd()).ok();
+                        let stdout = read_fd_to_end(stdout_read.take().unwrap());
+                        let stderr = read_fd_to_end(stderr_read.take().unwrap());
 
                         return Ok((
                             exit_code,
@@ -234,24 +229,18 @@ pub fn jexec_with_timeout(
                         ));
                     }
                     Ok(WaitStatus::Signaled(_, signal, _)) => {
-                        close(stdout_read.as_raw_fd()).ok();
-                        close(stderr_read.as_raw_fd()).ok();
                         return Err(Error::CommandFailed {
                             command: format!("jexec {} {:?}", jid, command),
                             message: format!("Process killed by signal {}", signal),
                         });
                     }
                     Ok(status) => {
-                        close(stdout_read.as_raw_fd()).ok();
-                        close(stderr_read.as_raw_fd()).ok();
                         return Err(Error::CommandFailed {
                             command: format!("jexec {} {:?}", jid, command),
                             message: format!("Unexpected wait status: {:?}", status),
                         });
                     }
                     Err(e) => {
-                        close(stdout_read.as_raw_fd()).ok();
-                        close(stderr_read.as_raw_fd()).ok();
                         return Err(Error::CommandFailed {
                             command: format!("jexec {} {:?}", jid, command),
                             message: format!("waitpid failed: {}", e),
@@ -262,16 +251,16 @@ pub fn jexec_with_timeout(
         }
         Ok(ForkResult::Child) => {
             // Child process: attach to jail and execute command
-            close(stdout_read.as_raw_fd()).ok();
-            close(stderr_read.as_raw_fd()).ok();
+            drop(stdout_read);
+            drop(stderr_read);
 
             // Redirect stdout and stderr to pipes
             unsafe {
                 libc::dup2(stdout_write.as_raw_fd(), 1);
                 libc::dup2(stderr_write.as_raw_fd(), 2);
             }
-            close(stdout_write.as_raw_fd()).ok();
-            close(stderr_write.as_raw_fd()).ok();
+            drop(stdout_write);
+            drop(stderr_write);
 
             // Attach to jail
             let result = unsafe { jail_attach(jid) };
@@ -348,16 +337,14 @@ pub fn chroot_exec(
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => {
             // Parent process: close write ends and read output
-            close(stdout_write.as_raw_fd()).ok();
-            close(stderr_write.as_raw_fd()).ok();
+            drop(stdout_write);
+            drop(stderr_write);
 
             // Read stdout
-            let stdout = read_fd_to_end(stdout_read.as_raw_fd());
-            close(stdout_read.as_raw_fd()).ok();
+            let stdout = read_fd_to_end(stdout_read);
 
             // Read stderr
-            let stderr = read_fd_to_end(stderr_read.as_raw_fd());
-            close(stderr_read.as_raw_fd()).ok();
+            let stderr = read_fd_to_end(stderr_read);
 
             // Wait for child process
             match waitpid(child, None) {
@@ -378,16 +365,16 @@ pub fn chroot_exec(
         }
         Ok(ForkResult::Child) => {
             // Child process: chroot and execute command
-            close(stdout_read.as_raw_fd()).ok();
-            close(stderr_read.as_raw_fd()).ok();
+            drop(stdout_read);
+            drop(stderr_read);
 
             // Redirect stdout and stderr to pipes
             unsafe {
                 libc::dup2(stdout_write.as_raw_fd(), 1);
                 libc::dup2(stderr_write.as_raw_fd(), 2);
             }
-            close(stdout_write.as_raw_fd()).ok();
-            close(stderr_write.as_raw_fd()).ok();
+            drop(stdout_write);
+            drop(stderr_write);
 
             // chroot(2) syscall
             let result = unsafe { libc::chroot(root_cstring.as_ptr()) };

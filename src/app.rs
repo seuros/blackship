@@ -56,36 +56,35 @@ impl AppContext {
                 detach,
                 network,
                 command,
-            } => commands::container::run_ephemeral_jail(
-                &name,
-                &release,
-                detach,
-                network.as_deref(),
-                &command,
-                self.load_optional_config().as_ref(),
-            ),
+            } => {
+                let config = self.load_config_if_present()?;
+                commands::container::run_ephemeral_jail(
+                    &name,
+                    &release,
+                    detach,
+                    network.as_deref(),
+                    &command,
+                    config.as_ref(),
+                )
+            }
 
             Commands::Cp {
                 source,
                 dest,
                 preserve,
-            } => commands::container::copy_files(
-                &source,
-                &dest,
-                preserve,
-                self.load_optional_config().as_ref(),
-            ),
+            } => {
+                let config = self.load_config_if_present()?;
+                commands::container::copy_files(&source, &dest, preserve, config.as_ref())
+            }
 
             Commands::Rm {
                 jails,
                 force,
                 volumes,
-            } => commands::container::remove_jails(
-                &jails,
-                force,
-                volumes,
-                self.load_optional_config().as_ref(),
-            ),
+            } => {
+                let config = self.load_config_if_present()?;
+                commands::container::remove_jails(&jails, force, volumes, config.as_ref())
+            }
 
             Commands::Console { jail, user } => {
                 let status = console::console(&jail, &user)?;
@@ -127,7 +126,8 @@ impl AppContext {
             }
 
             Commands::Network { action } => {
-                commands::network::handle(self.load_optional_config().as_ref(), action)
+                let config = self.load_config_if_present()?;
+                commands::network::handle(config.as_ref(), action)
             }
 
             Commands::Health {
@@ -235,6 +235,7 @@ impl AppContext {
                 let mut bridge = self.verbose_bridge()?;
                 bridge.prepare_host()?;
                 bridge.init_bulkhead()?;
+                bridge.sync_bulkhead()?;
                 println!("System setup complete.");
                 println!("PF anchor 'blackship' initialized for port forwarding.");
                 Ok(())
@@ -246,8 +247,16 @@ impl AppContext {
         manifest::load(&self.config_path)
     }
 
-    fn load_optional_config(&self) -> Option<manifest::BlackshipConfig> {
-        self.load_config().ok()
+    fn load_config_if_present(&self) -> Result<Option<manifest::BlackshipConfig>> {
+        match self.load_config() {
+            Ok(config) => Ok(Some(config)),
+            Err(Error::ConfigRead { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn verbose_bridge(&self) -> Result<Bridge> {

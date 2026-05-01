@@ -6,6 +6,7 @@
 //! - Integration with bridges and epairs
 
 use crate::error::Result;
+use crate::network::store::VnetStateRecord;
 use crate::network::{Bridge, EpairInterface};
 use std::net::IpAddr;
 
@@ -122,6 +123,25 @@ impl VnetSetup {
 
         // Destroy the epair
         self.epair.destroy()
+    }
+
+    pub fn state_record(&self, owner: &str, network: Option<&str>) -> VnetStateRecord {
+        VnetStateRecord {
+            owner: owner.to_string(),
+            network: network.map(str::to_string),
+            bridge: self.bridge_name.clone(),
+            host_interface: self.epair.host_side().to_string(),
+            jail_interface: self.epair.jail_side().to_string(),
+        }
+    }
+
+    pub fn cleanup_state(record: &VnetStateRecord) -> Result<()> {
+        if let Ok(bridge) = Bridge::open(&record.bridge) {
+            let _ = bridge.remove_member(&record.host_interface);
+        }
+
+        EpairInterface::from_existing(record.host_interface.clone(), record.jail_interface.clone())
+            .destroy()
     }
 }
 

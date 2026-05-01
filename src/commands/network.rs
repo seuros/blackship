@@ -43,6 +43,31 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
                 gateway: gateway_ip.to_string(),
             };
 
+            if let Some(config) = config
+                && let Some(existing) = config
+                    .networks
+                    .iter()
+                    .find(|existing| existing.name == name)
+            {
+                let configured_gateway = if let Some(gateway) = existing.gateway {
+                    gateway.to_string()
+                } else {
+                    let configured_subnet: IpNet = existing.subnet.parse().map_err(|e| {
+                        error::Error::Network(format!(
+                            "Invalid subnet '{}' for network '{}': {}",
+                            existing.subnet, existing.name, e
+                        ))
+                    })?;
+                    IpPool::new(configured_subnet)?.gateway().to_string()
+                };
+                if existing.subnet != record.subnet || configured_gateway != record.gateway {
+                    return Err(error::Error::Network(format!(
+                        "Network '{}' is already defined differently in blackship.toml",
+                        name
+                    )));
+                }
+            }
+
             let br = Bridge::create(&bridge)?;
 
             let gateway_with_prefix = format!("{}/{}", gateway_ip, subnet.prefix_len());
@@ -93,23 +118,6 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
                     );
                 }
             }
-        }
-        NetworkAction::Attach { jail, network, ip } => {
-            if store.get(&network)?.is_none() {
-                return Err(error::Error::NetworkNotFound(network));
-            }
-            println!(
-                "Attaching jail '{}' to network '{}' (ip: {:?})",
-                jail, network, ip
-            );
-            println!("Note: Attach is done automatically during 'up' with network config.");
-        }
-        NetworkAction::Detach { jail, network } => {
-            if store.get(&network)?.is_none() {
-                return Err(error::Error::NetworkNotFound(network));
-            }
-            println!("Detaching jail '{}' from network '{}'", jail, network);
-            println!("Note: Detach is done automatically during 'down'.");
         }
     }
 

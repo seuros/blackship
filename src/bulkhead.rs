@@ -1,34 +1,42 @@
-//! Firewall management for jail port forwarding
+//! Firewall management for jail port forwarding.
 //!
-//! Uses PF (Packet Filter) anchors to manage RDR rules without
-//! modifying the host's pf.conf.
+//! Uses PF anchors to manage RDR rules without modifying the host's `pf.conf`.
+//! Forward definitions are persisted so separate CLI invocations can list,
+//! update, and remove them consistently.
 
 use crate::error::{Error, Result};
+use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// PF anchor name for blackship rules
+/// PF anchor name for blackship rules.
 const PF_ANCHOR: &str = "blackship";
 
-/// Port forwarding rule
-#[derive(Debug, Clone)]
+/// Port forwarding rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortForward {
-    /// External port to listen on
+    /// External port to listen on.
     pub external_port: u16,
-    /// Internal (jail) port to forward to
+    /// Internal (jail) port to forward to.
     pub internal_port: u16,
-    /// Protocol (tcp, udp)
+    /// Protocol (tcp, udp).
     pub protocol: String,
-    /// Jail IP address
+    /// Jail IP address.
     pub jail_ip: IpAddr,
-    /// Bind to specific external IP (None = all interfaces)
+    /// Bind to specific external IP (None = all interfaces).
     pub bind_ip: Option<IpAddr>,
-    /// Jail name (for identification)
+    /// Jail name (for identification).
     pub jail_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PortForwardFile {
+    forwards: Vec<PortForward>,
+}
+
 impl PortForward {
-    /// Create a new port forward rule
+    /// Create a new port forward rule.
     pub fn new(
         external_port: u16,
         internal_port: u16,
@@ -46,13 +54,13 @@ impl PortForward {
         }
     }
 
-    /// Bind to a specific external IP
+    /// Bind to a specific external IP.
     pub fn with_bind_ip(mut self, ip: IpAddr) -> Self {
         self.bind_ip = Some(ip);
         self
     }
 
-    /// Generate PF RDR rule
+    /// Generate PF RDR rule.
     pub fn to_pf_rule(&self) -> String {
         let bind = match &self.bind_ip {
             Some(ip) => format!("on {} ", ip),
@@ -71,28 +79,40 @@ impl PortForward {
     }
 }
 
-/// Bulkhead manager for PF
+/// Bulkhead manager for PF.
 #[derive(Debug, Default)]
 pub struct BulkheadManager {
-    /// Active port forwards
+    /// Active port forwards.
     forwards: Vec<PortForward>,
+    /// Optional persistence path for forward definitions.
+    state_path: Option<PathBuf>,
 }
 
 impl BulkheadManager {
-    /// Create a new bulkhead manager
+    /// Create an in-memory bulkhead manager.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Initialize the PF anchor
+    /// Create a bulkhead manager backed by a state file under `data_dir`.
+    pub fn from_data_dir(data_dir: &Path) -> Result<Self> {
+        let state_path = data_dir.join("port-forwards.toml");
+        let forwards = read_forwards(&state_path)?;
+        Ok(Self {
+            forwards,
+            state_path: Some(state_path),
+        })
+    }
+
+    /// Initialize the PF anchor.
     ///
-    /// This should be called once at startup. The host's pf.conf must include:
+    /// The host's `pf.conf` must include:
     /// ```text
     /// rdr-anchor "blackship"
     /// anchor "blackship"
     /// ```
     pub fn init() -> Result<()> {
-        // Check if PF is enabled
         let output = Command::new("pfctl")
             .args(["-s", "info"])
             .output()
@@ -104,13 +124,11 @@ impl BulkheadManager {
             ));
         }
 
-        // Check if our anchor exists (it's ok if it doesn't have rules yet)
         let output = Command::new("pfctl")
             .args(["-a", PF_ANCHOR, "-s", "rules"])
             .output()
             .map_err(|e| Error::Network(format!("Failed to check anchor: {}", e)))?;
 
-        // If the anchor doesn't exist in pf.conf, warn the user
         if !output.status.success() {
             eprintln!("Warning: PF anchor '{}' may not be configured.", PF_ANCHOR);
             eprintln!("Add these lines to /etc/pf.conf:");
@@ -121,28 +139,92 @@ impl BulkheadManager {
         Ok(())
     }
 
-    /// Add a port forward rule
+    /// Re-apply the currently persisted rules to PF.
+    pub fn sync_rules(&self) -> Result<()> {
+        Self::init()?;
+        self.apply_rules()
+    }
+
+    /// Add a port forward rule.
     pub fn add_forward(&mut self, forward: PortForward) -> Result<()> {
-        // Add to our list
+        Self::init()?;
+
+        if self.forwards.iter().any(|existing| existing == &forward) {
+            return Ok(());
+        }
+
+        if let Some(existing) = self.forwards.iter().find(|existing| {
+            existing.bind_ip == forward.bind_ip
+                && existing.protocol == forward.protocol
+                && existing.external_port == forward.external_port
+        }) {
+            return Err(Error::Network(format!(
+                "Port {} {}/{} is already exposed for jail '{}'",
+                existing.external_port,
+                existing
+                    .bind_ip
+                    .map(|ip| ip.to_string())
+                    .unwrap_or_else(|| "*".into()),
+                existing.protocol,
+                existing.jail_name
+            )));
+        }
+
         self.forwards.push(forward);
-
-        // Apply all rules
+        self.forwards.sort_by(|a, b| {
+            a.jail_name
+                .cmp(&b.jail_name)
+                .then_with(|| a.protocol.cmp(&b.protocol))
+                .then_with(|| a.external_port.cmp(&b.external_port))
+        });
+        self.persist()?;
         self.apply_rules()
     }
 
-    /// Remove port forwards for a jail
+    /// Remove port forwards for a jail.
     pub fn remove_jail_forwards(&mut self, jail_name: &str) -> Result<()> {
-        self.forwards.retain(|f| f.jail_name != jail_name);
+        Self::init()?;
+        self.forwards
+            .retain(|forward| forward.jail_name != jail_name);
+        self.persist()?;
         self.apply_rules()
     }
 
-    /// Apply all rules to the PF anchor
+    /// List current port forwards.
+    pub fn list_forwards(&self) -> &[PortForward] {
+        &self.forwards
+    }
+
+    /// Get forwards for a specific jail.
+    pub fn get_jail_forwards(&self, jail_name: &str) -> Vec<&PortForward> {
+        self.forwards
+            .iter()
+            .filter(|forward| forward.jail_name == jail_name)
+            .collect()
+    }
+
+    fn persist(&self) -> Result<()> {
+        let Some(path) = self.state_path.as_ref() else {
+            return Ok(());
+        };
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Error::Network(format!("Failed to create port-forward state dir: {}", e))
+            })?;
+        }
+
+        write_forwards(path, &self.forwards)
+    }
+
     fn apply_rules(&self) -> Result<()> {
-        // Generate rules
-        let rules: Vec<String> = self.forwards.iter().map(|f| f.to_pf_rule()).collect();
+        let rules: Vec<String> = self
+            .forwards
+            .iter()
+            .map(|forward| forward.to_pf_rule())
+            .collect();
         let rules_text = rules.join("\n");
 
-        // Apply to anchor using pfctl
         let mut child = Command::new("pfctl")
             .args(["-a", PF_ANCHOR, "-f", "-"])
             .stdin(std::process::Stdio::piped())
@@ -167,24 +249,45 @@ impl BulkheadManager {
 
         Ok(())
     }
+}
 
-    /// List current port forwards
-    pub fn list_forwards(&self) -> &[PortForward] {
-        &self.forwards
+fn read_forwards(path: &Path) -> Result<Vec<PortForward>> {
+    if !path.exists() {
+        return Ok(Vec::new());
     }
 
-    /// Get forwards for a specific jail
-    pub fn get_jail_forwards(&self, jail_name: &str) -> Vec<&PortForward> {
-        self.forwards
-            .iter()
-            .filter(|f| f.jail_name == jail_name)
-            .collect()
-    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| Error::Network(format!("Failed to read port-forward state: {}", e)))?;
+    let state: PortForwardFile = toml::from_str(&content)
+        .map_err(|e| Error::Network(format!("Failed to parse port-forward state: {}", e)))?;
+    Ok(state.forwards)
+}
+
+fn write_forwards(path: &Path, forwards: &[PortForward]) -> Result<()> {
+    let content = toml::to_string(&PortForwardFile {
+        forwards: forwards.to_vec(),
+    })
+    .map_err(|e| Error::Network(format!("Failed to serialize port-forward state: {}", e)))?;
+    let tmp_path = path.with_extension("tmp");
+    std::fs::write(&tmp_path, content)
+        .map_err(|e| Error::Network(format!("Failed to write port-forward state: {}", e)))?;
+    std::fs::rename(&tmp_path, path)
+        .map_err(|e| Error::Network(format!("Failed to finalize port-forward state: {}", e)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("blackship-bulkhead-{}", unique))
+    }
 
     #[test]
     fn test_port_forward_rule() {
@@ -222,5 +325,34 @@ mod tests {
     fn test_bulkhead_manager() {
         let manager = BulkheadManager::new();
         assert_eq!(manager.list_forwards().len(), 0);
+    }
+
+    #[test]
+    fn test_bulkhead_state_round_trip() {
+        let root = temp_dir();
+        std::fs::create_dir_all(&root).unwrap();
+
+        let state_path = root.join("port-forwards.toml");
+        write_forwards(
+            &state_path,
+            &[PortForward::new(
+                8080,
+                80,
+                "tcp",
+                "10.0.1.10".parse().unwrap(),
+                "demo-web",
+            )],
+        )
+        .unwrap();
+
+        let manager = BulkheadManager::from_data_dir(&root).unwrap();
+        assert_eq!(manager.list_forwards().len(), 1);
+        assert_eq!(manager.list_forwards()[0].jail_name, "demo-web");
+        assert_eq!(
+            manager.list_forwards()[0].jail_ip,
+            "10.0.1.10".parse::<IpAddr>().unwrap()
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

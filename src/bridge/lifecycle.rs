@@ -226,14 +226,26 @@ impl Bridge {
         let effective_ip: Option<IpAddr> = if let Some(network) = &jail_def.network {
             if let Some(static_ip) = network.ip {
                 for net_name in &network.networks {
-                    if let Some(pool) = self.ip_allocator.get_pool_mut(net_name) {
-                        let _ = pool.allocate_specific(static_ip);
+                    if !self.runtime_networks.contains_key(net_name) {
+                        if created_zfs_dataset && let Some(zfs) = &self.zfs {
+                            let _ = zfs.destroy_jail_dataset(&full_name);
+                        }
+                        return Err(Error::Network(format!(
+                            "Jail '{}' references unknown network '{}'",
+                            full_name, net_name
+                        )));
                     }
                 }
                 Some(static_ip)
             } else if let Some(first_network) = network.networks.first() {
                 match self.ip_allocator.allocate(first_network) {
                     Ok(ip) => {
+                        if let Err(e) = self.lease_store.record(first_network, &full_name, ip) {
+                            if created_zfs_dataset && let Some(zfs) = &self.zfs {
+                                let _ = zfs.destroy_jail_dataset(&full_name);
+                            }
+                            return Err(e);
+                        }
                         allocated_ip = Some((first_network.clone(), ip));
                         if self.verbose {
                             println!(
@@ -269,6 +281,7 @@ impl Bridge {
         if let Err(e) = hook_runner.execute_phase(HookPhase::PreStart, &hook_context) {
             if let Some((network_name, ip)) = &allocated_ip {
                 self.ip_allocator.release(network_name, ip);
+                let _ = self.lease_store.release(network_name, &full_name);
             }
             if created_zfs_dataset && let Some(zfs) = &self.zfs {
                 let _ = zfs.destroy_jail_dataset(&full_name);
@@ -282,24 +295,66 @@ impl Bridge {
         // Create VNET setup for VNET jails before creating the jail
         let mut vnet_setup: Option<VnetSetup> = None;
         if is_vnet && let Some(network) = &jail_def.network {
-            let bridge_name = network.bridge.as_ref().ok_or_else(|| {
-                Error::Network(format!(
-                    "VNET jail '{}' requires a bridge configuration",
-                    full_name
-                ))
-            })?;
+            let primary_runtime_network = network
+                .networks
+                .first()
+                .map(|network_name| {
+                    self.runtime_networks
+                        .get(network_name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            Error::Network(format!(
+                                "Jail '{}' references unknown network '{}'",
+                                full_name, network_name
+                            ))
+                        })
+                })
+                .transpose()?;
 
-            let ip_config = network
-                .ip_cidr
-                .as_ref()
-                .cloned()
-                .or_else(|| network.ip.map(|ip| format!("{}/24", ip)))
-                .or_else(|| effective_ip.map(|ip| format!("{}/24", ip)))
-                .unwrap_or_else(|| "0.0.0.0/0".to_string());
+            let bridge_name = network
+                .bridge
+                .clone()
+                .or_else(|| {
+                    primary_runtime_network
+                        .as_ref()
+                        .and_then(|runtime| runtime.bridge.clone())
+                })
+                .ok_or_else(|| {
+                    Error::Network(format!(
+                        "VNET jail '{}' requires a bridge configuration",
+                        full_name
+                    ))
+                })?;
+
+            let ip_config = if let Some(ip_cidr) = network.ip_cidr.clone() {
+                ip_cidr
+            } else {
+                let ip = network.ip.or(effective_ip).ok_or_else(|| {
+                    Error::Network(format!(
+                        "VNET jail '{}' requires an IP address or attached network",
+                        full_name
+                    ))
+                })?;
+                let prefix_len = primary_runtime_network
+                    .as_ref()
+                    .map(|runtime| runtime.subnet.prefix_len())
+                    .unwrap_or(24);
+                format!("{}/{}", ip, prefix_len)
+            };
 
             let gateway = network
                 .gateway
-                .unwrap_or_else(|| "10.0.0.1".parse().unwrap());
+                .or_else(|| {
+                    primary_runtime_network
+                        .as_ref()
+                        .map(|runtime| runtime.gateway)
+                })
+                .ok_or_else(|| {
+                    Error::Network(format!(
+                        "VNET jail '{}' requires a gateway or attached network",
+                        full_name
+                    ))
+                })?;
 
             let mut vnet_config = VnetConfig::new(bridge_name.clone(), ip_config, gateway);
 
@@ -316,6 +371,7 @@ impl Bridge {
                 Err(e) => {
                     if let Some((network_name, ip)) = &allocated_ip {
                         self.ip_allocator.release(network_name, ip);
+                        let _ = self.lease_store.release(network_name, &full_name);
                     }
                     if created_zfs_dataset && let Some(zfs) = &self.zfs {
                         let _ = zfs.destroy_jail_dataset(&full_name);
@@ -337,6 +393,20 @@ impl Bridge {
                 );
             }
 
+            let state_record =
+                setup.state_record(&full_name, network.networks.first().map(String::as_str));
+            if let Err(e) = self.vnet_state_store.save(&state_record) {
+                let _ = setup.cleanup();
+                if let Some((network_name, ip)) = &allocated_ip {
+                    self.ip_allocator.release(network_name, ip);
+                    let _ = self.lease_store.release(network_name, &full_name);
+                }
+                if created_zfs_dataset && let Some(zfs) = &self.zfs {
+                    let _ = zfs.destroy_jail_dataset(&full_name);
+                }
+                return Err(e);
+            }
+
             vnet_setup = Some(setup);
         }
 
@@ -352,7 +422,9 @@ impl Bridge {
         }
 
         if is_vnet {
-            params.insert("vnet".to_string(), ParamValue::String("new".to_string()));
+            // `vnet` is a jailsys CTLTYPE_INT param in the kernel, even though
+            // jail.conf exposes it as the strings "inherit"/"new".
+            params.insert("vnet".to_string(), ParamValue::Int(libc::JAIL_SYS_NEW));
         } else if let Some(ip) = effective_ip {
             match ip {
                 IpAddr::V4(addr) => {
@@ -371,7 +443,11 @@ impl Bridge {
 
         // Create the jail — use owning descriptors on FreeBSD 16+
         println!("Starting jail '{}'...", full_name);
-        let use_descriptors = self.os_version.supports_jail_descriptors();
+        // Owning descriptors are only useful while a long-lived supervisor
+        // process keeps them open. For one-shot CLI commands like `up`, using
+        // an owning descriptor would remove the jail as soon as blackship exits.
+        let use_descriptors =
+            self.os_version.supports_jail_descriptors() && self.warden_handle.is_some();
         let (jid, jail_handle) = if use_descriptors {
             match jail_create_with_descriptor(&path, params) {
                 Ok((jid, desc)) => (jid, Some(JailHandle::Descriptor { fd: desc, jid })),
@@ -379,9 +455,11 @@ impl Bridge {
                     eprintln!("Failed to create jail '{}': {}", full_name, e);
                     if let Some(setup) = vnet_setup {
                         let _ = setup.cleanup();
+                        let _ = self.vnet_state_store.delete(&full_name);
                     }
                     if let Some((network_name, ip)) = &allocated_ip {
                         self.ip_allocator.release(network_name, ip);
+                        let _ = self.lease_store.release(network_name, &full_name);
                     }
                     if created_zfs_dataset {
                         eprintln!("Cleaning up ZFS dataset...");
@@ -407,9 +485,11 @@ impl Bridge {
                     eprintln!("Failed to create jail '{}': {}", full_name, e);
                     if let Some(setup) = vnet_setup {
                         let _ = setup.cleanup();
+                        let _ = self.vnet_state_store.delete(&full_name);
                     }
                     if let Some((network_name, ip)) = &allocated_ip {
                         self.ip_allocator.release(network_name, ip);
+                        let _ = self.lease_store.release(network_name, &full_name);
                     }
                     if created_zfs_dataset {
                         eprintln!("Cleaning up ZFS dataset...");
@@ -582,6 +662,7 @@ impl Bridge {
             instance.handle = None;
         }
 
+        let mut cleaned_persisted_vnet = false;
         if let Some(vnet_setup) = self.vnet_setups.remove(&full_name) {
             if let Err(e) = vnet_setup.cleanup() {
                 eprintln!(
@@ -591,13 +672,27 @@ impl Bridge {
             } else if self.verbose {
                 println!("  Cleaned up VNET for bridge {}", vnet_setup.bridge_name);
             }
+            let _ = self.vnet_state_store.delete(&full_name);
+            cleaned_persisted_vnet = true;
+        }
+        if !cleaned_persisted_vnet && let Ok(Some(record)) = self.vnet_state_store.get(&full_name) {
+            if let Err(e) = VnetSetup::cleanup_state(&record) {
+                eprintln!(
+                    "Warning: Failed to cleanup persisted VNET setup for jail '{}': {}",
+                    full_name, e
+                );
+            }
+            let _ = self.vnet_state_store.delete(&full_name);
         }
 
         if let Some((network_name, ip)) = self.allocated_ips.remove(&full_name) {
             self.ip_allocator.release(&network_name, &ip);
+            let _ = self.lease_store.release(&network_name, &full_name);
             if self.verbose {
                 println!("  Released IP {} back to network '{}'", ip, network_name);
             }
+        } else {
+            let _ = self.lease_store.release_owner(&full_name);
         }
 
         stop_result
@@ -637,6 +732,7 @@ impl Bridge {
 
         self.instances.remove(&full_name);
 
+        let mut cleaned_persisted_vnet = false;
         if let Some(vnet_setup) = self.vnet_setups.remove(&full_name) {
             println!("  Cleaning up VNET setup...");
             if let Err(e) = vnet_setup.cleanup() {
@@ -646,11 +742,30 @@ impl Bridge {
                     return Err(e);
                 }
             }
+            let _ = self.vnet_state_store.delete(&full_name);
+            cleaned_persisted_vnet = true;
+        }
+        if !cleaned_persisted_vnet && let Ok(Some(record)) = self.vnet_state_store.get(&full_name) {
+            println!("  Cleaning up persisted VNET state...");
+            if let Err(e) = VnetSetup::cleanup_state(&record) {
+                if force {
+                    eprintln!("  Warning: Failed to cleanup persisted VNET state: {}", e);
+                } else {
+                    return Err(e);
+                }
+            }
+            let _ = self.vnet_state_store.delete(&full_name);
         }
 
         if let Some((network_name, ip)) = self.allocated_ips.remove(&full_name) {
             self.ip_allocator.release(&network_name, &ip);
+            let _ = self.lease_store.release(&network_name, &full_name);
             println!("  Released IP {} back to network '{}'", ip, network_name);
+        } else {
+            let released = self.lease_store.release_owner(&full_name)?;
+            for (network_name, ip) in released {
+                println!("  Released IP {} back to network '{}'", ip, network_name);
+            }
         }
 
         println!("Cleanup complete for jail '{}'", full_name);

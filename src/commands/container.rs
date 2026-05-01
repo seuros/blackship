@@ -1,7 +1,9 @@
 //! Docker-style container commands: run, cp, rm
 
 use crate::error::Result;
-use crate::{console, error, manifest};
+use crate::{console, error, manifest, network};
+use std::ffi::CString;
+use std::path::{Path, PathBuf};
 
 /// Run a command in an ephemeral jail
 ///
@@ -51,6 +53,9 @@ pub fn run_ephemeral_jail(
         return Err(error::Error::ReleaseNotFound(release.to_string()));
     }
 
+    let lease_store = network::NetworkLeaseStore::from_config(config);
+    let vnet_state_store = network::VnetStateStore::from_config(config);
+
     // Create jail root using ZFS clone if available, otherwise copy
     let jail_root = data_dir.join("containers").join(name);
 
@@ -99,6 +104,71 @@ pub fn run_ephemeral_jail(
         }
     };
 
+    let mut allocated_ip: Option<(String, std::net::IpAddr)> = None;
+    let mut vnet_setup: Option<network::VnetSetup> = None;
+
+    if let Some(network_name) = network {
+        let (runtime_networks, mut allocator, _) = network::build_runtime_allocator(config)?;
+        let runtime_network = runtime_networks
+            .get(network_name)
+            .cloned()
+            .ok_or_else(|| error::Error::NetworkNotFound(network_name.to_string()))?;
+        let bridge_name = runtime_network.bridge.clone().ok_or_else(|| {
+            error::Error::Network(format!(
+                "Network '{}' exists but has no host bridge. Create it with 'blackship network create {} ...'",
+                network_name, network_name
+            ))
+        })?;
+
+        let ip = allocator.allocate(network_name)?;
+        if let Err(err) = lease_store.record(network_name, name, ip) {
+            if using_zfs {
+                let _ = Command::new("zfs")
+                    .args(["destroy", "-r", &new_dataset])
+                    .status();
+            } else {
+                let _ = std::fs::remove_dir_all(&jail_root);
+            }
+            return Err(err);
+        }
+        allocated_ip = Some((network_name.to_string(), ip));
+
+        let vnet_config = network::VnetConfig::new(
+            bridge_name,
+            format!("{}/{}", ip, runtime_network.subnet.prefix_len()),
+            runtime_network.gateway,
+        );
+        match network::VnetSetup::create(name, vnet_config) {
+            Ok(setup) => {
+                let state_record = setup.state_record(name, Some(network_name));
+                if let Err(err) = vnet_state_store.save(&state_record) {
+                    let _ = setup.cleanup();
+                    let _ = lease_store.release(network_name, name);
+                    if using_zfs {
+                        let _ = Command::new("zfs")
+                            .args(["destroy", "-r", &new_dataset])
+                            .status();
+                    } else {
+                        let _ = std::fs::remove_dir_all(&jail_root);
+                    }
+                    return Err(err);
+                }
+                vnet_setup = Some(setup);
+            }
+            Err(err) => {
+                let _ = lease_store.release(network_name, name);
+                if using_zfs {
+                    let _ = Command::new("zfs")
+                        .args(["destroy", "-r", &new_dataset])
+                        .status();
+                } else {
+                    let _ = std::fs::remove_dir_all(&jail_root);
+                }
+                return Err(err);
+            }
+        }
+    }
+
     // Determine the command to run
     let jail_command = if command.is_empty() {
         vec!["/bin/sh".to_string()]
@@ -136,17 +206,27 @@ pub fn run_ephemeral_jail(
 
     let status = jail_cmd.status()?;
     if !status.success() {
-        // Cleanup on failure
-        if using_zfs {
-            let _ = Command::new("zfs")
-                .args(["destroy", "-r", &new_dataset])
-                .status();
-        } else {
-            let _ = std::fs::remove_dir_all(&jail_root);
+        if let Some(setup) = vnet_setup.take() {
+            let _ = setup.cleanup();
+            let _ = vnet_state_store.delete(name);
         }
+        if let Some((network_name, _ip)) = &allocated_ip {
+            let _ = lease_store.release(network_name, name);
+        }
+        let _ = cleanup_jail_root(&jail_root, Some(&new_dataset), using_zfs);
         return Err(error::Error::JailCreationFailed(
             "Failed to start jail".to_string(),
         ));
+    }
+
+    if let Some(setup) = vnet_setup.as_ref() {
+        let jid = crate::jail::jail_getid(name)?;
+        if let Err(err) = setup.attach_to_jail(jid) {
+            let _ = Command::new("jail").args(["-r", name]).status();
+            let _ = network_cleanup(config, name);
+            let _ = cleanup_jail_root(&jail_root, Some(&new_dataset), using_zfs);
+            return Err(err);
+        }
     }
 
     println!("Jail '{}' started from release '{}'", name, release);
@@ -169,14 +249,9 @@ pub fn run_ephemeral_jail(
     println!("Cleaning up ephemeral jail '{}'...", name);
     // Stop the jail
     let _ = Command::new("jail").args(["-r", name]).status();
-
-    // Remove the jail root
-    if using_zfs {
-        let _ = Command::new("zfs")
-            .args(["destroy", "-r", &new_dataset])
-            .status();
-    } else {
-        let _ = std::fs::remove_dir_all(&jail_root);
+    let _ = network_cleanup(config, name);
+    if let Err(err) = cleanup_jail_root(&jail_root, Some(&new_dataset), using_zfs) {
+        eprintln!("Warning: Failed to clean up jail root '{}': {}", name, err);
     }
 
     match exec_status {
@@ -312,6 +387,23 @@ pub fn remove_jails(
 
         // Get jail path before removing
         let jail_root = get_jail_root(jail, config);
+        if let Err(e) = network_cleanup(config, jail) {
+            if force {
+                eprintln!("  Warning: Failed to clean up network state: {}", e);
+            } else {
+                return Err(e);
+            }
+        }
+
+        if let Ok(root) = &jail_root
+            && let Err(e) = unmount_jail_filesystems(root)
+        {
+            if force {
+                eprintln!("  Warning: Failed to unmount jail filesystems: {}", e);
+            } else {
+                return Err(e);
+            }
+        }
 
         // Try to remove ZFS dataset if volumes flag is set
         if volumes {
@@ -362,10 +454,7 @@ pub fn parse_jail_path(s: &str) -> (Option<String>, &str) {
 }
 
 /// Get the root path of a jail
-fn get_jail_root(
-    jail: &str,
-    config: Option<&manifest::BlackshipConfig>,
-) -> Result<std::path::PathBuf> {
+fn get_jail_root(jail: &str, config: Option<&manifest::BlackshipConfig>) -> Result<PathBuf> {
     use std::process::Command;
 
     // Try to get jail path from jls (running jail)
@@ -381,7 +470,7 @@ fn get_jail_root(
             .trim()
             .to_string();
         if !path.is_empty() {
-            return Ok(std::path::PathBuf::from(path));
+            return Ok(PathBuf::from(path));
         }
     }
 
@@ -402,6 +491,111 @@ fn get_jail_root(
     }
 
     Err(error::Error::JailNotFound(jail.to_string()))
+}
+
+fn network_cleanup(config: Option<&manifest::BlackshipConfig>, owner: &str) -> Result<()> {
+    let vnet_state_store = network::VnetStateStore::from_config(config);
+    if let Some(record) = vnet_state_store.get(owner)? {
+        network::VnetSetup::cleanup_state(&record)?;
+        let _ = vnet_state_store.delete(owner)?;
+    }
+
+    let lease_store = network::NetworkLeaseStore::from_config(config);
+    let _ = lease_store.release_owner(owner)?;
+    Ok(())
+}
+
+fn cleanup_jail_root(jail_root: &Path, zfs_dataset: Option<&str>, using_zfs: bool) -> Result<()> {
+    if jail_root.exists() {
+        unmount_jail_filesystems(jail_root)?;
+    }
+
+    if using_zfs {
+        let Some(dataset) = zfs_dataset else {
+            return Err(error::Error::JailOperation(
+                "Missing ZFS dataset for jail cleanup".to_string(),
+            ));
+        };
+
+        let status = std::process::Command::new("zfs")
+            .args(["destroy", "-r", dataset])
+            .status()?;
+        if !status.success() {
+            return Err(error::Error::JailOperation(format!(
+                "Failed to destroy ZFS dataset '{}'",
+                dataset
+            )));
+        }
+    } else if jail_root.exists() {
+        std::fs::remove_dir_all(jail_root)?;
+    }
+
+    Ok(())
+}
+
+fn unmount_jail_filesystems(jail_root: &Path) -> Result<()> {
+    let output = std::process::Command::new("mount").arg("-p").output()?;
+    if !output.status.success() {
+        return Err(error::Error::JailOperation(
+            "Failed to inspect mounted filesystems".to_string(),
+        ));
+    }
+
+    let mounts = mounted_paths_under(jail_root, String::from_utf8_lossy(&output.stdout).as_ref());
+
+    for mountpoint in mounts {
+        unmount_path(&mountpoint)?;
+    }
+
+    Ok(())
+}
+
+fn mounted_paths_under(jail_root: &Path, mount_output: &str) -> Vec<PathBuf> {
+    let root = jail_root.to_string_lossy();
+    let prefix = format!("{}/", root);
+    let mut mountpoints: Vec<PathBuf> = mount_output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let _source = fields.next()?;
+            let mountpoint = fields.next()?;
+            if mountpoint == root || mountpoint.starts_with(&prefix) {
+                Some(PathBuf::from(mountpoint))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    mountpoints.sort_by_key(|path| std::cmp::Reverse(path.to_string_lossy().len()));
+    mountpoints
+}
+
+fn unmount_path(path: &Path) -> Result<()> {
+    let path_str = path.to_string_lossy().into_owned();
+    let c_path = CString::new(path_str.clone())?;
+
+    let result = unsafe { libc::unmount(c_path.as_ptr(), 0) };
+    if result == 0 {
+        return Ok(());
+    }
+
+    let err = std::io::Error::last_os_error();
+    match err.raw_os_error() {
+        Some(code) if code == libc::EINVAL || code == libc::ENOENT => return Ok(()),
+        _ => {}
+    }
+
+    let force_result = unsafe { libc::unmount(c_path.as_ptr(), libc::MNT_FORCE) };
+    if force_result == 0 {
+        return Ok(());
+    }
+
+    Err(error::Error::JailOperation(format!(
+        "Failed to unmount '{}': {}",
+        path.display(),
+        std::io::Error::last_os_error()
+    )))
 }
 
 #[cfg(test)]
@@ -442,5 +636,26 @@ mod tests {
         let (jail, path) = parse_jail_path("./local/file");
         assert_eq!(jail, None);
         assert_eq!(path, "./local/file");
+    }
+
+    #[test]
+    fn test_mounted_paths_under_sorts_deepest_first() {
+        let mounts = mounted_paths_under(
+            Path::new("/var/blackship/jails/demo"),
+            "\
+devfs /var/blackship/jails/demo/dev devfs rw 0 0\n\
+procfs /var/blackship/jails/demo/proc procfs rw 0 0\n\
+fdescfs /var/blackship/jails/demo/dev/fd fdescfs rw 0 0\n\
+tmpfs /tmp tmpfs rw 0 0\n",
+        );
+
+        assert_eq!(
+            mounts,
+            vec![
+                PathBuf::from("/var/blackship/jails/demo/dev/fd"),
+                PathBuf::from("/var/blackship/jails/demo/proc"),
+                PathBuf::from("/var/blackship/jails/demo/dev"),
+            ]
+        );
     }
 }

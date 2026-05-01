@@ -13,6 +13,11 @@ impl Bridge {
         BulkheadManager::init()
     }
 
+    /// Re-apply persisted PF rules to the anchor.
+    pub fn sync_bulkhead(&self) -> Result<()> {
+        self.bulkhead.sync_rules()
+    }
+
     /// Expose a port from a jail to the host
     pub fn expose_port(
         &mut self,
@@ -28,13 +33,39 @@ impl Bridge {
             .get_jail(&service_name)
             .ok_or_else(|| Error::JailNotFound(jail_name.to_string()))?;
 
-        let jail_ip = jail_def
-            .network
-            .as_ref()
-            .and_then(|n| n.ip)
-            .ok_or_else(|| {
+        let jail_ip = if let Some(ip) = jail_def.network.as_ref().and_then(|network| network.ip) {
+            ip
+        } else if let Some((_, ip)) = self.allocated_ips.get(&full_name) {
+            *ip
+        } else if let Some(network_cfg) = jail_def.network.as_ref() {
+            let mut leased_ip = None;
+            for network_name in &network_cfg.networks {
+                for lease in self.lease_store.list(network_name)? {
+                    if lease.owner == full_name {
+                        leased_ip = Some(lease.ip.parse().map_err(|e| {
+                            Error::Network(format!(
+                                "Invalid leased IP '{}' for jail '{}': {}",
+                                lease.ip, full_name, e
+                            ))
+                        })?);
+                        break;
+                    }
+                }
+
+                if leased_ip.is_some() {
+                    break;
+                }
+            }
+
+            leased_ip.ok_or_else(|| {
                 Error::Network(format!("Jail '{}' has no IP address configured", full_name))
-            })?;
+            })?
+        } else {
+            return Err(Error::Network(format!(
+                "Jail '{}' has no IP address configured",
+                full_name
+            )));
+        };
 
         let internal = internal_port.unwrap_or(external_port);
         let mut forward = PortForward::new(external_port, internal, protocol, jail_ip, &full_name);

@@ -16,5 +16,8 @@ pub mod vnet;
 pub use bridge::Bridge;
 pub use epair::EpairInterface;
 pub use ip::{IpAllocator, IpPool};
-pub use store::{NetworkRecord, NetworkStore};
+pub use store::{
+    NetworkLeaseStore, NetworkRecord, NetworkStore, ResolvedNetwork, VnetStateStore,
+    build_runtime_allocator,
+};
 pub use vnet::{VnetConfig, VnetSetup};

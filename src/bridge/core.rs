@@ -4,11 +4,13 @@ use crate::bulkhead::BulkheadManager;
 use crate::error::{Error, Result};
 use crate::jail::JailInstance;
 use crate::manifest::BlackshipConfig;
-use crate::network::{Bridge as NetworkBridge, IpAllocator, IpPool, VnetSetup};
+use crate::network::{
+    Bridge as NetworkBridge, IpAllocator, NetworkLeaseStore, ResolvedNetwork, VnetSetup,
+    VnetStateStore, build_runtime_allocator,
+};
 use crate::sys::OsVersion;
 use crate::warden::WardenHandle;
 use crate::zfs::ZfsManager;
-pub(crate) use ipnet::IpNet;
 
 use petgraph::graph::DiGraph;
 use std::collections::HashMap;
@@ -30,8 +32,17 @@ pub struct Bridge {
     /// Bulkhead manager for PF firewall rules
     pub(super) bulkhead: BulkheadManager,
 
+    /// Resolved runtime networks available to this bridge.
+    pub(super) runtime_networks: HashMap<String, ResolvedNetwork>,
+
     /// IP allocator for automatic IP assignment from network pools
     pub(super) ip_allocator: IpAllocator,
+
+    /// Persistent lease state for auto-assigned addresses.
+    pub(super) lease_store: NetworkLeaseStore,
+
+    /// Persistent VNET attachment state for cleanup across CLI invocations.
+    pub(super) vnet_state_store: VnetStateStore,
 
     /// Map of jail name to allocated IP (for cleanup on stop)
     pub(super) allocated_ips: HashMap<String, (String, IpAddr)>,
@@ -75,14 +86,15 @@ impl Bridge {
         let os_version = OsVersion::detect_kernel()?;
 
         // Check if VLAN filtering is being used and verify OS version
-        if let Some(ref bridge_config) = config.config.bridge {
-            if bridge_config.vlan_filtering && !os_version.supports_vlan_filtering() {
-                return Err(Error::UnsupportedOsVersion {
-                    feature: "VLAN filtering".to_string(),
-                    minimum: "15.0".to_string(),
-                    current: os_version.to_string(),
-                });
-            }
+        if let Some(ref bridge_config) = config.config.bridge
+            && bridge_config.vlan_filtering
+            && !os_version.supports_vlan_filtering()
+        {
+            return Err(Error::UnsupportedOsVersion {
+                feature: "VLAN filtering".to_string(),
+                minimum: "15.0".to_string(),
+                current: os_version.to_string(),
+            });
         }
 
         let mut graph = DiGraph::new();
@@ -110,25 +122,9 @@ impl Bridge {
             None
         };
 
-        let bulkhead = BulkheadManager::new();
-
-        let mut ip_allocator = IpAllocator::new();
-        for network in &config.networks {
-            let subnet: IpNet = network.subnet.parse().map_err(|e| {
-                Error::Network(format!(
-                    "Invalid subnet '{}' for network '{}': {}",
-                    network.subnet, network.name, e
-                ))
-            })?;
-
-            let pool = if let Some(gateway) = network.gateway {
-                IpPool::with_gateway(subnet, gateway)?
-            } else {
-                IpPool::new(subnet)?
-            };
-
-            ip_allocator.add_pool(network.name.clone(), pool);
-        }
+        let bulkhead = BulkheadManager::from_data_dir(&config.config.data_dir)?;
+        let (runtime_networks, ip_allocator, lease_store) = build_runtime_allocator(Some(&config))?;
+        let vnet_state_store = VnetStateStore::from_config(Some(&config));
 
         let jail_start_capacity = config.config.rate_limit.jail_start_capacity;
         let now = Instant::now();
@@ -137,7 +133,10 @@ impl Bridge {
             graph,
             zfs,
             bulkhead,
+            runtime_networks,
             ip_allocator,
+            lease_store,
+            vnet_state_store,
             allocated_ips: HashMap::new(),
             instances: HashMap::new(),
             verbose: false,

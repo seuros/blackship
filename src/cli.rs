@@ -578,28 +578,6 @@ pub enum NetworkAction {
 
     /// List all networks
     List,
-
-    /// Attach a jail to a network
-    Attach {
-        /// Jail name
-        jail: String,
-
-        /// Network name
-        network: String,
-
-        /// IP address (auto-assigned if not specified)
-        #[arg(short, long)]
-        ip: Option<String>,
-    },
-
-    /// Detach a jail from a network
-    Detach {
-        /// Jail name
-        jail: String,
-
-        /// Network name
-        network: String,
-    },
 }
 
 impl Commands {
