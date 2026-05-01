@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.5](https://github.com/seuros/blackship/compare/blackship-v0.1.4...blackship-v0.1.5) (2026-05-01)
+
+
+### Bug Fixes
+
+* persist networks and auto-escalate privileged commands ([e562cc2](https://github.com/seuros/blackship/commit/e562cc20e65d77d6cd1515884dcfc1809073cec5))
+* stabilize vnet runtime state and cleanup ([0bb8dca](https://github.com/seuros/blackship/commit/0bb8dca635b3fcb0934f178f99845fd5fb48bf9d))
+* use jiff for wall-clock timestamps ([8033207](https://github.com/seuros/blackship/commit/8033207c446ac3217bb85fb5b59ca09427cf830e))
+
 ## [0.1.4](https://github.com/seuros/blackship/compare/blackship-v0.1.3...blackship-v0.1.4) (2026-01-25)
 
 
