@@ -93,34 +93,35 @@ impl IpPool {
         }
     }
 
-    fn allocate_v4(&mut self, net: Ipv4Net) -> Result<IpAddr> {
-        // Skip network address and broadcast
-        let hosts = net.hosts();
-        for addr in hosts {
-            let ip = IpAddr::V4(addr);
-            if !self.allocated.contains(&ip) {
-                self.allocated.insert(ip);
+    /// Find and allocate the first unallocated address from an iterator of hosts
+    fn allocate_from_hosts(
+        allocated: &mut HashSet<IpAddr>,
+        hosts: impl Iterator<Item = IpAddr>,
+        subnet: impl std::fmt::Display,
+    ) -> Result<IpAddr> {
+        for ip in hosts {
+            if !allocated.contains(&ip) {
+                allocated.insert(ip);
                 return Ok(ip);
             }
         }
+        Err(Error::Network(format!(
+            "No available addresses in {}",
+            subnet
+        )))
+    }
 
-        Err(Error::Network(format!("No available addresses in {}", net)))
+    fn allocate_v4(&mut self, net: Ipv4Net) -> Result<IpAddr> {
+        Self::allocate_from_hosts(&mut self.allocated, net.hosts().map(IpAddr::V4), net)
     }
 
     fn allocate_v6(&mut self, net: Ipv6Net) -> Result<IpAddr> {
-        // For IPv6, we iterate through hosts
-        // Note: For large subnets, this could be slow
-        let hosts = net.hosts();
-        for addr in hosts.take(65536) {
-            // Limit iteration
-            let ip = IpAddr::V6(addr);
-            if !self.allocated.contains(&ip) {
-                self.allocated.insert(ip);
-                return Ok(ip);
-            }
-        }
-
-        Err(Error::Network(format!("No available addresses in {}", net)))
+        // Limit iteration for large IPv6 subnets to avoid hangs
+        Self::allocate_from_hosts(
+            &mut self.allocated,
+            net.hosts().take(65536).map(IpAddr::V6),
+            net,
+        )
     }
 
     fn first_usable(subnet: &IpNet) -> Result<IpAddr> {

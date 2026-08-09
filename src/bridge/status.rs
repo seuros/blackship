@@ -10,14 +10,7 @@ impl Bridge {
     pub fn up_dry_run(&self, jail: Option<&str>) -> Result<()> {
         println!("=== DRY RUN - No changes will be made ===\n");
 
-        let jails_to_start: Vec<String> = if let Some(name) = jail {
-            self.get_dependencies(name)?
-                .into_iter()
-                .map(String::from)
-                .collect()
-        } else {
-            self.start_order()?.into_iter().map(String::from).collect()
-        };
+        let jails_to_start = self.jails_for_up(jail)?;
 
         println!("Would start {} jail(s):\n", jails_to_start.len());
 
@@ -71,14 +64,7 @@ impl Bridge {
     pub fn down_dry_run(&self, jail: Option<&str>) -> Result<()> {
         println!("=== DRY RUN - No changes will be made ===\n");
 
-        let jails_to_stop: Vec<String> = if let Some(name) = jail {
-            self.get_dependents(name)?
-                .into_iter()
-                .map(String::from)
-                .collect()
-        } else {
-            self.stop_order()?.into_iter().map(String::from).collect()
-        };
+        let jails_to_stop = self.jails_for_down(jail)?;
 
         println!("Would stop {} jail(s):\n", jails_to_stop.len());
 

@@ -7,15 +7,17 @@
 //! - VNET jail network configuration
 
 pub mod bridge;
+pub mod ensure;
 pub mod epair;
 pub mod ioctl;
 pub mod ip;
+pub mod netgraph;
 pub mod store;
 pub mod vnet;
 
 pub use bridge::Bridge;
-pub use epair::EpairInterface;
 pub use ip::{IpAllocator, IpPool};
+pub use store::allocate_and_record;
 pub use store::{
     NetworkLeaseStore, NetworkRecord, NetworkStore, ResolvedNetwork, VnetStateStore,
     build_runtime_allocator,

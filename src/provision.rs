@@ -7,9 +7,9 @@
 //! - Retry with exponential backoff for network operations
 
 use crate::error::{Error, Result};
-use crate::manifest::RetryConfig;
-use crate::supply::{download_file, fetch_text, url_exists};
-use chrono_machines::{BackoffStrategy, ExponentialBackoff};
+use crate::manifest::{RetryConfig, validate_name};
+use crate::supply::{backoff_from_config, download_file, fetch_text, url_exists};
+use chrono_machines::BackoffStrategy;
 use rand::rng;
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -19,16 +19,6 @@ use std::thread;
 use std::time::Duration;
 use tar::Archive;
 use xz2::read::XzDecoder;
-
-/// Create backoff strategy from RetryConfig
-fn backoff_from_config(config: &RetryConfig) -> ExponentialBackoff {
-    ExponentialBackoff::new()
-        .base_delay_ms(config.base_delay_ms)
-        .max_delay_ms(config.max_delay_ms)
-        .multiplier(config.multiplier)
-        .max_attempts(config.max_attempts)
-        .jitter_factor(config.jitter_factor)
-}
 
 /// Supported FreeBSD architectures
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,14 +146,15 @@ impl Provisioner {
     }
 
     /// Get the path where a release would be extracted
-    pub fn release_path(&self, release: &str) -> PathBuf {
-        self.releases_dir.join(release)
+    pub fn release_path(&self, release: &str) -> Result<PathBuf> {
+        validate_name("release", release)?;
+        Ok(self.releases_dir.join(release))
     }
 
     /// Check if a release is already bootstrapped
-    pub fn is_bootstrapped(&self, release: &str) -> bool {
-        let path = self.release_path(release);
-        path.exists() && path.join("bin").exists() && path.join("usr").exists()
+    pub fn is_bootstrapped(&self, release: &str) -> Result<bool> {
+        let path = self.release_path(release)?;
+        Ok(path.exists() && path.join("bin").exists() && path.join("usr").exists())
     }
 
     /// List all bootstrapped releases
@@ -202,11 +193,103 @@ impl Provisioner {
     /// Bootstrap a FreeBSD release
     ///
     /// Downloads and extracts the specified release archives.
+    /// Bootstrap a release from base packages (pkgbase) instead of base.txz.
+    ///
+    /// FreeBSD 16 dropped distribution sets, so this is the only path
+    /// forward there; it works for 15.x too. Uses fingerprint-verified
+    /// official repos via `pkg --rootdir`.
+    pub fn bootstrap_pkgbase(&self, release: &str, force: bool) -> Result<PathBuf> {
+        let release_path = self.release_path(release)?;
+
+        if self.is_bootstrapped(release)? && !force {
+            return Err(Error::ReleaseAlreadyExists(release.to_string()));
+        }
+
+        let version = crate::sys::OsVersion::parse(release)?;
+        let host = crate::sys::OsVersion::detect_kernel()?;
+        if version.major > host.major {
+            return Err(Error::JailOperation(format!(
+                "Cannot bootstrap {} on a FreeBSD {} host: jail userlands must not be newer than the kernel",
+                release, host
+            )));
+        }
+
+        let repo = match version.release_type {
+            crate::sys::ReleaseType::Release => format!("base_release_{}", version.minor),
+            _ => "base_latest".to_string(),
+        };
+        let abi = format!("FreeBSD:{}:{}", version.major, self.arch.freebsd_name());
+
+        // Prefer the per-major pkgbase key directory when the host ships it.
+        let versioned_keys = format!("/usr/share/keys/pkgbase-{}", version.major);
+        let fingerprints = if Path::new(&versioned_keys).exists() {
+            versioned_keys
+        } else {
+            "/usr/share/keys/pkg".to_string()
+        };
+
+        std::fs::create_dir_all(&release_path)?;
+        // pkg extracts /etc config files without creating the directory
+        // first; a missing etc/ makes it skip them silently.
+        std::fs::create_dir_all(release_path.join("etc"))?;
+
+        // pkg --rootdir resolves the fingerprints path inside the rootdir,
+        // so the host's trusted keys must be copied into the target first.
+        let keys_in_root = release_path.join(fingerprints.trim_start_matches('/'));
+        copy_tree(Path::new(&fingerprints), &keys_in_root)?;
+        let repo_dir = self.cache_dir.join("pkgbase-repo");
+        std::fs::create_dir_all(&repo_dir)?;
+        std::fs::write(
+            repo_dir.join("FreeBSD-base.conf"),
+            format!(
+                "FreeBSD-base: {{\n  url: \"pkg+https://pkg.freebsd.org/${{ABI}}/{repo}\",\n  mirror_type: \"srv\",\n  signature_type: \"fingerprints\",\n  fingerprints: \"{fingerprints}\",\n  enabled: yes\n}}\n"
+            ),
+        )?;
+
+        eprintln!(
+            "Bootstrapping {} via pkgbase ({} / {})",
+            release, abi, repo
+        );
+        // pkg(8) itself lives in the ports repo, not base; jails bootstrap
+        // it on first `pkg` use like any fresh FreeBSD install.
+        for pkg_args in [vec!["update"], vec!["install", "-y", "FreeBSD-set-base-jail"]] {
+            let status = std::process::Command::new("/usr/sbin/pkg")
+                .arg("--rootdir")
+                .arg(&release_path)
+                .arg("--repo-conf-dir")
+                .arg(&repo_dir)
+                .args(["-o", &format!("ABI={}", abi)])
+                .args(["-o", "IGNORE_OSVERSION=yes"])
+                .args(&pkg_args)
+                .status()
+                .map_err(|e| Error::JailOperation(format!("Failed to run pkg: {}", e)))?;
+            if !status.success() {
+                return Err(Error::JailOperation(format!(
+                    "pkg {} failed for pkgbase bootstrap of {}",
+                    pkg_args.join(" "),
+                    release
+                )));
+            }
+        }
+
+        // Same finishing touches as the archive path: keep the repo config
+        // usable inside the jail and quiet first logins.
+        let _ = std::fs::write(release_path.join("etc/rc.conf"), "");
+        let _ = std::fs::write(release_path.join("root/.hushlogin"), "");
+
+        eprintln!("Bootstrap complete: {}", release_path.display());
+        Ok(release_path)
+    }
+
     pub fn bootstrap(&self, release: &str, force: bool) -> Result<PathBuf> {
-        let release_path = self.release_path(release);
+        let release_path = self.release_path(release)?;
+
+        for archive in &self.archives {
+            validate_name("archive", archive)?;
+        }
 
         // Check if already exists
-        if self.is_bootstrapped(release) && !force {
+        if self.is_bootstrapped(release)? && !force {
             return Err(Error::ReleaseAlreadyExists(release.to_string()));
         }
 
@@ -222,6 +305,25 @@ impl Provisioner {
         eprintln!("Fetching MANIFEST...");
         let manifest_content = fetch_text(&manifest_url, &self.retry_config)?;
         let checksums = self.parse_manifest(&manifest_content);
+
+        // Pre-planted symlinks in parent dirs would redirect create_dir_all writes.
+        for dir in [&self.cache_dir, &release_path] {
+            let mut check = dir.as_path();
+            while let Some(parent) = check.parent() {
+                if let Ok(meta) = fs::symlink_metadata(check)
+                    && meta.file_type().is_symlink()
+                {
+                    return Err(Error::ExtractionFailed(format!(
+                        "Path component '{}' is a symlink, refusing to proceed",
+                        check.display()
+                    )));
+                }
+                if check == parent {
+                    break;
+                }
+                check = parent;
+            }
+        }
 
         // Create directories
         fs::create_dir_all(&self.cache_dir).map_err(Error::Io)?;
@@ -317,6 +419,16 @@ impl Provisioner {
         archive.set_preserve_permissions(true);
         archive.set_preserve_ownerships(true);
 
+        // Refuse to extract into a symlink
+        if let Ok(meta) = std::fs::symlink_metadata(dest)
+            && meta.file_type().is_symlink()
+        {
+            return Err(Error::ExtractionFailed(format!(
+                "Extraction destination '{}' is a symlink, refusing to unpack into it",
+                dest.display()
+            )));
+        }
+
         archive.unpack(dest).map_err(|e| {
             Error::ExtractionFailed(format!(
                 "Failed to extract {}: {}",
@@ -330,7 +442,7 @@ impl Provisioner {
 
     /// Delete a bootstrapped release
     pub fn delete(&self, release: &str) -> Result<()> {
-        let path = self.release_path(release);
+        let path = self.release_path(release)?;
 
         if !path.exists() {
             return Err(Error::ReleaseNotFound(release.to_string()));
@@ -345,12 +457,12 @@ impl Provisioner {
 
     /// Verify a bootstrapped release against MANIFEST
     pub fn verify(&self, release: &str) -> Result<bool> {
-        if !self.is_bootstrapped(release) {
+        if !self.is_bootstrapped(release)? {
             return Err(Error::ReleaseNotFound(release.to_string()));
         }
 
         // For now, just check that essential directories exist
-        let release_path = self.release_path(release);
+        let release_path = self.release_path(release)?;
         let essential_paths = ["bin/sh", "usr/bin/env", "lib/libc.so.7"];
 
         for path in essential_paths {
@@ -375,7 +487,7 @@ pub fn clone_release(release_path: &Path, jail_path: &Path) -> Result<()> {
     fs::create_dir_all(jail_path).map_err(Error::Io)?;
 
     // Use cp -a for proper cloning with permissions
-    let status = std::process::Command::new("cp")
+    let status = std::process::Command::new("/bin/cp")
         .args(["-a", "."])
         .current_dir(release_path)
         .arg(jail_path)
@@ -388,6 +500,63 @@ pub fn clone_release(release_path: &Path, jail_path: &Path) -> Result<()> {
         ));
     }
 
+    // cp -a may have followed a symlink out of the parent.
+    let data_parent = jail_path.parent().unwrap_or(Path::new("/"));
+    if let (Ok(canonical_jail), Ok(canonical_parent)) =
+        (jail_path.canonicalize(), data_parent.canonicalize())
+        && !canonical_jail.starts_with(&canonical_parent)
+    {
+        let _ = fs::remove_dir_all(jail_path);
+        return Err(Error::ExtractionFailed(format!(
+            "Jail path '{}' resolves to '{}' which is outside '{}'",
+            jail_path.display(),
+            canonical_jail.display(),
+            canonical_parent.display()
+        )));
+    }
+
+    Ok(())
+}
+
+/// Recursively copy a small file tree, preserving permissions and symlinks.
+///
+/// Suitable for config/key trees. Whole-userland copies stay on `cp -a`:
+/// it preserves hardlinks (/rescue is ~150 links to one binary) and file
+/// flags, which a naive walk does not.
+pub(crate) fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let meta = fs::symlink_metadata(src)
+        .map_err(|e| Error::ExtractionFailed(format!("stat {}: {}", src.display(), e)))?;
+
+    if meta.file_type().is_symlink() {
+        let target = fs::read_link(src)
+            .map_err(|e| Error::ExtractionFailed(format!("readlink {}: {}", src.display(), e)))?;
+        let _ = fs::remove_file(dest);
+        std::os::unix::fs::symlink(&target, dest)
+            .map_err(|e| Error::ExtractionFailed(format!("symlink {}: {}", dest.display(), e)))?;
+    } else if meta.is_dir() {
+        fs::create_dir_all(dest)
+            .map_err(|e| Error::ExtractionFailed(format!("mkdir {}: {}", dest.display(), e)))?;
+        fs::set_permissions(dest, fs::Permissions::from_mode(meta.permissions().mode()))
+            .map_err(|e| Error::ExtractionFailed(format!("chmod {}: {}", dest.display(), e)))?;
+        for entry in fs::read_dir(src)
+            .map_err(|e| Error::ExtractionFailed(format!("readdir {}: {}", src.display(), e)))?
+        {
+            let entry = entry
+                .map_err(|e| Error::ExtractionFailed(format!("readdir {}: {}", src.display(), e)))?;
+            copy_tree(&entry.path(), &dest.join(entry.file_name()))?;
+        }
+    } else {
+        fs::copy(src, dest).map_err(|e| {
+            Error::ExtractionFailed(format!(
+                "copy {} -> {}: {}",
+                src.display(),
+                dest.display(),
+                e
+            ))
+        })?;
+    }
     Ok(())
 }
 

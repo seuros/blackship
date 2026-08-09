@@ -7,12 +7,7 @@
 
 use crate::error::{Error, Result};
 use crate::network::ioctl;
-use std::ffi::CString;
-
-// FreeBSD kldload syscall - not in libc crate
-unsafe extern "C" {
-    fn kldload(file: *const libc::c_char) -> libc::c_int;
-}
+use crate::network::netgraph::NgBridge;
 
 /// A bridge interface
 #[derive(Debug, Clone)]
@@ -36,7 +31,10 @@ impl Bridge {
         ioctl::create_interface("bridge", Some(name))?;
 
         // Bring interface up using native ioctl
-        ioctl::set_interface_up(name, true)?;
+        if let Err(e) = ioctl::set_interface_up(name, true) {
+            let _ = ioctl::destroy_interface(name);
+            return Err(e);
+        }
 
         Ok(Self {
             name: name.to_string(),
@@ -156,58 +154,34 @@ impl Bridge {
 
     /// Load required kernel modules for bridging using native syscall
     fn load_modules() -> Result<()> {
-        let modules = ["if_bridge", "bridgestp", "if_epair"];
-
-        for module in modules {
-            let module_cstr = CString::new(module)
-                .map_err(|e| Error::Network(format!("Invalid module name {}: {}", module, e)))?;
-
-            // Use native kldload(2) syscall instead of spawning process
-            let result = unsafe { kldload(module_cstr.as_ptr()) };
-
-            if result < 0 {
-                let err = std::io::Error::last_os_error();
-                let errno = err.raw_os_error().unwrap_or(0);
-
-                // Ignore if module is already loaded (EEXIST) or built-in (ENOENT)
-                if errno != libc::EEXIST && errno != libc::ENOENT {
-                    return Err(Error::Network(format!(
-                        "Failed to load module {}: {}",
-                        module, err
-                    )));
-                }
-            }
-        }
-
-        Ok(())
+        crate::sys::load_modules(&["if_bridge", "bridgestp", "if_epair"])
     }
 }
 
-/// Destroy a bridge interface
-///
-/// If `force` is false and the bridge has members attached, returns an error.
-/// If `force` is true, destroys the bridge even if it has members.
+/// Destroy an if_bridge or ng_bridge. Without `force`, an if_bridge with members
+/// is an error; for ng_bridge force is implicit (NGM_SHUTDOWN tears down peers).
 pub fn destroy_bridge(name: &str, force: bool) -> Result<()> {
-    // Check if bridge exists
-    if !Bridge::exists(name)? {
-        return Err(Error::InterfaceNotFound(name.to_string()));
+    if Bridge::exists(name)? {
+        let bridge = Bridge::open(name)?;
+
+        let members = bridge.members()?;
+        if !members.is_empty() && !force {
+            return Err(Error::Network(format!(
+                "Bridge '{}' has {} member(s) attached: {}. Use --force to destroy anyway.",
+                name,
+                members.len(),
+                members.join(", ")
+            )));
+        }
+
+        return bridge.destroy();
     }
 
-    let bridge = Bridge::open(name)?;
-
-    // Check for members if not forcing
-    let members = bridge.members()?;
-    if !members.is_empty() && !force {
-        return Err(Error::Network(format!(
-            "Bridge '{}' has {} member(s) attached: {}. Use --force to destroy anyway.",
-            name,
-            members.len(),
-            members.join(", ")
-        )));
+    if let Ok(ng) = NgBridge::open(name) {
+        return ng.destroy();
     }
 
-    // Destroy the bridge
-    bridge.destroy()
+    Err(Error::InterfaceNotFound(name.to_string()))
 }
 
 #[cfg(test)]

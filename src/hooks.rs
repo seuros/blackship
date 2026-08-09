@@ -8,16 +8,17 @@
 
 use crate::error::{Error, Result};
 use crate::jail::jexec::jexec_with_timeout;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 /// Lifecycle phases when hooks can be executed
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookPhase {
     /// Before jail filesystem is created
@@ -70,7 +71,7 @@ impl std::fmt::Display for HookPhase {
 }
 
 /// Where to execute the hook
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum HookTarget {
     /// Execute on the host system
@@ -81,7 +82,7 @@ pub enum HookTarget {
 }
 
 /// What to do when a hook fails
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum OnFailure {
     /// Abort the operation (default)
@@ -92,7 +93,7 @@ pub enum OnFailure {
 }
 
 /// A lifecycle hook definition
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Hook {
     /// Lifecycle phase to execute at
     pub phase: HookPhase,
@@ -391,31 +392,60 @@ impl HookRunner {
     ) -> Result<HookResult> {
         let timeout = Duration::from_secs(timeout_secs);
 
-        let mut child = Command::new(command)
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| Error::HookFailed {
-                phase: String::new(),
-                command: command.to_string(),
-                message: e.to_string(),
-            })?;
+        let mut child = unsafe {
+            Command::new(command)
+                .args(args)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .pre_exec(|| {
+                    if libc::setpgid(0, 0) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // Descendants that setsid() would otherwise keep our pipe fds open.
+                    libc::closefrom(3);
+                    Ok(())
+                })
+                .spawn()
+                .map_err(|e| Error::HookFailed {
+                    phase: String::new(),
+                    command: command.to_string(),
+                    message: e.to_string(),
+                })?
+        };
+
+        // Drain the pipes in threads: >64KB of output would block the child before try_wait().
+        let mut stdout_thread = child.stdout.take().map(|mut s| {
+            thread::spawn(move || {
+                let mut buf = String::new();
+                let _ = s.read_to_string(&mut buf);
+                buf
+            })
+        });
+        let mut stderr_thread = child.stderr.take().map(|mut s| {
+            thread::spawn(move || {
+                let mut buf = String::new();
+                let _ = s.read_to_string(&mut buf);
+                buf
+            })
+        });
 
         let start = Instant::now();
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    // Process completed, read output
-                    let mut stdout = String::new();
-                    let mut stderr = String::new();
-
-                    if let Some(mut stdout_handle) = child.stdout.take() {
-                        let _ = stdout_handle.read_to_string(&mut stdout);
+                    // Kill the group so grandchildren drop the pipe fds and readers finish.
+                    let pid = child.id() as libc::pid_t;
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
                     }
-                    if let Some(mut stderr_handle) = child.stderr.take() {
-                        let _ = stderr_handle.read_to_string(&mut stderr);
-                    }
+                    let stdout = stdout_thread
+                        .take()
+                        .map(|t| t.join().unwrap_or_default())
+                        .unwrap_or_default();
+                    let stderr = stderr_thread
+                        .take()
+                        .map(|t| t.join().unwrap_or_default())
+                        .unwrap_or_default();
 
                     return Ok(HookResult {
                         success: status.success(),
@@ -427,14 +457,34 @@ impl HookRunner {
                 Ok(None) => {
                     // Process still running, check timeout
                     if start.elapsed() > timeout {
-                        let _ = child.kill();
-                        // Wait for process to be reaped after kill
+                        let pid = child.id() as libc::pid_t;
+                        let kill_ret = unsafe { libc::kill(-pid, libc::SIGKILL) };
+                        if kill_ret == -1 {
+                            unsafe { libc::kill(pid, libc::SIGKILL) };
+                        }
                         let _ = child.wait();
+                        if let Some(t) = stdout_thread.take() {
+                            let _ = t.join();
+                        }
+                        if let Some(t) = stderr_thread.take() {
+                            let _ = t.join();
+                        }
                         return Err(Error::HookTimeout(timeout_secs));
                     }
                     thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => {
+                    let pid = child.id() as libc::pid_t;
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                    let _ = child.wait();
+                    if let Some(t) = stdout_thread.take() {
+                        let _ = t.join();
+                    }
+                    if let Some(t) = stderr_thread.take() {
+                        let _ = t.join();
+                    }
                     return Err(Error::HookFailed {
                         phase: String::new(),
                         command: command.to_string(),

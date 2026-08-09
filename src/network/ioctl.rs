@@ -4,7 +4,12 @@
 
 use crate::error::{Error, Result};
 use std::ffi::CString;
+use std::net::UdpSocket;
 use std::os::unix::io::AsRawFd;
+
+// Request codes and driver subcommands read from the system headers at build
+// time; see build/sys_consts.c.
+use crate::sys::consts::*;
 
 /// Safely copy interface name into fixed-size buffer
 /// Returns error if name is too long (max 15 chars + null terminator)
@@ -26,6 +31,11 @@ fn copy_ifname(dest: &mut [libc::c_char; libc::IF_NAMESIZE], name: &str) -> Resu
     });
 
     Ok(())
+}
+
+fn create_socket() -> Result<UdpSocket> {
+    UdpSocket::bind("0.0.0.0:0")
+        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))
 }
 
 fn extract_ifname(name: &[libc::c_char; libc::IF_NAMESIZE]) -> Result<String> {
@@ -139,9 +149,9 @@ const _: [(); std::mem::size_of::<IfReqJid>()] = [(); std::mem::size_of::<libc::
 const _: [(); std::mem::size_of::<IfReqCap>()] = [(); std::mem::size_of::<libc::ifreq>()];
 const _: [(); std::mem::size_of::<IfAliasReq>()] = [(); std::mem::size_of::<libc::ifaliasreq>()];
 const _: [(); std::mem::size_of::<IfDrv>()] = [(); std::mem::size_of::<libc::ifdrv>()];
-const _: [(); 80] = [(); std::mem::size_of::<BridgeIfReq>()];
-const _: [(); 16] = [(); std::mem::size_of::<BridgeIfConf>()];
-const _: [(); 4] = [(); std::mem::size_of::<BridgeParam>()];
+const _: [(); SIZEOF_IFBREQ] = [(); std::mem::size_of::<BridgeIfReq>()];
+const _: [(); SIZEOF_IFBIFCONF] = [(); std::mem::size_of::<BridgeIfConf>()];
+const _: [(); SIZEOF_IFBRPARAM] = [(); std::mem::size_of::<BridgeParam>()];
 const _: [(); 536] = [(); std::mem::size_of::<BridgeIfVlanReq>()];
 
 fn bridge_drvspec_io(
@@ -157,9 +167,6 @@ fn bridge_drvspec_io(
     req.ifd_cmd = cmd;
     req.ifd_len = len;
     req.ifd_data = data;
-
-    const SIOCSDRVSPEC: libc::c_ulong = 0x8028697b;
-    const SIOCGDRVSPEC: libc::c_ulong = 0xc028697b;
 
     let result = unsafe {
         libc::ioctl(
@@ -190,11 +197,8 @@ fn bridge_drvspec(
 
 /// Create an anonymous cloned interface and return the assigned name.
 fn create_clone_interface(iftype: &str) -> Result<String> {
-    use std::net::UdpSocket;
-
     // Create a socket for ioctl operations
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     // SIOCIFCREATE structure for FreeBSD
     let mut req: IfReqNameData = unsafe { std::mem::zeroed() };
@@ -202,8 +206,6 @@ fn create_clone_interface(iftype: &str) -> Result<String> {
     copy_ifname(&mut req.ifr_name, iftype)?;
 
     // ifconfig(8) uses SIOCIFCREATE2 for clone creation on modern FreeBSD.
-    const SIOCIFCREATE2: libc::c_ulong = 0xc020697c;
-
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCIFCREATE2, &mut req) };
 
     if result < 0 {
@@ -239,22 +241,12 @@ pub fn create_interface(iftype: &str, name: Option<&str>) -> Result<String> {
 
 /// Destroy a network interface
 pub fn destroy_interface(name: &str) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     let mut req: IfReqNameData = unsafe { std::mem::zeroed() };
-
-    let name_cstr =
-        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
-    let name_bytes = name_cstr.as_bytes_with_nul();
-    req.ifr_name[..name_bytes.len()].copy_from_slice(unsafe {
-        std::slice::from_raw_parts(name_bytes.as_ptr() as *const i8, name_bytes.len())
-    });
+    copy_ifname(&mut req.ifr_name, name)?;
 
     // SIOCIFDESTROY ioctl
-    const SIOCIFDESTROY: libc::c_ulong = 0x80206979;
 
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCIFDESTROY, &req) };
 
@@ -270,22 +262,12 @@ pub fn destroy_interface(name: &str) -> Result<()> {
 
 /// Bring an interface up or down
 pub fn set_interface_up(name: &str, up: bool) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     let mut req: IfReqFlags = unsafe { std::mem::zeroed() };
-
-    let name_cstr =
-        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
-    let name_bytes = name_cstr.as_bytes_with_nul();
-    req.ifr_name[..name_bytes.len()].copy_from_slice(unsafe {
-        std::slice::from_raw_parts(name_bytes.as_ptr() as *const i8, name_bytes.len())
-    });
+    copy_ifname(&mut req.ifr_name, name)?;
 
     // Get current flags
-    const SIOCGIFFLAGS: libc::c_ulong = 0xc0206911;
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCGIFFLAGS, &mut req) };
     if result < 0 {
         return Err(Error::Network(format!(
@@ -303,7 +285,6 @@ pub fn set_interface_up(name: &str, up: bool) -> Result<()> {
     }
 
     // Set new flags
-    const SIOCSIFFLAGS: libc::c_ulong = 0x80206910;
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFFLAGS, &req) };
     if result < 0 {
         return Err(Error::Network(format!(
@@ -317,19 +298,10 @@ pub fn set_interface_up(name: &str, up: bool) -> Result<()> {
 
 /// Rename a network interface
 pub fn rename_interface(old_name: &str, new_name: &str) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     let mut req: IfReqNameData = unsafe { std::mem::zeroed() };
-
-    let old_cstr = CString::new(old_name)
-        .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
-    let old_bytes = old_cstr.as_bytes_with_nul();
-    req.ifr_name[..old_bytes.len()].copy_from_slice(unsafe {
-        std::slice::from_raw_parts(old_bytes.as_ptr() as *const i8, old_bytes.len())
-    });
+    copy_ifname(&mut req.ifr_name, old_name)?;
 
     let new_cstr = CString::new(new_name)
         .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
@@ -337,7 +309,6 @@ pub fn rename_interface(old_name: &str, new_name: &str) -> Result<()> {
     req.ifr_data = new_cstr.as_ptr() as *mut libc::c_void;
 
     // SIOCSIFNAME ioctl
-    const SIOCSIFNAME: libc::c_ulong = 0x80206928;
 
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFNAME, &req) };
 
@@ -353,10 +324,7 @@ pub fn rename_interface(old_name: &str, new_name: &str) -> Result<()> {
 
 /// Set MAC address on an interface
 pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     // Parse MAC address
     let mac_parts: Vec<&str> = mac.split(':').collect();
@@ -374,17 +342,11 @@ pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
     }
 
     let mut req: IfReqSockaddr = unsafe { std::mem::zeroed() };
+    copy_ifname(&mut req.ifr_name, name)?;
 
-    let name_cstr =
-        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
-    let name_bytes = name_cstr.as_bytes_with_nul();
-    req.ifr_name[..name_bytes.len()].copy_from_slice(unsafe {
-        std::slice::from_raw_parts(name_bytes.as_ptr() as *const i8, name_bytes.len())
-    });
-
-    // Set up sockaddr_dl for MAC address
+    // SIOCSIFLLADDR reads sa_data[0..sa_len]; kernel checks sa_len == if_addrlen.
     req.ifr_addr.sa_family = libc::AF_LINK as u8;
-    req.ifr_addr.sa_len = 20;
+    req.ifr_addr.sa_len = 6;
     unsafe {
         std::ptr::copy_nonoverlapping(
             mac_bytes.as_ptr(),
@@ -394,7 +356,6 @@ pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
     }
 
     // SIOCSIFLLADDR ioctl
-    const SIOCSIFLLADDR: libc::c_ulong = 0x8020693c;
 
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFLLADDR, &req) };
 
@@ -410,24 +371,14 @@ pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
 
 /// Move interface to VNET jail
 pub fn move_to_vnet(name: &str, jid: i32) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     let mut req: IfReqJid = unsafe { std::mem::zeroed() };
-
-    let name_cstr =
-        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
-    let name_bytes = name_cstr.as_bytes_with_nul();
-    req.ifr_name[..name_bytes.len()].copy_from_slice(unsafe {
-        std::slice::from_raw_parts(name_bytes.as_ptr() as *const i8, name_bytes.len())
-    });
+    copy_ifname(&mut req.ifr_name, name)?;
 
     req.ifr_jid = jid;
 
     // SIOCSIFVNET ioctl (FreeBSD-specific)
-    const SIOCSIFVNET: libc::c_ulong = 0xc020695a;
 
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFVNET, &req) };
 
@@ -441,54 +392,36 @@ pub fn move_to_vnet(name: &str, jid: i32) -> Result<()> {
     Ok(())
 }
 
-/// Add a member interface to a bridge
-pub fn bridge_add_member(bridge: &str, member: &str) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+/// Add or remove a bridge member via a BRDGADD/BRDGDEL drvspec ioctl
+fn bridge_member_op(bridge: &str, member: &str, cmd: libc::c_ulong) -> Result<()> {
+    let sock = create_socket()?;
 
     let mut req: BridgeIfReq = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifbr_ifsname, member)?;
 
-    const BRDGADD: libc::c_ulong = 0;
     bridge_drvspec(
         sock.as_raw_fd(),
         bridge,
-        BRDGADD,
+        cmd,
         std::mem::size_of::<BridgeIfReq>(),
         &mut req as *mut _ as *mut libc::c_void,
         true,
     )
+}
+
+/// Add a member interface to a bridge
+pub fn bridge_add_member(bridge: &str, member: &str) -> Result<()> {
+    bridge_member_op(bridge, member, BRDGADD)
 }
 
 /// Remove a member interface from a bridge
 pub fn bridge_delete_member(bridge: &str, member: &str) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
-
-    let mut req: BridgeIfReq = unsafe { std::mem::zeroed() };
-    copy_ifname(&mut req.ifbr_ifsname, member)?;
-
-    const BRDGDEL: libc::c_ulong = 1;
-    bridge_drvspec(
-        sock.as_raw_fd(),
-        bridge,
-        BRDGDEL,
-        std::mem::size_of::<BridgeIfReq>(),
-        &mut req as *mut _ as *mut libc::c_void,
-        true,
-    )
+    bridge_member_op(bridge, member, BRDGDEL)
 }
 
 /// Check if an interface exists
 pub fn interface_exists(name: &str) -> Result<bool> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     let mut req: IfReqFlags = unsafe { std::mem::zeroed() };
 
@@ -499,7 +432,6 @@ pub fn interface_exists(name: &str) -> Result<bool> {
     copy_ifname(&mut req.ifr_name, name)?;
 
     // Try to get interface flags - if it succeeds, interface exists
-    const SIOCGIFFLAGS: libc::c_ulong = 0xc0206911;
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCGIFFLAGS, &mut req) };
 
     Ok(result >= 0)
@@ -510,10 +442,9 @@ pub fn interface_exists(name: &str) -> Result<bool> {
 /// Supports CIDR notation like "10.0.0.1/24" or plain IP like "10.0.0.1".
 /// When no prefix is specified, /32 is used.
 pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
-    use std::net::{Ipv4Addr, UdpSocket};
+    use std::net::Ipv4Addr;
 
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     // Parse address with optional CIDR notation
     let (ip_str, prefix_len) = if let Some(slash_pos) = addr.find('/') {
@@ -562,7 +493,6 @@ pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
     }
 
     // SIOCAIFADDR ioctl
-    const SIOCAIFADDR: libc::c_ulong = 0x8044692b;
 
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCAIFADDR, &req) };
 
@@ -581,16 +511,12 @@ pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
 /// Uses SIOCGIFCAP/SIOCSIFCAP ioctls to clear IFCAP_VLAN_HWFILTER flag.
 /// Some NICs (especially Broadcom) have buggy VLAN hardware filtering.
 pub fn disable_hwfilter(name: &str) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     let mut req: IfReqCap = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifr_name, name)?;
 
     // Get current capabilities
-    const SIOCGIFCAP: libc::c_ulong = 0xc020691f;
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCGIFCAP, &mut req) };
     if result < 0 {
         return Err(Error::Network(format!(
@@ -600,11 +526,9 @@ pub fn disable_hwfilter(name: &str) -> Result<()> {
     }
 
     // Clear VLAN hardware filter capability
-    const IFCAP_VLAN_HWFILTER: libc::c_int = 1 << 17;
     req.ifr_reqcap = req.ifr_curcap & !IFCAP_VLAN_HWFILTER;
 
     // Set new capabilities
-    const SIOCSIFCAP: libc::c_ulong = 0x8020691e;
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFCAP, &req) };
     if result < 0 {
         return Err(Error::Network(format!(
@@ -623,14 +547,10 @@ pub fn disable_hwfilter(name: &str) -> Result<()> {
 ///
 /// Uses SIOCSDRVSPEC ioctl with BRDGSFLAGS command.
 pub fn bridge_enable_vlan_filtering(bridge: &str) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     // First get current flags
     let mut get_param = BridgeParam { ifbrp_int32: 0 };
-    const BRDGGFLAGS: libc::c_ulong = 34;
     let result = bridge_drvspec_io(
         sock.as_raw_fd(),
         bridge,
@@ -652,7 +572,6 @@ pub fn bridge_enable_vlan_filtering(bridge: &str) -> Result<()> {
     let mut set_param = BridgeParam {
         ifbrp_int32: current_flags | IFBRF_VLANFILTER,
     };
-    const BRDGSFLAGS: libc::c_ulong = 35; // Set filtering flags
     bridge_drvspec(
         sock.as_raw_fd(),
         bridge,
@@ -667,17 +586,13 @@ pub fn bridge_enable_vlan_filtering(bridge: &str) -> Result<()> {
 ///
 /// Uses SIOCSDRVSPEC ioctl with BRDGSIFPVID command.
 pub fn bridge_set_pvid(bridge: &str, member: &str, pvid: u16) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     // Bridge request structure with PVID
     let mut breq: BridgeIfReq = unsafe { std::mem::zeroed() };
     copy_ifname(&mut breq.ifbr_ifsname, member)?;
     breq.ifbr_pvid = pvid;
 
-    const BRDGSIFPVID: libc::c_ulong = 31;
     bridge_drvspec_io(
         sock.as_raw_fd(),
         bridge,
@@ -694,10 +609,7 @@ pub fn bridge_set_pvid(bridge: &str, member: &str, pvid: u16) -> Result<()> {
 /// Uses SIOCSDRVSPEC ioctl with BRDGSIFVLANSET command.
 /// The vlans slice contains VLAN IDs (1-4094) to tag.
 pub fn bridge_set_tagged_vlans(bridge: &str, member: &str, vlans: &[u16]) -> Result<()> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     let mut vreq: BridgeIfVlanReq = unsafe { std::mem::zeroed() };
     copy_ifname(&mut vreq.bv_ifname, member)?;
@@ -715,7 +627,6 @@ pub fn bridge_set_tagged_vlans(bridge: &str, member: &str, vlans: &[u16]) -> Res
         }
     }
 
-    const BRDGSIFVLANSET: libc::c_ulong = 32;
     bridge_drvspec_io(
         sock.as_raw_fd(),
         bridge,
@@ -731,10 +642,7 @@ pub fn bridge_set_tagged_vlans(bridge: &str, member: &str, vlans: &[u16]) -> Res
 ///
 /// Uses SIOCGDRVSPEC ioctl with BRDGGIFS command.
 pub fn bridge_list_members(bridge: &str) -> Result<Vec<String>> {
-    use std::net::UdpSocket;
-
-    let sock = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))?;
+    let sock = create_socket()?;
 
     // Bridge interface request
     // Start with space for 16 members, grow if needed
@@ -750,7 +658,6 @@ pub fn bridge_list_members(bridge: &str) -> Result<Vec<String>> {
             ifbic_req: buffer.as_mut_ptr(),
         };
 
-        const BRDGGIFS: libc::c_ulong = 6;
         if let Err(err) = bridge_drvspec_io(
             sock.as_raw_fd(),
             bridge,

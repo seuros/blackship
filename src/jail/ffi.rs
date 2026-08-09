@@ -23,6 +23,12 @@
 
 use crate::error::Error;
 use bitflags::bitflags;
+
+macro_rules! io_err {
+    () => {
+        Err(Error::Io(std::io::Error::last_os_error()))
+    };
+}
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::mem;
@@ -30,6 +36,65 @@ use std::path::Path;
 use std::ptr;
 
 use super::types::ParamValue;
+
+/// Decode a jail errmsg buffer into a String
+fn decode_errmsg(errmsg: &[u8; 256]) -> String {
+    CStr::from_bytes_until_nul(errmsg)
+        .map(|c| c.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Map jail_set result code + errmsg to a Result
+fn check_jail_set_result(jid: i32, errmsg: &[u8; 256]) -> Result<i32, Error> {
+    match jid {
+        e if e < 0 => match errmsg[0] {
+            0 => io_err!(),
+            _ => Err(Error::JailSet(decode_errmsg(errmsg))),
+        },
+        _ => Ok(jid),
+    }
+}
+
+/// Map jail_get result code + errmsg to a Result
+fn check_jail_get_result(jid: i32, errmsg: &[u8; 256]) -> Result<i32, Error> {
+    match jid {
+        e if e < 0 => match errmsg[0] {
+            0 => io_err!(),
+            _ => Err(Error::JailGet(decode_errmsg(errmsg))),
+        },
+        _ => Ok(jid),
+    }
+}
+
+/// Call libc::jail_get and check the result. `errmsg_ptr` aliases a buffer one
+/// of the iovecs writes, so it is only dereferenced after the syscall returns.
+fn jail_get_call(jiov: &mut Vec<libc::iovec>, errmsg_ptr: *const [u8; 256]) -> Result<i32, Error> {
+    let jid = unsafe {
+        libc::jail_get(
+            jiov.as_mut_ptr(),
+            jiov.len() as u32,
+            JailFlags::empty().bits(),
+        )
+    };
+    let errmsg = unsafe { &*errmsg_ptr };
+    check_jail_get_result(jid, errmsg)
+}
+
+/// NUL-terminated (name, value) byte pairs backing a jail_set/jail_get iovec array.
+type RawParams = Vec<(Vec<u8>, Vec<u8>)>;
+
+/// Convert a params map into raw bytes suitable for jail_set/jail_get iovecs
+fn build_raw_params(params: &HashMap<String, ParamValue>) -> Result<RawParams, Error> {
+    params
+        .iter()
+        .map(|(key, value)| {
+            Ok((
+                CString::new(key.clone())?.into_bytes_with_nul(),
+                value.as_bytes()?,
+            ))
+        })
+        .collect()
+}
 
 /// Macro to construct iovec structures for jail syscalls
 macro_rules! iovec {
@@ -94,16 +159,7 @@ const SYS_JAIL_REMOVE_JD: libc::c_int = 598;
 ///
 /// Returns the jail ID (jid) on success
 pub fn jail_create(path: &Path, params: HashMap<String, ParamValue>) -> Result<i32, Error> {
-    // Convert parameters to raw bytes
-    let raw_params: Vec<(Vec<u8>, Vec<u8>)> = params
-        .iter()
-        .map(|(key, value)| {
-            Ok((
-                CString::new(key.clone())?.into_bytes_with_nul(),
-                value.as_bytes()?,
-            ))
-        })
-        .collect::<Result<_, Error>>()?;
+    let raw_params = build_raw_params(&params)?;
 
     let mut jiov: Vec<libc::iovec> = raw_params
         .iter()
@@ -136,17 +192,7 @@ pub fn jail_create(path: &Path, params: HashMap<String, ParamValue>) -> Result<i
         )
     };
 
-    let err = unsafe { CStr::from_ptr(errmsg.as_ptr() as *mut libc::c_char) }
-        .to_string_lossy()
-        .to_string();
-
-    match jid {
-        e if e < 0 => match errmsg[0] {
-            0 => Err(Error::Io(std::io::Error::last_os_error())),
-            _ => Err(Error::JailSet(err)),
-        },
-        _ => Ok(jid),
-    }
+    check_jail_set_result(jid, &errmsg)
 }
 
 /// Get the jail ID from a jail name
@@ -168,25 +214,7 @@ pub fn jail_getid(name: &str) -> Result<i32, Error> {
             .flatten()
             .collect();
 
-    let jid = unsafe {
-        libc::jail_get(
-            jiov[..].as_mut_ptr(),
-            jiov.len() as u32,
-            JailFlags::empty().bits(),
-        )
-    };
-
-    let err = unsafe { CStr::from_ptr(errmsg.as_ptr() as *mut libc::c_char) }
-        .to_string_lossy()
-        .to_string();
-
-    match jid {
-        e if e < 0 => match errmsg[0] {
-            0 => Err(Error::Io(std::io::Error::last_os_error())),
-            _ => Err(Error::JailGet(err)),
-        },
-        _ => Ok(jid),
-    }
+    jail_get_call(&mut jiov, &errmsg as *const _)
 }
 
 /// Get the next jail ID after the given one (_unused: future feature)
@@ -204,25 +232,7 @@ pub fn jail_nextjid(lastjid: i32) -> Result<i32, Error> {
     .flatten()
     .collect();
 
-    let jid = unsafe {
-        libc::jail_get(
-            jiov[..].as_mut_ptr(),
-            jiov.len() as u32,
-            JailFlags::empty().bits(),
-        )
-    };
-
-    let err = unsafe { CStr::from_ptr(errmsg.as_ptr() as *mut libc::c_char) }
-        .to_string_lossy()
-        .to_string();
-
-    match jid {
-        e if e < 0 => match errmsg[0] {
-            0 => Err(Error::Io(std::io::Error::last_os_error())),
-            _ => Err(Error::JailGet(err)),
-        },
-        _ => Ok(jid),
-    }
+    jail_get_call(&mut jiov, &errmsg as *const _)
 }
 
 /// Remove a jail by its ID
@@ -232,7 +242,7 @@ pub fn jail_remove(jid: i32) -> Result<(), Error> {
     let ret = unsafe { libc::jail_remove(jid) };
     match ret {
         0 => Ok(()),
-        -1 => Err(Error::Io(std::io::Error::last_os_error())),
+        -1 => io_err!(),
         _ => Err(Error::JailRemoveFailed),
     }
 }
@@ -252,22 +262,13 @@ pub fn jail_attach(jid: i32) -> Result<(), Error> {
 
 /// Create a jail and return an owning descriptor (FreeBSD 16+)
 ///
-/// The returned `JailDescriptor` holds an owning fd — if it is dropped or
-/// blackship crashes, the kernel automatically removes the jail.
-/// Returns (jid, descriptor) on success.
+/// Returns (jid, descriptor); dropping the descriptor makes the kernel remove
+/// the jail.
 pub fn jail_create_with_descriptor(
     path: &Path,
     params: HashMap<String, ParamValue>,
 ) -> Result<(i32, JailDescriptor), Error> {
-    let raw_params: Vec<(Vec<u8>, Vec<u8>)> = params
-        .iter()
-        .map(|(key, value)| {
-            Ok((
-                CString::new(key.clone())?.into_bytes_with_nul(),
-                value.as_bytes()?,
-            ))
-        })
-        .collect::<Result<_, Error>>()?;
+    let raw_params = build_raw_params(&params)?;
 
     let mut jiov: Vec<libc::iovec> = raw_params
         .iter()
@@ -298,21 +299,15 @@ pub fn jail_create_with_descriptor(
     let flags = JailFlags::CREATE | JailFlags::GET_DESC | JailFlags::OWN_DESC;
     let jid = unsafe { libc::jail_set(jiov[..].as_mut_ptr(), jiov.len() as u32, flags.bits()) };
 
-    let err = unsafe { CStr::from_ptr(errmsg.as_ptr() as *mut libc::c_char) }
-        .to_string_lossy()
-        .to_string();
-
-    match jid {
-        e if e < 0 => match errmsg[0] {
-            0 => Err(Error::Io(std::io::Error::last_os_error())),
-            _ => Err(Error::JailSet(err)),
-        },
-        _ => {
-            use std::os::unix::io::FromRawFd;
-            let owned_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(desc_fd) };
-            Ok((jid, JailDescriptor { fd: owned_fd }))
-        }
+    check_jail_set_result(jid, &errmsg)?;
+    if desc_fd < 0 {
+        return Err(Error::JailSet(
+            "jail_set returned success but descriptor fd is negative".into(),
+        ));
     }
+    use std::os::unix::io::FromRawFd;
+    let owned_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(desc_fd) };
+    Ok((jid, JailDescriptor { fd: owned_fd }))
 }
 
 /// Remove a jail via its owning descriptor (FreeBSD 16+)
@@ -321,7 +316,7 @@ pub fn jail_remove_jd(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Error> {
     use std::os::unix::io::AsRawFd;
     let ret = unsafe { libc::syscall(SYS_JAIL_REMOVE_JD, fd.as_raw_fd()) };
     if ret != 0 {
-        return Err(Error::Io(std::io::Error::last_os_error()));
+        return io_err!();
     }
     Ok(())
 }
@@ -400,17 +395,7 @@ pub fn jail_clearpersist(jid: i32) -> Result<(), Error> {
         )
     };
 
-    let err = unsafe { CStr::from_ptr(errmsg.as_ptr() as *mut libc::c_char) }
-        .to_string_lossy()
-        .to_string();
-
-    match jid {
-        e if e < 0 => match errmsg[0] {
-            0 => Err(Error::Io(std::io::Error::last_os_error())),
-            _ => Err(Error::JailSet(err)),
-        },
-        _ => Ok(()),
-    }
+    check_jail_set_result(jid, &errmsg).map(|_| ())
 }
 
 /// Iterator over all running jails (_unused: future feature)

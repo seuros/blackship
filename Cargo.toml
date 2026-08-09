@@ -11,17 +11,19 @@ keywords = ["freebsd", "jail", "manager", "state-machine"]
 categories = ["command-line-utilities", "os::freebsd-apis"]
 
 [features]
-inspect = []
+default = []
+# state_machine! expands cfg(feature = "inspect") into the calling crate.
+inspect = ["state-machines/inspect"]
 
 [dependencies]
 # CLI
-clap = { version = "4.5", features = ["derive"] }
-clap_complete = "4.5"
+clap = { version = "4.6", features = ["derive"] }
+clap_complete = "4.6"
 
 # Config
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "1"
+toml = "1.1"
 
 # Dependency graph
 petgraph = "0.8"
@@ -32,11 +34,11 @@ thiserror = "2.0"
 # FFI
 libc = "0.2"
 nix = { version = "0.31", features = ["user", "mount", "process", "signal"] }
-bitflags = "2.10"
+bitflags = "2.11"
 byteorder = "1.5"
 
 # HTTP/Bootstrap
-ureq = "3.1"
+ureq = "3.3"
 sha2 = "0.11"
 hex = "0.4"
 tar = "0.4"
@@ -44,18 +46,18 @@ xz2 = "0.1"
 zstd = "0.13"
 
 # Networking
-ipnet = "2.11"
+ipnet = "2.12"
 
 # Template parsing
 nom = "8.0"
 
 # State machine and resilience (seuros crates)
-state-machines = { version = ">= 0.9", features = ["inspect"] }
-breaker-machines = ">= 0.7"
-chrono-machines = ">= 0.3"
-throttle-machines = ">= 0.1"
+state-machines = "0.20"
+breaker-machines = "0.15"
+chrono-machines = "0.4"
+throttle-machines = "0.2"
 rand = "0.10"
 
 # Async runtime for Warden
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal", "io-util", "net"] }
-jiff = "0.2.24"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal", "net"] }
+jiff = "0.2.32"

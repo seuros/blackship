@@ -8,13 +8,14 @@ use crate::jail::jexec::jexec_with_timeout;
 use crate::sickbay::recovery::{RecoveryAction, RecoveryConfig};
 use crate::warden::WardenHandle;
 use breaker_machines::{CircuitBreaker, CircuitBuilder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use throttle_machines::token_bucket;
+use throttle_machines::gate::Gate;
+use throttle_machines::token_bucket::{TokenBucket, TokenBucketParams, TokenBucketState};
 
 /// Health status of a jail
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +48,7 @@ impl std::fmt::Display for HealthStatus {
 }
 
 /// Where to execute the health check
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckTarget {
     /// Execute on the host system
@@ -58,7 +59,7 @@ pub enum CheckTarget {
 }
 
 /// A single health check definition
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HealthCheck {
     /// Check name for identification
     pub name: String,
@@ -187,7 +188,7 @@ impl CheckResult {
 }
 
 /// Health check configuration for a jail
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct HealthCheckConfig {
     /// Enable health checking for this jail
     #[serde(default)]
@@ -420,18 +421,20 @@ impl HealthChecker {
 
             // Check rate limit before executing
             let state = &self.check_states[idx];
-            let rate_result = token_bucket::check(
-                state.rate_limit_tokens,
-                state.rate_limit_last_refill,
-                now_secs,
-                self.rate_limit_capacity,
-                self.rate_limit_refill_rate,
-            );
+            let tb_state = TokenBucketState {
+                tokens: state.rate_limit_tokens,
+                last_refill: state.rate_limit_last_refill,
+            };
+            let tb_params = TokenBucketParams {
+                capacity: self.rate_limit_capacity,
+                refill_rate: self.rate_limit_refill_rate,
+            };
+            let rate_result = TokenBucket::check(tb_state, now_secs, tb_params);
 
             if !rate_result.allowed {
                 // Rate limited - skip this check and keep previous result
                 // Update token state even when rate limited (for refill tracking)
-                self.check_states[idx].rate_limit_tokens = rate_result.new_tokens;
+                self.check_states[idx].rate_limit_tokens = rate_result.state.tokens;
                 self.check_states[idx].rate_limit_last_refill = now_secs;
                 // Keep the previous result by pushing None (handled below)
                 results.push(None);
@@ -439,7 +442,7 @@ impl HealthChecker {
             }
 
             // Update rate limiter state after consuming a token
-            self.check_states[idx].rate_limit_tokens = rate_result.new_tokens;
+            self.check_states[idx].rate_limit_tokens = rate_result.state.tokens;
             self.check_states[idx].rate_limit_last_refill = now_secs;
 
             let result = self.execute_check(check)?;
@@ -532,16 +535,44 @@ impl HealthChecker {
 
     /// Execute a check command on the host with timeout enforcement
     fn execute_on_host(&self, command: &str, timeout: u64) -> Result<(bool, String)> {
-        let mut child = Command::new("sh")
-            .args(["-c", command])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| Error::HealthCheckFailed {
-                jail: self.jail_name.clone(),
-                check: "host".to_string(),
-                message: e.to_string(),
-            })?;
+        use std::os::unix::process::CommandExt;
+
+        let mut child = unsafe {
+            Command::new("/bin/sh")
+                .args(["-c", command])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .pre_exec(|| {
+                    if libc::setpgid(0, 0) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // Descendants that setsid() would otherwise keep our pipe fds open.
+                    libc::closefrom(3);
+                    Ok(())
+                })
+                .spawn()
+                .map_err(|e| Error::HealthCheckFailed {
+                    jail: self.jail_name.clone(),
+                    check: "host".to_string(),
+                    message: e.to_string(),
+                })?
+        };
+
+        // Drain the pipes in threads: >64KB of output would block the child before try_wait().
+        let mut stdout_thread = child.stdout.take().map(|mut s| {
+            std::thread::spawn(move || {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                buf
+            })
+        });
+        let mut stderr_thread = child.stderr.take().map(|mut s| {
+            std::thread::spawn(move || {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                buf
+            })
+        });
 
         let timeout_duration = Duration::from_secs(timeout);
         let start = Instant::now();
@@ -549,24 +580,18 @@ impl HealthChecker {
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    // Process completed
-                    let stdout = child
-                        .stdout
+                    // Kill the group so grandchildren drop the pipe fds and readers finish.
+                    let pid = child.id() as libc::pid_t;
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                    let stdout = stdout_thread
                         .take()
-                        .map(|mut s| {
-                            let mut buf = String::new();
-                            std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                            buf
-                        })
+                        .map(|t| t.join().unwrap_or_default())
                         .unwrap_or_default();
-                    let stderr = child
-                        .stderr
+                    let stderr = stderr_thread
                         .take()
-                        .map(|mut s| {
-                            let mut buf = String::new();
-                            std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                            buf
-                        })
+                        .map(|t| t.join().unwrap_or_default())
                         .unwrap_or_default();
                     let combined = format!("{}{}", stdout, stderr);
                     return Ok((status.success(), combined));
@@ -574,9 +599,18 @@ impl HealthChecker {
                 Ok(None) => {
                     // Process still running, check timeout
                     if start.elapsed() > timeout_duration {
-                        // Kill the process
-                        let _ = child.kill();
-                        let _ = child.wait(); // Reap the zombie
+                        let pid = child.id() as libc::pid_t;
+                        let kill_ret = unsafe { libc::kill(-pid, libc::SIGKILL) };
+                        if kill_ret == -1 {
+                            unsafe { libc::kill(pid, libc::SIGKILL) };
+                        }
+                        let _ = child.wait();
+                        if let Some(t) = stdout_thread.take() {
+                            let _ = t.join();
+                        }
+                        if let Some(t) = stderr_thread.take() {
+                            let _ = t.join();
+                        }
                         return Ok((
                             false,
                             format!("Health check timed out after {} seconds", timeout),
@@ -586,6 +620,17 @@ impl HealthChecker {
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => {
+                    let pid = child.id() as libc::pid_t;
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                    let _ = child.wait();
+                    if let Some(t) = stdout_thread.take() {
+                        let _ = t.join();
+                    }
+                    if let Some(t) = stderr_thread.take() {
+                        let _ = t.join();
+                    }
                     return Err(Error::HealthCheckFailed {
                         jail: self.jail_name.clone(),
                         check: "host".to_string(),
@@ -713,13 +758,14 @@ impl HealthChecker {
                     "Recovery: Executing command for jail '{}'...",
                     self.jail_name
                 );
-                let output = Command::new("sh").args(["-c", cmd]).output().map_err(|e| {
-                    Error::HealthCheckFailed {
+                let output = Command::new("/bin/sh")
+                    .args(["-c", cmd])
+                    .output()
+                    .map_err(|e| Error::HealthCheckFailed {
                         jail: self.jail_name.clone(),
                         check: "recovery".to_string(),
                         message: e.to_string(),
-                    }
-                })?;
+                    })?;
 
                 if !output.status.success() {
                     eprintln!(

@@ -162,6 +162,11 @@ pub fn exec_in_jail_direct(
         -1 => Err(Error::JailExecFailed("Fork failed".to_string())),
         0 => {
             // Child process
+            // Close inherited fds above stderr so host descriptors don't leak into the jail.
+            unsafe {
+                libc::closefrom(3);
+            }
+
             // Attach to jail
             if let Err(e) = jail_attach(jid) {
                 eprintln!("Failed to attach to jail: {}", e);

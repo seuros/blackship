@@ -24,6 +24,12 @@ pub struct NetworkRecord {
     pub bridge: String,
     pub subnet: String,
     pub gateway: String,
+    /// "epair" (if_bridge) or "netgraph" (ng_bridge)
+    #[serde(default = "default_backend_epair")]
+    pub backend: String,
+    /// Host-side gateway interface for netgraph networks (e.g., ngeth1)
+    #[serde(default)]
+    pub host_iface: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +38,8 @@ pub struct ResolvedNetwork {
     pub bridge: Option<String>,
     pub subnet: IpNet,
     pub gateway: IpAddr,
+    /// "epair" or "netgraph", inherited by jails that omit a backend
+    pub backend: String,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +70,13 @@ pub struct VnetStateRecord {
     pub bridge: String,
     pub host_interface: String,
     pub jail_interface: String,
+    /// "epair" or "netgraph" -persisted so cleanup knows which backend to use.
+    #[serde(default = "default_backend_epair")]
+    pub backend: String,
+}
+
+fn default_backend_epair() -> String {
+    "epair".to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +117,19 @@ impl NetworkStore {
                 err
             ))),
         }
+    }
+
+    /// Write a record, replacing any existing one (used to refresh
+    /// runtime-assigned fields like host_iface).
+    pub fn save(&self, record: &NetworkRecord) -> Result<()> {
+        validate_network_name(&record.name)?;
+        fs::create_dir_all(&self.root)
+            .map_err(|e| Error::Network(format!("Failed to create network state dir: {}", e)))?;
+        let path = self.record_path(&record.name)?;
+        let content = toml::to_string(record)
+            .map_err(|e| Error::Network(format!("Failed to serialize network metadata: {}", e)))?;
+        fs::write(&path, content)
+            .map_err(|e| Error::Network(format!("Failed to write network metadata: {}", e)))
     }
 
     pub fn get(&self, name: &str) -> Result<Option<NetworkRecord>> {
@@ -174,8 +202,14 @@ impl NetworkLeaseStore {
         Ok(read_toml::<NetworkLeaseFile>(&path, "network lease metadata")?.leases)
     }
 
+    /// Lock file guarding read-modify-write of one network's lease list
+    fn lock_path(&self, network: &str) -> PathBuf {
+        self.root.join(format!("{}.lock", network))
+    }
+
     pub fn record(&self, network: &str, owner: &str, ip: IpAddr) -> Result<()> {
         validate_network_name(network)?;
+        let _guard = FileLock::acquire(&self.lock_path(network))?;
         if owner.is_empty() {
             return Err(Error::InvalidArgument(
                 "Network lease owner cannot be empty".into(),
@@ -217,6 +251,7 @@ impl NetworkLeaseStore {
 
     pub fn release(&self, network: &str, owner: &str) -> Result<bool> {
         validate_network_name(network)?;
+        let _guard = FileLock::acquire(&self.lock_path(network))?;
         let path = self.record_path(network);
         if !path.exists() {
             return Ok(false);
@@ -300,11 +335,7 @@ impl VnetStateStore {
     }
 
     pub fn save(&self, record: &VnetStateRecord) -> Result<()> {
-        if record.owner.is_empty() {
-            return Err(Error::InvalidArgument(
-                "VNET state owner cannot be empty".into(),
-            ));
-        }
+        Self::validate_owner(&record.owner)?;
 
         fs::create_dir_all(&self.root)
             .map_err(|e| Error::Network(format!("Failed to create VNET state dir: {}", e)))?;
@@ -316,6 +347,7 @@ impl VnetStateStore {
     }
 
     pub fn get(&self, owner: &str) -> Result<Option<VnetStateRecord>> {
+        Self::validate_owner(owner)?;
         let path = self.record_path(owner);
         if !path.exists() {
             return Ok(None);
@@ -325,6 +357,7 @@ impl VnetStateStore {
     }
 
     pub fn delete(&self, owner: &str) -> Result<bool> {
+        Self::validate_owner(owner)?;
         let path = self.record_path(owner);
         if !path.exists() {
             return Ok(false);
@@ -337,6 +370,22 @@ impl VnetStateStore {
 
     fn record_path(&self, owner: &str) -> PathBuf {
         self.root.join(format!("{}.toml", owner))
+    }
+
+    /// Validate owner string to prevent path traversal
+    fn validate_owner(owner: &str) -> Result<()> {
+        if owner.is_empty() {
+            return Err(Error::InvalidArgument(
+                "VNET state owner cannot be empty".into(),
+            ));
+        }
+        if owner.contains('/') || owner.contains('\\') || owner.contains("..") {
+            return Err(Error::InvalidArgument(format!(
+                "VNET state owner '{}' contains invalid characters",
+                owner
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -366,6 +415,7 @@ pub fn load_runtime_networks(
                     bridge: None,
                     subnet,
                     gateway,
+                    backend: default_backend_epair(),
                 },
             );
         }
@@ -394,6 +444,7 @@ pub fn load_runtime_networks(
                 )));
             }
             existing.bridge = bridge;
+            existing.backend = record.backend.clone();
         } else {
             networks.insert(
                 record.name.clone(),
@@ -402,6 +453,7 @@ pub fn load_runtime_networks(
                     bridge,
                     subnet,
                     gateway,
+                    backend: record.backend.clone(),
                 },
             );
         }
@@ -488,11 +540,120 @@ where
 {
     let content = toml::to_string(value)
         .map_err(|e| Error::Network(format!("Failed to serialize {}: {}", label, e)))?;
-    let tmp_path = path.with_extension("tmp");
-    fs::write(&tmp_path, content)
-        .map_err(|e| Error::Network(format!("Failed to write {}: {}", label, e)))?;
-    fs::rename(&tmp_path, path)
-        .map_err(|e| Error::Network(format!("Failed to finalize {}: {}", label, e)))
+    let nonce = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        std::process::id() ^ nanos
+    };
+    // create_new fails on an existing path (symlink attack), so walk the
+    // suffix until we win a name: concurrent writers otherwise collide.
+    let mut tmp_path = path.with_extension(format!("{}.tmp", nonce));
+    let mut file = None;
+    for attempt in 0..64u32 {
+        if attempt > 0 {
+            tmp_path = path.with_extension(format!("{}-{}.tmp", nonce, attempt));
+        }
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(f) => {
+                file = Some(f);
+                break;
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(Error::Network(format!(
+                    "Failed to create {} temp file: {}",
+                    label, e
+                )));
+            }
+        }
+    }
+    {
+        use std::io::Write;
+        let mut f = file.ok_or_else(|| {
+            Error::Network(format!("Failed to create {} temp file: no free name", label))
+        })?;
+        f.write_all(content.as_bytes())
+            .map_err(|e| Error::Network(format!("Failed to write {}: {}", label, e)))?;
+    }
+    fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        Error::Network(format!("Failed to finalize {}: {}", label, e))
+    })
+}
+
+/// Allocate an address and durably claim it, retrying when another process
+/// wins the same address first.
+///
+/// Each process allocates from its own snapshot of the pool, so concurrent
+/// creators pick the same free address; the lease store is the arbiter.
+pub fn allocate_and_record(
+    allocator: &mut IpAllocator,
+    lease_store: &NetworkLeaseStore,
+    network: &str,
+    owner: &str,
+) -> Result<IpAddr> {
+    for _ in 0..256 {
+        let ip = allocator.allocate(network)?;
+        match lease_store.record(network, owner, ip) {
+            Ok(()) => return Ok(ip),
+            // Address taken between our read and our write: the allocator
+            // has already marked it used, so the next round picks another.
+            Err(Error::Network(msg)) if msg.contains("already leased") => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(Error::Network(format!(
+        "Could not claim a free address on network '{}' after 256 attempts",
+        network
+    )))
+}
+
+/// Exclusive advisory lock held for a read-modify-write of a state file.
+///
+/// Separate blackship processes racing on the same lease file would
+/// otherwise lose updates: both read, both write, one wins.
+struct FileLock {
+    file: fs::File,
+}
+
+impl FileLock {
+    fn acquire(path: &Path) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| Error::Network(format!("Failed to create lock dir: {}", e)))?;
+        }
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|e| Error::Network(format!("Failed to open lock file: {}", e)))?;
+        let fd = std::os::unix::io::AsRawFd::as_raw_fd(&file);
+        if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
+            return Err(Error::Network(format!(
+                "Failed to lock {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            )));
+        }
+        Ok(Self { file })
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let fd = std::os::unix::io::AsRawFd::as_raw_fd(&self.file);
+        unsafe {
+            libc::flock(fd, libc::LOCK_UN);
+        }
+    }
 }
 
 fn validate_network_name(name: &str) -> Result<()> {
@@ -558,6 +719,8 @@ mod tests {
             bridge: "blackship0".into(),
             subnet: "10.0.1.0/24".into(),
             gateway: "10.0.1.1".into(),
+            backend: "epair".into(),
+            host_iface: None,
         };
 
         store.create(&record).unwrap();
@@ -583,6 +746,8 @@ mod tests {
             bridge: "blackship0".into(),
             subnet: "10.0.1.0/24".into(),
             gateway: "10.0.1.1".into(),
+            backend: "epair".into(),
+            host_iface: None,
         };
 
         store.create(&record).unwrap();
@@ -628,6 +793,7 @@ mod tests {
             bridge: "blackship0".into(),
             host_interface: "e0a_demoweb".into(),
             jail_interface: "e0b_demoweb".into(),
+            backend: "epair".into(),
         };
 
         store.save(&record).unwrap();

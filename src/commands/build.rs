@@ -6,6 +6,13 @@ use crate::cli::TemplateAction;
 use crate::error::Result;
 use crate::{blueprint, error, manifest, provision};
 
+/// Read a Jailfile/template source, mapping IO errors to TemplateParseFailed
+fn read_jailfile_source(path: &std::path::Path) -> Result<String> {
+    std::fs::read_to_string(path).map_err(|e| {
+        error::Error::TemplateParseFailed(format!("Failed to read {}: {}", path.display(), e))
+    })
+}
+
 pub fn handle_build(
     config_path: &Path,
     verbose: bool,
@@ -23,48 +30,90 @@ pub fn handle_build(
             .unwrap_or_else(|| std::env::current_dir().unwrap())
     });
 
-    let content = std::fs::read_to_string(&file).map_err(|e| {
-        error::Error::TemplateParseFailed(format!("Failed to read {}: {}", file.display(), e))
-    })?;
+    let content = read_jailfile_source(&file)?;
     let jailfile = parse_jailfile(&content)?;
 
     let service_name = name
         .or_else(|| jailfile.metadata.name.clone())
         .unwrap_or_else(|| "unnamed".to_string());
 
+    manifest::validate_name("jail", &service_name)?;
+
     let config = manifest::load(config_path)?;
     let full_name = config.jail_name(&service_name);
     let target_path = config.config.data_dir.join("jails").join(&full_name);
 
+    // With ZFS enabled the jail root is a dataset mounted at target_path,
+    // so builds and `up` share one root.
+    let zfs = super::bootstrap::release_zfs(&config);
+    if !dry_run && let Some(zfs) = &zfs {
+        zfs.init()?;
+    }
+
+    crate::blueprint::context::reject_symlink_ancestors(&config.config.data_dir, &target_path)?;
+    crate::blueprint::context::reject_symlink_target(&target_path)?;
+
     if let Some(release) = &jailfile.from {
+        manifest::validate_name("release", release)?;
         let bs = provision::Provisioner::from_config(&config.config)?;
         let release_path = config.config.releases_dir.join(release);
 
         if !release_path.exists() {
             println!("Base release '{}' not found. Bootstrapping...", release);
+            if let Some(zfs) = &zfs {
+                zfs.create_release_dataset(release, &release_path)?;
+            }
             bs.bootstrap(release, false)?;
+            if let Some(zfs) = &zfs {
+                zfs.snapshot_release_pristine(release)?;
+            }
         }
 
-        if !dry_run && !target_path.exists() {
-            println!("Creating jail root from {}...", release);
-            std::fs::create_dir_all(&target_path)?;
-            let status = std::process::Command::new("cp")
-                .arg("-a")
-                .arg(format!("{}/.", release_path.display()))
-                .arg(&target_path)
-                .status()
-                .map_err(|e| error::Error::BuildFailed {
-                    step: "FROM".to_string(),
-                    message: format!("Failed to copy base release: {}", e),
-                })?;
-            if !status.success() {
-                return Err(error::Error::BuildFailed {
-                    step: "FROM".to_string(),
-                    message: "cp command failed".to_string(),
-                });
+        if !dry_run {
+            // Clone-ready releases provision the root in one zfs clone.
+            if let Some(zfs) = &zfs
+                && !zfs.jail_dataset_exists(&full_name)?
+            {
+                if zfs.release_is_cloneable(release) {
+                    println!("Creating jail root by cloning {}...", release);
+                    zfs.clone_jail_from_release(release, &full_name)?;
+                } else {
+                    zfs.create_jail_dataset(&full_name)?;
+                }
+            }
+
+            // ./bin instead of bare existence: a freshly created dataset
+            // mounts as an existing-but-empty directory.
+            if !target_path.join("bin").exists() {
+                println!("Creating jail root from {}...", release);
+                std::fs::create_dir_all(&target_path)?;
+                copy_release_to(&release_path, &target_path)?;
             }
         }
     }
+
+    // Seed the layer cache with the base identity and build arguments so
+    // changing either invalidates every cached layer.
+    let layer_cache = zfs.map(|zfs| {
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(jailfile.from.as_deref().unwrap_or("scratch").as_bytes());
+        let mut sorted_args = build_args.clone();
+        sorted_args.sort();
+        for (key, value) in &sorted_args {
+            hasher.update(key.as_bytes());
+            hasher.update(value.as_bytes());
+        }
+        blueprint::LayerCache {
+            zfs,
+            jail: full_name.clone(),
+            seed: hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect(),
+        }
+    });
 
     let mut ctx = BuildContext::new(&context_dir, &target_path, &full_name).verbose(verbose);
 
@@ -72,7 +121,9 @@ pub fn handle_build(
         ctx.set_arg(&key, &value);
     }
 
-    let mut executor = TemplateExecutor::new(ctx).dry_run(dry_run);
+    let mut executor = TemplateExecutor::new(ctx)
+        .dry_run(dry_run)
+        .layer_cache(layer_cache);
 
     if dry_run {
         println!("=== DRY RUN - No changes will be made ===\n");
@@ -108,7 +159,7 @@ pub fn handle_init(
         std::process::exit(1);
     }
 
-    let base_release = release.unwrap_or_else(|| "15.0-RELEASE".to_string());
+    let base_release = release.unwrap_or_else(|| "15.1-RELEASE".to_string());
 
     let content = if toml {
         format!(
@@ -351,17 +402,11 @@ pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()>
             }
         }
         TemplateAction::Validate { file } => {
-            let content = std::fs::read_to_string(&file).map_err(|e| {
-                error::Error::TemplateParseFailed(format!(
-                    "Failed to read {}: {}",
-                    file.display(),
-                    e
-                ))
-            })?;
+            let content = read_jailfile_source(&file)?;
 
             match parse_jailfile(&content) {
                 Ok(jailfile) => {
-                    println!("✓ Jailfile is valid");
+                    println!("[OK] Jailfile is valid");
                     println!("  Instructions: {}", jailfile.instructions.len());
                     println!("  Build args: {}", jailfile.args.len());
                     if let Some(from) = &jailfile.from {
@@ -369,12 +414,32 @@ pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()>
                     }
                 }
                 Err(e) => {
-                    println!("✗ Jailfile validation failed: {}", e);
+                    println!("[FAIL] Jailfile validation failed: {}", e);
                     std::process::exit(1);
                 }
             }
         }
     }
 
+    Ok(())
+}
+
+/// Copy a release directory into a target jail path using `cp -a`.
+pub(crate) fn copy_release_to(release_path: &Path, target: &Path) -> Result<()> {
+    let status = std::process::Command::new("/bin/cp")
+        .arg("-a")
+        .arg(format!("{}/.", release_path.display()))
+        .arg(target)
+        .status()
+        .map_err(|e| error::Error::BuildFailed {
+            step: "FROM".to_string(),
+            message: format!("Failed to copy base release: {}", e),
+        })?;
+    if !status.success() {
+        return Err(error::Error::BuildFailed {
+            step: "FROM".to_string(),
+            message: "cp command failed".to_string(),
+        });
+    }
     Ok(())
 }

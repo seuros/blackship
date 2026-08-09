@@ -18,13 +18,46 @@ use std::thread;
 use std::time::Duration;
 
 /// Create backoff strategy from RetryConfig
-fn backoff_from_config(config: &RetryConfig) -> ExponentialBackoff {
+pub(crate) fn backoff_from_config(config: &RetryConfig) -> ExponentialBackoff {
     ExponentialBackoff::new()
         .base_delay_ms(config.base_delay_ms)
         .max_delay_ms(config.max_delay_ms)
         .multiplier(config.multiplier)
         .max_attempts(config.max_attempts)
         .jitter_factor(config.jitter_factor)
+}
+
+/// Retry an HTTP call with exponential backoff; `what` labels log and error messages.
+fn retry_call<T>(
+    url: &str,
+    retry_config: &RetryConfig,
+    what: &str,
+    mut call: impl FnMut() -> std::result::Result<T, ureq::Error>,
+) -> Result<T> {
+    let backoff = backoff_from_config(retry_config);
+    let mut rng = rng();
+    let mut attempt: u8 = 0;
+
+    loop {
+        attempt += 1;
+        match call() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if let Some(delay_ms) = backoff.delay(attempt, &mut rng) {
+                    eprintln!(
+                        "{} attempt {} failed, retrying in {}ms...",
+                        what, attempt, delay_ms
+                    );
+                    thread::sleep(Duration::from_millis(delay_ms));
+                } else {
+                    return Err(Error::DownloadFailed(format!(
+                        "{} failed for {} after {} attempts: {}",
+                        what, url, attempt, e
+                    )));
+                }
+            }
+        }
+    }
 }
 
 /// Download a file from URL to destination with optional checksum verification
@@ -48,30 +81,7 @@ pub fn download_file(
     eprintln!("Downloading: {}", url);
 
     // Make HTTP request with retry
-    let backoff = backoff_from_config(retry_config);
-    let mut rng = rng();
-    let mut attempt: u8 = 0;
-
-    let response = loop {
-        attempt += 1;
-        match ureq::get(url).call() {
-            Ok(resp) => break resp,
-            Err(e) => {
-                if let Some(delay_ms) = backoff.delay(attempt, &mut rng) {
-                    eprintln!(
-                        "Download attempt {} failed, retrying in {}ms...",
-                        attempt, delay_ms
-                    );
-                    thread::sleep(Duration::from_millis(delay_ms));
-                } else {
-                    return Err(Error::DownloadFailed(format!(
-                        "HTTP request failed for {} after {} attempts: {}",
-                        url, attempt, e
-                    )));
-                }
-            }
-        }
-    };
+    let response = retry_call(url, retry_config, "Download", || ureq::get(url).call())?;
 
     // Get content length if available
     let content_length: Option<u64> = response
@@ -84,10 +94,15 @@ pub fn download_file(
         eprintln!("Size: {} bytes ({:.2} MB)", len, len as f64 / 1_048_576.0);
     }
 
-    // Create output file
-    let mut file = File::create(dest).map_err(|e| {
-        Error::DownloadFailed(format!("Failed to create file {}: {}", dest.display(), e))
-    })?;
+    // Unlink then O_EXCL: never write through a symlink planted at dest.
+    let _ = std::fs::remove_file(dest);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dest)
+        .map_err(|e| {
+            Error::DownloadFailed(format!("Failed to create file {}: {}", dest.display(), e))
+        })?;
 
     // Download with progress
     let mut reader = response.into_body().into_reader();
@@ -170,30 +185,7 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 
 /// Fetch a text file (like MANIFEST) and return its contents
 pub fn fetch_text(url: &str, retry_config: &RetryConfig) -> Result<String> {
-    let backoff = backoff_from_config(retry_config);
-    let mut rng = rng();
-    let mut attempt: u8 = 0;
-
-    let response = loop {
-        attempt += 1;
-        match ureq::get(url).call() {
-            Ok(resp) => break resp,
-            Err(e) => {
-                if let Some(delay_ms) = backoff.delay(attempt, &mut rng) {
-                    eprintln!(
-                        "Fetch attempt {} failed, retrying in {}ms...",
-                        attempt, delay_ms
-                    );
-                    thread::sleep(Duration::from_millis(delay_ms));
-                } else {
-                    return Err(Error::DownloadFailed(format!(
-                        "Failed to fetch {} after {} attempts: {}",
-                        url, attempt, e
-                    )));
-                }
-            }
-        }
-    };
+    let response = retry_call(url, retry_config, "Fetch", || ureq::get(url).call())?;
 
     response
         .into_body()

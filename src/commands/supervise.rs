@@ -13,8 +13,9 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
     let project_prefix = format!("{}-", project_name);
     let jails_for_health = config.jails.clone();
     let rate_limit = config.config.rate_limit.clone();
+    let monitor_ping_url = config.config.monitor_ping_url.clone();
 
-    let bridge = bridge::Bridge::new(config)?.verbose(verbose);
+    let bridge = bridge::Bridge::open(config, verbose)?;
     let bridge = Arc::new(Mutex::new(bridge));
 
     let rt =
@@ -39,13 +40,17 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
             }
         }
 
+        let full_jail_name = |name: &str| -> String {
+            if name.starts_with(&project_prefix) {
+                name.to_string()
+            } else {
+                format!("{}-{}", project_name, name)
+            }
+        };
+
         // Register running jails with the Warden for kqueue monitoring
         for jail_def in &jails_for_health {
-            let full_name = if jail_def.name.starts_with(&project_prefix) {
-                jail_def.name.clone()
-            } else {
-                format!("{}-{}", project_name, jail_def.name)
-            };
+            let full_name = full_jail_name(&jail_def.name);
             if let Ok(jid) = jail::jail_getid(&full_name) {
                 warden.register_jail_direct(&full_name, jid);
             }
@@ -60,11 +65,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
 
         for jail_def in &jails_for_health {
             if jail_def.healthcheck.enabled && !jail_def.healthcheck.checks.is_empty() {
-                let full_name = if jail_def.name.starts_with(&project_prefix) {
-                    jail_def.name.clone()
-                } else {
-                    format!("{}-{}", project_name, jail_def.name)
-                };
+                let full_name = full_jail_name(&jail_def.name);
                 let healthcheck_config = jail_def.healthcheck.clone();
                 let handle = warden_handle_for_health.clone();
                 let health_capacity = rate_limit.health_capacity;
@@ -106,6 +107,19 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
 
                 println!("Spawned health monitor for jail '{}'", full_name);
             }
+        }
+
+        // Dead-man ping: prove the supervisor itself is alive.
+        if let Some(url) = monitor_ping_url {
+            std::thread::spawn(move || {
+                loop {
+                    if let Err(e) = ureq::get(&url).call() {
+                        eprintln!("Warning: monitor ping to {} failed: {}", url, e);
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(300));
+                }
+            });
+            println!("Dead-man ping enabled (every 300s).");
         }
 
         println!("Warden supervisor started. Press Ctrl+C to stop.");

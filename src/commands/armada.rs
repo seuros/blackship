@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::cli::ArmadaAction;
+use crate::commands::build::copy_release_to;
 use crate::error::Result;
 use crate::{blueprint, bridge, error, manifest, provision};
 
@@ -50,7 +51,7 @@ pub fn handle(
 # Example jail without Jailfile (using release directly):
 # [[jails]]
 # name = "db"
-# release = "15.0-RELEASE"
+# release = "15.1-RELEASE"
 # path = "/jails/db"
 "#;
 
@@ -70,7 +71,7 @@ pub fn handle(
             dry_run,
         } => {
             let config = manifest::load_merged(&files)?;
-            let mut bridge = bridge::Bridge::new(config)?.verbose(verbose);
+            let mut bridge = bridge::Bridge::open(config, verbose)?;
 
             if jails.is_empty() {
                 if dry_run {
@@ -97,7 +98,7 @@ pub fn handle(
 
         ArmadaAction::Down { jails, dry_run } => {
             let config = manifest::load_merged(&files)?;
-            let mut bridge = bridge::Bridge::new(config)?.verbose(verbose);
+            let mut bridge = bridge::Bridge::open(config, verbose)?;
 
             if jails.is_empty() {
                 if dry_run {
@@ -182,7 +183,7 @@ pub fn handle(
 
         ArmadaAction::Ps { json } => {
             let config = manifest::load_merged(&files)?;
-            let bridge = bridge::Bridge::new(config)?.verbose(verbose);
+            let bridge = bridge::Bridge::open(config, verbose)?;
             bridge.ps(json)?;
             Ok(())
         }
@@ -257,7 +258,11 @@ fn build_jail_from_file(
 
     let target_path = config.config.data_dir.join("jails").join(&full_name);
 
+    crate::blueprint::context::reject_symlink_ancestors(&config.config.data_dir, &target_path)?;
+    crate::blueprint::context::reject_symlink_target(&target_path)?;
+
     if let Some(release) = &jailfile.from {
+        crate::manifest::validate_name("release", release)?;
         let bs = provision::Provisioner::from_config(&config.config)?;
         let release_path = config.config.releases_dir.join(release);
 
@@ -271,21 +276,7 @@ fn build_jail_from_file(
         if !dry_run && !target_path.exists() {
             println!("  Creating jail root from {}...", release);
             std::fs::create_dir_all(&target_path)?;
-            let status = std::process::Command::new("cp")
-                .arg("-a")
-                .arg(format!("{}/.", release_path.display()))
-                .arg(&target_path)
-                .status()
-                .map_err(|e| error::Error::BuildFailed {
-                    step: "FROM".to_string(),
-                    message: format!("Failed to copy base release: {}", e),
-                })?;
-            if !status.success() {
-                return Err(error::Error::BuildFailed {
-                    step: "FROM".to_string(),
-                    message: "cp command failed".to_string(),
-                });
-            }
+            copy_release_to(&release_path, &target_path)?;
         }
     }
 

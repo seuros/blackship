@@ -40,6 +40,7 @@ impl AppContext {
                 env,
                 command,
             } => {
+                let jail = self.resolve_runtime_jail(&jail);
                 let opts = console::ExecOptions {
                     user,
                     workdir,
@@ -87,6 +88,7 @@ impl AppContext {
             }
 
             Commands::Console { jail, user } => {
+                let jail = self.resolve_runtime_jail(&jail);
                 let status = console::console(&jail, &user)?;
                 std::process::exit(status.code().unwrap_or(1));
             }
@@ -107,6 +109,23 @@ impl AppContext {
                 commands::armada::handle(&self.config_path, self.verbose, files, action)
             }
 
+            Commands::Migrate {
+                jail,
+                target,
+                remote_dataset,
+                keep,
+            } => commands::migrate::handle_migrate(
+                &self.config_path,
+                jail,
+                target,
+                remote_dataset,
+                keep,
+            ),
+
+            Commands::Stats { jail, json } => {
+                commands::stats::handle(&self.config_path, jail, json)
+            }
+
             Commands::Logs {
                 jail,
                 follow,
@@ -119,7 +138,14 @@ impl AppContext {
                 release,
                 force,
                 archives,
-            } => commands::bootstrap::handle_bootstrap(&self.config_path, release, force, archives),
+                pkgbase,
+            } => commands::bootstrap::handle_bootstrap(
+                &self.config_path,
+                release,
+                force,
+                archives,
+                pkgbase,
+            ),
 
             Commands::Releases { action, json } => {
                 commands::bootstrap::handle_releases(&self.config_path, action, json)
@@ -192,12 +218,27 @@ impl AppContext {
                 zfs_send,
             } => commands::snapshot::handle_export(&self.config_path, jail, output, zfs_send),
 
-            Commands::Import { file, name, force } => {
-                commands::snapshot::handle_import(&self.config_path, file, name, force)
-            }
+            Commands::Import {
+                file,
+                name,
+                force,
+                from,
+            } => match from {
+                Some(from) => commands::foreign::handle_foreign_import(
+                    &self.config_path,
+                    file,
+                    name,
+                    Some(from),
+                ),
+                None => commands::snapshot::handle_import(&self.config_path, file, name, force),
+            },
 
             Commands::Snapshot { action } => {
                 commands::snapshot::handle_snapshot(&self.config_path, action)
+            }
+
+            Commands::Commit { jail, release } => {
+                commands::snapshot::handle_commit(&self.config_path, jail, release)
             }
 
             Commands::Clone { source, name } => {
@@ -231,8 +272,31 @@ impl AppContext {
                 Ok(())
             }
 
-            Commands::Setup => {
-                let mut bridge = self.verbose_bridge()?;
+            Commands::Setup { enable_pf } => {
+                if enable_pf {
+                    crate::bulkhead::enable_pf()?;
+                }
+                let config = manifest::load_or_default(&self.config_path)?;
+
+                // Recreate persisted networks: bridges and host eifaces do
+                // not survive a reboot, the records do.
+                let net_store = crate::network::NetworkStore::from_config(Some(&config));
+                for mut record in net_store.list()? {
+                    let name = record.name.clone();
+                    match crate::network::ensure::ensure_network(&mut record) {
+                        Ok(changed) => {
+                            if changed {
+                                net_store.save(&record)?;
+                            }
+                            println!("Network '{}' ready on bridge '{}'.", name, record.bridge);
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: failed to reapply network '{}': {}", name, e);
+                        }
+                    }
+                }
+
+                let mut bridge = Bridge::new(config)?.verbose(self.verbose);
                 bridge.prepare_host()?;
                 bridge.init_bulkhead()?;
                 bridge.sync_bulkhead()?;
@@ -241,6 +305,17 @@ impl AppContext {
                 Ok(())
             }
         }
+    }
+
+    /// Resolve a runtime jail target through the config when possible, so
+    /// short names, prefixes, and full names all work for exec/console/logs.
+    fn resolve_runtime_jail(&self, name: &str) -> String {
+        if let Ok(Some(config)) = self.load_config_if_present()
+            && let Some((_, full_name)) = config.resolve_jail_names(name)
+        {
+            return full_name;
+        }
+        name.to_string()
     }
 
     fn load_config(&self) -> Result<manifest::BlackshipConfig> {
@@ -291,18 +366,14 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
 }
 
 fn find_escalator() -> Option<&'static str> {
-    ["sudo", "doas"]
-        .into_iter()
-        .find(|name| command_exists(name))
-}
-
-fn command_exists(command: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|path_var| {
-        std::env::split_paths(&path_var).any(|dir| {
-            let candidate = dir.join(command);
-            std::fs::metadata(&candidate).is_ok_and(|metadata| {
-                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-            })
-        })
+    // Absolute paths: an earlier PATH entry could supply a fake sudo/doas to steal creds.
+    [
+        "/usr/local/bin/doas",
+        "/usr/local/bin/sudo",
+        "/usr/bin/sudo",
+    ]
+    .into_iter()
+    .find(|path| {
+        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
     })
 }

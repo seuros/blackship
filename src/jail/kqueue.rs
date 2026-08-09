@@ -4,6 +4,12 @@
 //! when jails are created, modified, attached to, or removed.
 
 use crate::error::{Error, Result};
+
+macro_rules! io_err {
+    () => {
+        Err(Error::Io(std::io::Error::last_os_error()))
+    };
+}
 use std::os::fd::OwnedFd;
 use std::time::Duration;
 
@@ -52,7 +58,7 @@ impl JailEventSource {
     pub fn new() -> Result<Self> {
         let kq = unsafe { libc::kqueue() };
         if kq < 0 {
-            return Err(Error::Io(std::io::Error::last_os_error()));
+            return io_err!();
         }
         use std::os::unix::io::FromRawFd;
         let fd = unsafe { OwnedFd::from_raw_fd(kq) };
@@ -70,19 +76,8 @@ impl JailEventSource {
         self.kq.as_raw_fd()
     }
 
-    fn register(&self, ident: usize, filter: i16, fflags: u32) -> Result<()> {
+    fn kevent_change(&self, changelist: &[libc::kevent; 1]) -> Result<()> {
         use std::os::unix::io::AsRawFd;
-
-        let changelist = [libc::kevent {
-            ident,
-            filter,
-            flags: libc::EV_ADD | libc::EV_CLEAR,
-            fflags,
-            data: 0,
-            udata: std::ptr::null_mut(),
-            ext: [0; 4],
-        }];
-
         let ret = unsafe {
             libc::kevent(
                 self.kq.as_raw_fd(),
@@ -93,12 +88,22 @@ impl JailEventSource {
                 std::ptr::null(),
             )
         };
-
         if ret < 0 {
-            return Err(Error::Io(std::io::Error::last_os_error()));
+            return io_err!();
         }
-
         Ok(())
+    }
+
+    fn register(&self, ident: usize, filter: i16, fflags: u32) -> Result<()> {
+        self.kevent_change(&[libc::kevent {
+            ident,
+            filter,
+            flags: libc::EV_ADD | libc::EV_CLEAR,
+            fflags,
+            data: 0,
+            udata: std::ptr::null_mut(),
+            ext: [0; 4],
+        }])
     }
 
     /// Poll for jail events with an optional timeout
@@ -129,7 +134,7 @@ impl JailEventSource {
         };
 
         if n < 0 {
-            return Err(Error::Io(std::io::Error::last_os_error()));
+            return io_err!();
         }
 
         let mut result = Vec::new();
@@ -156,9 +161,7 @@ impl JailEventSource {
     /// Unregister a jail from monitoring
     #[allow(dead_code)]
     pub fn unregister_jail(&self, jid: i32) -> Result<()> {
-        use std::os::unix::io::AsRawFd;
-
-        let changelist = [libc::kevent {
+        self.kevent_change(&[libc::kevent {
             ident: jid as usize,
             filter: EVFILT_JAIL,
             flags: libc::EV_DELETE,
@@ -166,24 +169,7 @@ impl JailEventSource {
             data: 0,
             udata: std::ptr::null_mut(),
             ext: [0; 4],
-        }];
-
-        let ret = unsafe {
-            libc::kevent(
-                self.kq.as_raw_fd(),
-                changelist.as_ptr(),
-                1,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null(),
-            )
-        };
-
-        if ret < 0 {
-            return Err(Error::Io(std::io::Error::last_os_error()));
-        }
-
-        Ok(())
+        }])
     }
 }
 

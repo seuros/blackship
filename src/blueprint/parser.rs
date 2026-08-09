@@ -173,8 +173,13 @@ fn parse_env(input: &str) -> nom::IResult<&str, (&str, &str)> {
     Ok((input, (name, value.trim())))
 }
 
+/// Parse a line starting with `keyword` followed by whitespace, returning the rest
+fn parse_keyword_rest<'a>(keyword: &str, input: &'a str) -> nom::IResult<&'a str, &'a str> {
+    preceded(pair(tag_no_case(keyword), space1), rest).parse(input)
+}
+
 fn parse_run(input: &str) -> nom::IResult<&str, &str> {
-    preceded(pair(tag_no_case("RUN"), space1), rest).parse(input)
+    parse_keyword_rest("RUN", input)
 }
 
 fn parse_copy(input: &str) -> nom::IResult<&str, Instruction> {
@@ -190,7 +195,7 @@ fn parse_copy(input: &str) -> nom::IResult<&str, Instruction> {
 }
 
 fn parse_workdir(input: &str) -> nom::IResult<&str, &str> {
-    preceded(pair(tag_no_case("WORKDIR"), space1), rest).parse(input)
+    parse_keyword_rest("WORKDIR", input)
 }
 
 fn parse_expose(input: &str) -> nom::IResult<&str, Instruction> {
@@ -198,20 +203,25 @@ fn parse_expose(input: &str) -> nom::IResult<&str, Instruction> {
     let (input, _) = space1.parse(input)?;
     let (input, port_str) = rest.parse(input)?;
 
-    let port = ExposePort::parse(port_str.trim()).unwrap_or(ExposePort::tcp(0));
+    let port = ExposePort::parse(port_str.trim()).ok_or_else(|| {
+        nom::Err::Failure(nom::error::Error::new(
+            port_str,
+            nom::error::ErrorKind::Verify,
+        ))
+    })?;
     Ok((input, Instruction::Expose(port)))
 }
 
 fn parse_cmd(input: &str) -> nom::IResult<&str, &str> {
-    preceded(pair(tag_no_case("CMD"), space1), rest).parse(input)
+    parse_keyword_rest("CMD", input)
 }
 
 fn parse_entrypoint(input: &str) -> nom::IResult<&str, &str> {
-    preceded(pair(tag_no_case("ENTRYPOINT"), space1), rest).parse(input)
+    parse_keyword_rest("ENTRYPOINT", input)
 }
 
 fn parse_user(input: &str) -> nom::IResult<&str, &str> {
-    preceded(pair(tag_no_case("USER"), space1), rest).parse(input)
+    parse_keyword_rest("USER", input)
 }
 
 fn parse_label(input: &str) -> nom::IResult<&str, (&str, &str)> {

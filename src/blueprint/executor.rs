@@ -2,7 +2,7 @@
 //!
 //! Executes Jailfile instructions to build a jail.
 
-use crate::blueprint::context::BuildContext;
+use crate::blueprint::context::{BuildContext, reject_symlink_ancestors};
 use crate::blueprint::instructions::{CopySpec, Instruction, Jailfile};
 use crate::error::{Error, Result};
 use crate::jail::jexec::chroot_exec;
@@ -12,12 +12,25 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+/// ZFS-backed build layer cache: one snapshot per filesystem-mutating
+/// instruction, keyed by the rolling hash of everything before it.
+pub struct LayerCache {
+    /// ZFS manager for the jail dataset
+    pub zfs: crate::zfs::ZfsManager,
+    /// Full jail name (dataset leaf)
+    pub jail: String,
+    /// Cache seed: identifies the base release and build arguments
+    pub seed: String,
+}
+
 /// Template executor for building jails
 pub struct TemplateExecutor {
     /// Build context
     context: BuildContext,
     /// Dry run mode (don't execute, just print)
     dry_run: bool,
+    /// Optional ZFS layer cache
+    layer_cache: Option<LayerCache>,
 }
 
 impl TemplateExecutor {
@@ -26,6 +39,7 @@ impl TemplateExecutor {
         Self {
             context,
             dry_run: false,
+            layer_cache: None,
         }
     }
 
@@ -33,6 +47,32 @@ impl TemplateExecutor {
     pub fn dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
         self
+    }
+
+    /// Enable the ZFS layer cache
+    pub fn layer_cache(mut self, cache: Option<LayerCache>) -> Self {
+        self.layer_cache = cache;
+        self
+    }
+
+    /// Rolling hash key for an instruction, chained from the previous key.
+    /// COPY keys include the source content so edits invalidate the layer.
+    fn instruction_key(&self, prev: &str, instruction: &Instruction) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(prev.as_bytes());
+        hasher.update(format!("{:?}", instruction).as_bytes());
+        if let Instruction::Copy(spec) = instruction
+            && let Ok(src_path) = self.context.resolve_source(&spec.src)
+        {
+            hash_path_contents(&mut hasher, &src_path);
+        }
+        hex_digest(hasher)
+    }
+
+    /// True when an instruction changes the jail filesystem (snapshot-worthy)
+    fn is_layer_boundary(instruction: &Instruction) -> bool {
+        matches!(instruction, Instruction::Run(_) | Instruction::Copy(_))
     }
 
     /// Execute a Jailfile to build a jail
@@ -52,9 +92,55 @@ impl TemplateExecutor {
             }
         }
 
-        // Execute each instruction
-        for instruction in &jailfile.instructions {
+        // Precompute the layer hash chain and find the longest cached prefix.
+        let mut resume_from = 0usize;
+        let mut keys: Vec<String> = Vec::new();
+        if let Some(cache) = &self.layer_cache {
+            let mut hash = cache.seed.clone();
+            let mut last_cached: Option<(usize, String)> = None;
+            let mut chain_intact = true;
+            for (index, instruction) in jailfile.instructions.iter().enumerate() {
+                hash = self.instruction_key(&hash, instruction);
+                keys.push(hash.clone());
+                if chain_intact && Self::is_layer_boundary(instruction) {
+                    let layer =
+                        crate::zfs::ZfsManager::layer_snapshot_name(index, &hash[..12]);
+                    if cache.zfs.has_layer(&cache.jail, &layer) {
+                        last_cached = Some((index, layer));
+                    } else {
+                        chain_intact = false;
+                    }
+                }
+            }
+            if let Some((index, layer)) = last_cached {
+                if !self.dry_run {
+                    cache.zfs.rollback_to_layer(&cache.jail, &layer)?;
+                }
+                println!("CACHED steps 1-{} (layer {})", index + 1, &layer);
+                resume_from = index + 1;
+            }
+        }
+
+        // Execute each instruction, snapshotting mutating steps as layers
+        for (index, instruction) in jailfile.instructions.iter().enumerate() {
+            if index < resume_from {
+                // Still apply metadata so ENV/WORKDIR reach later steps.
+                if !Self::is_layer_boundary(instruction) {
+                    self.execute_instruction(instruction)?;
+                }
+                continue;
+            }
             self.execute_instruction(instruction)?;
+            if !self.dry_run
+                && Self::is_layer_boundary(instruction)
+                && let Some(cache) = &self.layer_cache
+            {
+                let layer =
+                    crate::zfs::ZfsManager::layer_snapshot_name(index, &keys[index][..12]);
+                if let Err(e) = cache.zfs.create_layer(&cache.jail, &layer) {
+                    eprintln!("Warning: failed to snapshot build layer: {}", e);
+                }
+            }
         }
 
         self.context.log(&format!(
@@ -115,7 +201,50 @@ impl TemplateExecutor {
 
                 // Create the directory in the jail if it doesn't exist
                 if !self.dry_run {
-                    let full_path = self.context.resolve_dest(&path);
+                    let full_path = self.context.resolve_dest(&path)?;
+
+                    // Reject symlink ancestors: mkdir could otherwise escape the jail root.
+                    let canonical_target =
+                        self.context.target_path().canonicalize().map_err(|e| {
+                            Error::BuildFailed {
+                                step: "WORKDIR".to_string(),
+                                message: format!(
+                                    "Failed to canonicalize target path '{}': {}",
+                                    self.context.target_path().display(),
+                                    e
+                                ),
+                            }
+                        })?;
+
+                    let mut ancestor = full_path.as_path();
+                    while !ancestor.exists() {
+                        match ancestor.parent() {
+                            Some(p) => ancestor = p,
+                            None => break,
+                        }
+                    }
+                    if ancestor.exists() {
+                        let canonical_ancestor =
+                            ancestor.canonicalize().map_err(|e| Error::BuildFailed {
+                                step: "WORKDIR".to_string(),
+                                message: format!(
+                                    "Failed to canonicalize '{}': {}",
+                                    ancestor.display(),
+                                    e
+                                ),
+                            })?;
+                        if !canonical_ancestor.starts_with(&canonical_target) {
+                            return Err(Error::BuildFailed {
+                                step: "WORKDIR".to_string(),
+                                message: format!(
+                                    "WORKDIR path '{}' resolves outside the jail root '{}'",
+                                    full_path.display(),
+                                    canonical_target.display()
+                                ),
+                            });
+                        }
+                    }
+
                     if !full_path.exists() {
                         fs::create_dir_all(&full_path).map_err(|e| Error::BuildFailed {
                             step: "WORKDIR".to_string(),
@@ -161,7 +290,49 @@ impl TemplateExecutor {
 
                 // Create the volume mount point
                 if !self.dry_run {
-                    let full_path = self.context.resolve_dest(&path);
+                    let full_path = self.context.resolve_dest(&path)?;
+
+                    let canonical_target =
+                        self.context.target_path().canonicalize().map_err(|e| {
+                            Error::BuildFailed {
+                                step: "VOLUME".to_string(),
+                                message: format!(
+                                    "Failed to canonicalize target path '{}': {}",
+                                    self.context.target_path().display(),
+                                    e
+                                ),
+                            }
+                        })?;
+
+                    let mut ancestor = full_path.as_path();
+                    while !ancestor.exists() {
+                        match ancestor.parent() {
+                            Some(p) => ancestor = p,
+                            None => break,
+                        }
+                    }
+                    if ancestor.exists() {
+                        let canonical_ancestor =
+                            ancestor.canonicalize().map_err(|e| Error::BuildFailed {
+                                step: "VOLUME".to_string(),
+                                message: format!(
+                                    "Failed to canonicalize '{}': {}",
+                                    ancestor.display(),
+                                    e
+                                ),
+                            })?;
+                        if !canonical_ancestor.starts_with(&canonical_target) {
+                            return Err(Error::BuildFailed {
+                                step: "VOLUME".to_string(),
+                                message: format!(
+                                    "VOLUME path '{}' resolves outside the jail root '{}'",
+                                    full_path.display(),
+                                    canonical_target.display()
+                                ),
+                            });
+                        }
+                    }
+
                     if !full_path.exists() {
                         fs::create_dir_all(&full_path).map_err(|e| Error::BuildFailed {
                             step: "VOLUME".to_string(),
@@ -185,37 +356,35 @@ impl TemplateExecutor {
         let dev_path = target_path.join("dev");
         let resolv_path = target_path.join("etc/resolv.conf");
 
-        // Copy host resolv.conf if jail doesn't have one
+        // Reject symlink ancestors (e.g. etc -> /host/etc) before writing.
+        reject_symlink_ancestors(target_path, &resolv_path)?;
+
+        // create_new() is atomic, so a symlink swapped in mid-flight cannot win the race.
         if !resolv_path.exists()
-            && let Ok(content) = fs::read_to_string("/etc/resolv.conf")
+            && let Ok(content) = fs::read("/etc/resolv.conf")
         {
-            let _ = fs::write(&resolv_path, content);
+            if let Some(parent) = resolv_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if let Ok(mut f) = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&resolv_path)
+            {
+                use std::io::Write;
+                let _ = f.write_all(&content);
+            }
         }
+
+        reject_symlink_ancestors(target_path, &dev_path)?;
 
         // Mount devfs for the chroot environment
         let need_devfs = !dev_path.join("null").exists();
         if need_devfs {
             std::fs::create_dir_all(&dev_path).ok();
 
-            // Use native mount(2) syscall instead of spawning process
-            let fstype = CString::new("devfs").unwrap();
-            let from = CString::new("devfs").unwrap();
-            let to = CString::new(dev_path.to_str().unwrap()).unwrap();
-
-            let result = unsafe {
-                libc::mount(
-                    from.as_ptr(),
-                    to.as_ptr(),
-                    0, // flags
-                    fstype.as_ptr() as *mut libc::c_void,
-                )
-            };
-
-            if result != 0 {
-                eprintln!(
-                    "Warning: Failed to mount devfs: {}",
-                    std::io::Error::last_os_error()
-                );
+            if let Err(e) = crate::sys::mount_devfs(&dev_path) {
+                eprintln!("Warning: {}", e);
             }
         }
 
@@ -231,11 +400,7 @@ impl TemplateExecutor {
 
         // Unmount devfs if we mounted it
         if need_devfs {
-            // Use native unmount(2) syscall instead of spawning process
-            let path = CString::new(dev_path.to_str().unwrap()).unwrap();
-            unsafe {
-                libc::unmount(path.as_ptr(), 0);
-            }
+            crate::sys::unmount_quiet(&dev_path);
         }
 
         let (exit_code, stdout, stderr) = result.map_err(|e| Error::BuildFailed {
@@ -272,14 +437,95 @@ impl TemplateExecutor {
         let src = self.context.substitute(&spec.src);
         let dest = self.context.substitute(&spec.dest);
 
-        let src_path = self.context.resolve_source(&src);
-        let dest_path = self.context.resolve_dest(&dest);
+        let src_path = self.context.resolve_source(&src)?;
+        let dest_path = self.context.resolve_dest(&dest)?;
 
         // Ensure source exists
         if !src_path.exists() {
             return Err(Error::BuildFailed {
                 step: "COPY".to_string(),
                 message: format!("Source not found: {}", src_path.display()),
+            });
+        }
+
+        // Canonicalize: lexical checks alone miss symlink escapes from the context.
+        let canonical_src = src_path.canonicalize().map_err(|e| Error::BuildFailed {
+            step: "COPY".to_string(),
+            message: format!(
+                "Failed to canonicalize source '{}': {}",
+                src_path.display(),
+                e
+            ),
+        })?;
+        let canonical_context =
+            self.context
+                .context_dir()
+                .canonicalize()
+                .map_err(|e| Error::BuildFailed {
+                    step: "COPY".to_string(),
+                    message: format!(
+                        "Failed to canonicalize context dir '{}': {}",
+                        self.context.context_dir().display(),
+                        e
+                    ),
+                })?;
+        if !canonical_src.starts_with(&canonical_context) {
+            return Err(Error::BuildFailed {
+                step: "COPY".to_string(),
+                message: format!(
+                    "Source '{}' resolves to '{}' which is outside the build context '{}'",
+                    src_path.display(),
+                    canonical_src.display(),
+                    canonical_context.display()
+                ),
+            });
+        }
+
+        let canonical_target =
+            self.context
+                .target_path()
+                .canonicalize()
+                .map_err(|e| Error::BuildFailed {
+                    step: "COPY".to_string(),
+                    message: format!(
+                        "Failed to canonicalize target path '{}': {}",
+                        self.context.target_path().display(),
+                        e
+                    ),
+                })?;
+
+        let check_path = if dest_path.exists() {
+            dest_path.canonicalize().map_err(|e| Error::BuildFailed {
+                step: "COPY".to_string(),
+                message: format!(
+                    "Failed to canonicalize dest '{}': {}",
+                    dest_path.display(),
+                    e
+                ),
+            })?
+        } else if let Some(parent) = dest_path.parent()
+            && parent.exists()
+        {
+            parent.canonicalize().map_err(|e| Error::BuildFailed {
+                step: "COPY".to_string(),
+                message: format!(
+                    "Failed to canonicalize dest parent '{}': {}",
+                    parent.display(),
+                    e
+                ),
+            })?
+        } else {
+            canonical_target.clone()
+        };
+
+        if !check_path.starts_with(&canonical_target) {
+            return Err(Error::BuildFailed {
+                step: "COPY".to_string(),
+                message: format!(
+                    "Destination '{}' resolves outside the jail root '{}'",
+                    dest_path.display(),
+                    canonical_target.display()
+                ),
             });
         }
 
@@ -293,18 +539,30 @@ impl TemplateExecutor {
             })?;
         }
 
-        // Copy file or directory
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dest_path)?;
+        // canonical_src, not src_path: the original could be swapped after validation.
+        if canonical_src.is_dir() {
+            copy_dir_recursive(&canonical_src, &dest_path)?;
         } else {
             // If dest ends with /, treat as directory
             let final_dest = if dest.ends_with('/') {
-                dest_path.join(src_path.file_name().unwrap_or_default())
+                dest_path.join(canonical_src.file_name().unwrap_or_default())
             } else {
                 dest_path
             };
 
-            fs::copy(&src_path, &final_dest).map_err(|e| Error::BuildFailed {
+            if let Ok(meta) = fs::symlink_metadata(&final_dest)
+                && meta.file_type().is_symlink()
+            {
+                return Err(Error::BuildFailed {
+                    step: "COPY".to_string(),
+                    message: format!(
+                        "Destination {} is a symlink, refusing to overwrite",
+                        final_dest.display()
+                    ),
+                });
+            }
+
+            fs::copy(&canonical_src, &final_dest).map_err(|e| Error::BuildFailed {
                 step: "COPY".to_string(),
                 message: format!(
                     "Failed to copy {} to {}: {}",
@@ -314,9 +572,10 @@ impl TemplateExecutor {
                 ),
             })?;
 
-            // Set mode if specified
+            // Strip setuid/setgid: no privilege escalation inside the chroot.
             if let Some(mode) = spec.mode {
-                let permissions = fs::Permissions::from_mode(mode);
+                let safe_mode = mode & 0o1777; // Strip setuid (4000) and setgid (2000)
+                let permissions = fs::Permissions::from_mode(safe_mode);
                 fs::set_permissions(&final_dest, permissions).map_err(|e| Error::BuildFailed {
                     step: "COPY".to_string(),
                     message: format!(
@@ -325,6 +584,16 @@ impl TemplateExecutor {
                         e
                     ),
                 })?;
+            }
+
+            if spec.mode.is_none()
+                && let Ok(meta) = fs::metadata(&final_dest)
+            {
+                let current_mode = meta.permissions().mode();
+                if current_mode & 0o6000 != 0 {
+                    let safe_mode = current_mode & 0o1777;
+                    let _ = fs::set_permissions(&final_dest, fs::Permissions::from_mode(safe_mode));
+                }
             }
 
             // Set owner if specified (requires running as root)
@@ -370,9 +639,46 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
         let src_path = entry.path();
         let dest_path = dest.join(entry.file_name());
 
-        if src_path.is_dir() {
+        // symlink_metadata does not follow; skipping symlinks keeps us in the context.
+        let metadata = fs::symlink_metadata(&src_path).map_err(|e| Error::BuildFailed {
+            step: "COPY".to_string(),
+            message: format!("Failed to read metadata for {}: {}", src_path.display(), e),
+        })?;
+
+        if metadata.file_type().is_symlink() {
+            eprintln!(
+                "Warning: skipping symlink '{}' during recursive copy",
+                src_path.display()
+            );
+            continue;
+        }
+
+        if metadata.is_dir() {
+            // A symlinked destination dir would redirect the whole subtree out of the jail.
+            if dest_path.exists()
+                && let Ok(dest_meta) = fs::symlink_metadata(&dest_path)
+                && dest_meta.file_type().is_symlink()
+            {
+                return Err(Error::BuildFailed {
+                    step: "COPY".to_string(),
+                    message: format!(
+                        "Destination directory '{}' is a symlink, refusing to recurse",
+                        dest_path.display()
+                    ),
+                });
+            }
             copy_dir_recursive(&src_path, &dest_path)?;
         } else {
+            if let Ok(dest_meta) = fs::symlink_metadata(&dest_path)
+                && dest_meta.file_type().is_symlink()
+            {
+                eprintln!(
+                    "Warning: skipping copy to '{}' because destination is a symlink",
+                    dest_path.display()
+                );
+                continue;
+            }
+
             fs::copy(&src_path, &dest_path).map_err(|e| Error::BuildFailed {
                 step: "COPY".to_string(),
                 message: format!(
@@ -382,6 +688,14 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
                     e
                 ),
             })?;
+
+            if let Ok(meta) = fs::metadata(&dest_path) {
+                let current_mode = meta.permissions().mode();
+                if current_mode & 0o6000 != 0 {
+                    let safe_mode = current_mode & 0o1777;
+                    let _ = fs::set_permissions(&dest_path, fs::Permissions::from_mode(safe_mode));
+                }
+            }
         }
     }
 
@@ -445,6 +759,35 @@ fn set_owner(path: &Path, owner: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Render a Sha256 as lowercase hex
+fn hex_digest(hasher: sha2::Sha256) -> String {
+    use sha2::Digest;
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
+
+/// Feed a file's or directory tree's contents into a hasher (sorted walk)
+fn hash_path_contents(hasher: &mut sha2::Sha256, path: &Path) {
+    use sha2::Digest;
+    if path.is_file() {
+        if let Ok(bytes) = fs::read(path) {
+            hasher.update(&bytes);
+        }
+    } else if path.is_dir()
+        && let Ok(entries) = fs::read_dir(path)
+    {
+        let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for child in paths {
+            hasher.update(child.to_string_lossy().as_bytes());
+            hash_path_contents(hasher, &child);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,8 @@
 
 use crate::error::{Error, Result};
 use petgraph::algo::toposort;
+use petgraph::visit::{Bfs, Reversed};
+use std::collections::HashSet;
 
 use super::Bridge;
 
@@ -26,27 +28,103 @@ impl Bridge {
         Ok(order)
     }
 
+    /// Nodes reachable from `roots` along dependency edges.
+    ///
+    /// Edges point dep -> dependent, so following them yields dependents and
+    /// following them reversed yields dependencies. Roots are included.
+    fn reachable(&self, roots: &[String], dependents: bool) -> HashSet<String> {
+        let mut set = HashSet::new();
+        for root in roots {
+            let Some(start) = self
+                .graph
+                .node_indices()
+                .find(|&n| self.graph[n] == *root)
+            else {
+                continue;
+            };
+            if dependents {
+                let mut bfs = Bfs::new(&self.graph, start);
+                while let Some(node) = bfs.next(&self.graph) {
+                    set.insert(self.graph[node].clone());
+                }
+            } else {
+                let reversed = Reversed(&self.graph);
+                let mut bfs = Bfs::new(&reversed, start);
+                while let Some(node) = bfs.next(&reversed) {
+                    set.insert(self.graph[node].clone());
+                }
+            }
+        }
+        set
+    }
+
+    /// Expand a target selector into service names: ALL, a tag carried by
+    /// one or more jails, an exact service/full name, or a unique prefix.
+    fn expand_selector(&self, selector: &str) -> Result<Vec<String>> {
+        if selector.eq_ignore_ascii_case("all") {
+            return Ok(self.config.jails.iter().map(|j| j.name.clone()).collect());
+        }
+
+        let tagged: Vec<String> = self
+            .config
+            .jails
+            .iter()
+            .filter(|j| j.tags.iter().any(|t| t == selector))
+            .map(|j| j.name.clone())
+            .collect();
+        if !tagged.is_empty() {
+            return Ok(tagged);
+        }
+
+        let (service_name, _) = self.resolve_jail_names(selector)?;
+        Ok(vec![service_name])
+    }
+
     /// Get all dependencies of a jail (including the jail itself)
     pub(super) fn get_dependencies(&self, name: &str) -> Result<Vec<&str>> {
-        let (service_name, _full_name) = self.resolve_jail_names(name)?;
-        let order = self.start_order()?;
-        let idx = order
-            .iter()
-            .position(|n| *n == service_name)
-            .ok_or_else(|| Error::JailNotFound(name.to_string()))?;
-
-        Ok(order[..=idx].to_vec())
+        let roots = self.expand_selector(name)?;
+        let set = self.reachable(&roots, false);
+        Ok(self
+            .start_order()?
+            .into_iter()
+            .filter(|n| set.contains(*n))
+            .collect())
     }
 
     /// Get all dependents of a jail (including the jail itself)
     pub(super) fn get_dependents(&self, name: &str) -> Result<Vec<&str>> {
-        let (service_name, _full_name) = self.resolve_jail_names(name)?;
-        let order = self.stop_order()?;
-        let idx = order
-            .iter()
-            .position(|n| *n == service_name)
-            .ok_or_else(|| Error::JailNotFound(name.to_string()))?;
+        let roots = self.expand_selector(name)?;
+        let set = self.reachable(&roots, true);
+        Ok(self
+            .stop_order()?
+            .into_iter()
+            .filter(|n| set.contains(*n))
+            .collect())
+    }
 
-        Ok(order[..=idx].to_vec())
+    /// Ordered list of jails to bring up (selector + its deps, or all in start order)
+    pub(super) fn jails_for_up(&self, jail: Option<&str>) -> Result<Vec<String>> {
+        if let Some(name) = jail {
+            Ok(self
+                .get_dependencies(name)?
+                .into_iter()
+                .map(String::from)
+                .collect())
+        } else {
+            Ok(self.start_order()?.into_iter().map(String::from).collect())
+        }
+    }
+
+    /// Ordered list of jails to bring down (selector + its dependents, or all in stop order)
+    pub(super) fn jails_for_down(&self, jail: Option<&str>) -> Result<Vec<String>> {
+        if let Some(name) = jail {
+            Ok(self
+                .get_dependents(name)?
+                .into_iter()
+                .map(String::from)
+                .collect())
+        } else {
+            Ok(self.stop_order()?.into_iter().map(String::from).collect())
+        }
     }
 }

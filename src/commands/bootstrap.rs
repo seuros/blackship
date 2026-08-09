@@ -11,8 +11,14 @@ pub fn handle_bootstrap(
     release: String,
     force: bool,
     archives: Option<Vec<String>>,
+    pkgbase: bool,
 ) -> Result<()> {
-    let config = manifest::load(config_path)?;
+    // FreeBSD 16 dropped distribution sets: pkgbase is the only path.
+    let pkgbase = pkgbase
+        || crate::sys::OsVersion::parse(&release)
+            .map(|v| v.requires_pkgbase())
+            .unwrap_or(false);
+    let config = manifest::load_or_default(config_path)?;
     let mut bs = provision::Provisioner::from_config(&config.config)?;
 
     if let Some(archives) = archives {
@@ -25,8 +31,67 @@ pub fn handle_bootstrap(
         )?;
     }
 
-    bs.bootstrap(&release, force)?;
+    // With ZFS the release extracts into its own dataset so jails can be
+    // clone-provisioned from a @pristine snapshot afterwards.
+    let zfs = release_zfs(&config);
+    let release_path = config.config.releases_dir.join(&release);
+    let mut dataset_backed = false;
+    if let Some(zfs) = &zfs {
+        if zfs.release_dataset_exists(&release)? {
+            dataset_backed = true;
+        } else if !release_path.exists() {
+            zfs.create_release_dataset(&release, &release_path)?;
+            dataset_backed = true;
+        } else if force {
+            // Legacy plain-dir release: replace it with a dataset so it
+            // becomes clone-ready. --force re-extracts anyway.
+            // Base userlands carry schg-flagged files; strip them first.
+            let _ = std::process::Command::new("/bin/chflags")
+                .args(["-R", "noschg"])
+                .arg(&release_path)
+                .status();
+            std::fs::remove_dir_all(&release_path).map_err(|e| {
+                crate::error::Error::Zfs(format!(
+                    "Failed to remove legacy release dir '{}': {}",
+                    release_path.display(),
+                    e
+                ))
+            })?;
+            zfs.create_release_dataset(&release, &release_path)?;
+            dataset_backed = true;
+        } else {
+            println!(
+                "Release '{}' is a plain directory; re-run with --force to make it clone-ready.",
+                release
+            );
+        }
+    }
+
+    if pkgbase {
+        bs.bootstrap_pkgbase(&release, force)?;
+    } else {
+        bs.bootstrap(&release, force)?;
+    }
+
+    if dataset_backed && let Some(zfs) = &zfs {
+        zfs.snapshot_release_pristine(&release)?;
+        println!("Release '{}' is clone-ready (@pristine).", release);
+    }
     Ok(())
+}
+
+/// ZFS manager for release datasets, when ZFS is enabled and usable
+pub(crate) fn release_zfs(config: &manifest::BlackshipConfig) -> Option<crate::zfs::ZfsManager> {
+    if !config.config.zfs_enabled {
+        return None;
+    }
+    config.config.zpool.as_ref().map(|pool| {
+        crate::zfs::ZfsManager::new(
+            pool,
+            &config.config.dataset,
+            config.config.data_dir.join("jails"),
+        )
+    })
 }
 
 pub fn handle_releases(
@@ -34,7 +99,7 @@ pub fn handle_releases(
     action: Option<ReleasesAction>,
     json: bool,
 ) -> Result<()> {
-    let config = manifest::load(config_path)?;
+    let config = manifest::load_or_default(config_path)?;
     let bs = provision::Provisioner::from_config(&config.config)?;
 
     match action.unwrap_or(ReleasesAction::List) {
