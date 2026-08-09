@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/seuros/blackship/compare/blackship-v0.1.5...blackship-v0.1.6) (2026-08-09)
+
+
+### Features
+
+* netgraph VNET backend, ZFS clone provisioning, foreign imports, and hardening ([0163357](https://github.com/seuros/blackship/commit/01633572a5f0f369acd2e984ab1e554902012011))
+
 ## [0.1.5](https://github.com/seuros/blackship/compare/blackship-v0.1.4...blackship-v0.1.5) (2026-05-01)
 
 
