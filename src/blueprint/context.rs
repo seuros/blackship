@@ -8,6 +8,86 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Reject `path` if any existing directory component under `root` is a symlink.
+pub fn reject_symlink_ancestors(
+    root: &Path,
+    path: &Path,
+) -> std::result::Result<(), crate::error::Error> {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        if !current.exists() {
+            break; // Rest of path doesn't exist yet, safe
+        }
+        if let Ok(meta) = std::fs::symlink_metadata(&current)
+            && meta.file_type().is_symlink()
+        {
+            return Err(crate::error::Error::BuildFailed {
+                step: "path".to_string(),
+                message: format!(
+                    "Path component '{}' is a symlink, which could escape the jail root",
+                    current.display()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Reject a build target path that is itself a pre-existing symlink.
+pub fn reject_symlink_target(target_path: &Path) -> std::result::Result<(), crate::error::Error> {
+    if let Ok(meta) = std::fs::symlink_metadata(target_path)
+        && meta.file_type().is_symlink()
+    {
+        return Err(crate::error::Error::BuildFailed {
+            step: "FROM".to_string(),
+            message: format!(
+                "Build target path '{}' is a symlink, refusing to use it",
+                target_path.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Reject any `..` component; `boundary` names what the path could escape.
+fn reject_parent_components(
+    path: &Path,
+    original: &str,
+    boundary: &str,
+) -> std::result::Result<(), crate::error::Error> {
+    for component in path.components() {
+        if component == std::path::Component::ParentDir {
+            return Err(crate::error::Error::BuildFailed {
+                step: "path".to_string(),
+                message: format!(
+                    "Path '{}' contains '..' which could escape the {}",
+                    original, boundary
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Canonicalize a path; `what` labels it in the error message.
+fn canonicalize_or_fail(
+    path: &Path,
+    what: &str,
+) -> std::result::Result<PathBuf, crate::error::Error> {
+    path.canonicalize()
+        .map_err(|e| crate::error::Error::BuildFailed {
+            step: "path".to_string(),
+            message: format!(
+                "Failed to canonicalize {} '{}': {}",
+                what,
+                path.display(),
+                e
+            ),
+        })
+}
+
 /// Build context for template execution
 #[derive(Debug)]
 pub struct BuildContext {
@@ -78,8 +158,7 @@ impl BuildContext {
         &self.workdir
     }
 
-    /// Get the context directory (_unused: future feature)
-    #[allow(dead_code)]
+    /// Get the context directory
     pub fn context_dir(&self) -> &Path {
         &self.context_dir
     }
@@ -99,17 +178,44 @@ impl BuildContext {
         self.verbose
     }
 
-    /// Resolve a source path relative to context directory
-    pub fn resolve_source(&self, src: &str) -> PathBuf {
+    /// Resolve a source path against the context dir; rejects absolute and `..` paths.
+    pub fn resolve_source(&self, src: &str) -> std::result::Result<PathBuf, crate::error::Error> {
         if Path::new(src).is_absolute() {
-            PathBuf::from(src)
-        } else {
-            self.context_dir.join(src)
+            return Err(crate::error::Error::BuildFailed {
+                step: "path".to_string(),
+                message: format!(
+                    "Absolute source path '{}' is not allowed; use a path relative to the build context",
+                    src
+                ),
+            });
         }
+
+        let joined = self.context_dir.join(src);
+
+        reject_parent_components(Path::new(src), src, "build context")?;
+
+        // Defense-in-depth: canonicalize existing paths to catch symlinks leaving the context.
+        if joined.exists() {
+            let canonical = canonicalize_or_fail(&joined, "source path")?;
+            let canonical_context = canonicalize_or_fail(&self.context_dir, "context directory")?;
+            if !canonical.starts_with(&canonical_context) {
+                return Err(crate::error::Error::BuildFailed {
+                    step: "path".to_string(),
+                    message: format!(
+                        "Source path '{}' resolves to '{}' which is outside the build context '{}'",
+                        src,
+                        canonical.display(),
+                        canonical_context.display()
+                    ),
+                });
+            }
+        }
+
+        Ok(joined)
     }
 
-    /// Resolve a destination path relative to target jail
-    pub fn resolve_dest(&self, dest: &str) -> PathBuf {
+    /// Resolve a destination path against the target jail; rejects `..` traversal.
+    pub fn resolve_dest(&self, dest: &str) -> std::result::Result<PathBuf, crate::error::Error> {
         let path = if Path::new(dest).is_absolute() {
             PathBuf::from(dest)
         } else {
@@ -118,7 +224,58 @@ impl BuildContext {
 
         // Make it relative to target path by stripping leading /
         let relative = path.strip_prefix("/").unwrap_or(&path);
-        self.target_path.join(relative)
+
+        reject_parent_components(relative, dest, "jail root")?;
+
+        let joined = self.target_path.join(relative);
+
+        // Only checkable when the path exists on disk: real builds, not unit tests.
+        if self.target_path.exists() {
+            let canonical_target = canonicalize_or_fail(&self.target_path, "target path")?;
+
+            if joined.exists() {
+                let canonical = canonicalize_or_fail(&joined, "dest path")?;
+                if !canonical.starts_with(&canonical_target) {
+                    return Err(crate::error::Error::BuildFailed {
+                        step: "path".to_string(),
+                        message: format!(
+                            "Destination '{}' resolves to '{}' which is outside the jail root '{}'",
+                            dest,
+                            canonical.display(),
+                            canonical_target.display()
+                        ),
+                    });
+                }
+            } else {
+                let mut ancestor = joined.as_path();
+                loop {
+                    match ancestor.parent() {
+                        Some(parent) if parent.exists() => {
+                            let canonical_ancestor = canonicalize_or_fail(parent, "ancestor")?;
+                            if !canonical_ancestor.starts_with(&canonical_target) {
+                                return Err(crate::error::Error::BuildFailed {
+                                    step: "path".to_string(),
+                                    message: format!(
+                                        "Destination '{}' has ancestor '{}' resolving to '{}' which is outside the jail root '{}'",
+                                        dest,
+                                        parent.display(),
+                                        canonical_ancestor.display(),
+                                        canonical_target.display()
+                                    ),
+                                });
+                            }
+                            break;
+                        }
+                        Some(parent) => {
+                            ancestor = parent;
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+
+        Ok(joined)
     }
 
     /// Substitute variables in a string
@@ -129,18 +286,22 @@ impl BuildContext {
     /// - ${JAIL_NAME} - Current jail name
     /// - ${WORKDIR} - Current working directory
     pub fn substitute(&self, input: &str) -> String {
+        fn apply_var(mut s: String, name: &str, value: &str) -> String {
+            s = s.replace(&format!("${{{}}}", name), value);
+            s = s.replace(&format!("${}", name), value);
+            s
+        }
+
         let mut result = input.to_string();
 
         // Replace build args
         for (name, value) in &self.args {
-            result = result.replace(&format!("${{{}}}", name), value);
-            result = result.replace(&format!("${}", name), value);
+            result = apply_var(result, name, value);
         }
 
         // Replace environment variables
         for (name, value) in &self.env {
-            result = result.replace(&format!("${{{}}}", name), value);
-            result = result.replace(&format!("${}", name), value);
+            result = apply_var(result, name, value);
         }
 
         // Replace built-in variables
@@ -197,14 +358,38 @@ mod tests {
         );
 
         assert_eq!(
-            ctx.resolve_source("nginx.conf"),
+            ctx.resolve_source("nginx.conf").unwrap(),
             PathBuf::from("/build/context/nginx.conf")
         );
 
         assert_eq!(
-            ctx.resolve_dest("/etc/nginx/nginx.conf"),
+            ctx.resolve_dest("/etc/nginx/nginx.conf").unwrap(),
             PathBuf::from("/jails/test/etc/nginx/nginx.conf")
         );
+    }
+
+    #[test]
+    fn test_resolve_source_rejects_absolute_path() {
+        let ctx = BuildContext::new(
+            Path::new("/build/context"),
+            Path::new("/jails/test"),
+            "test",
+        );
+
+        let result = ctx.resolve_source("/etc/passwd");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_source_rejects_parent_dir() {
+        let ctx = BuildContext::new(
+            Path::new("/build/context"),
+            Path::new("/jails/test"),
+            "test",
+        );
+
+        let result = ctx.resolve_source("../../../etc/passwd");
+        assert!(result.is_err());
     }
 
     #[test]
@@ -218,7 +403,7 @@ mod tests {
 
         // Relative dest should use workdir
         assert_eq!(
-            ctx.resolve_dest("bin/app"),
+            ctx.resolve_dest("bin/app").unwrap(),
             PathBuf::from("/jails/test/usr/local/bin/app")
         );
     }

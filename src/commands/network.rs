@@ -2,6 +2,7 @@
 
 use crate::cli::NetworkAction;
 use crate::error::Result;
+use crate::network::netgraph::NgBridge;
 use crate::{error, manifest, network};
 
 pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction) -> Result<()> {
@@ -17,6 +18,7 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
             subnet,
             gateway,
             bridge,
+            backend,
         } => {
             let subnet: IpNet = subnet
                 .parse()
@@ -36,11 +38,13 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
                 IpPool::new(subnet)?.gateway()
             };
 
-            let record = NetworkRecord {
+            let mut record = NetworkRecord {
                 name: name.clone(),
                 bridge: bridge.clone(),
                 subnet: subnet.to_string(),
                 gateway: gateway_ip.to_string(),
+                backend,
+                host_iface: None,
             };
 
             if let Some(config) = config
@@ -68,33 +72,35 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
                 }
             }
 
-            let br = Bridge::create(&bridge)?;
-
-            let gateway_with_prefix = format!("{}/{}", gateway_ip, subnet.prefix_len());
-            if let Err(err) = br.set_address(&gateway_with_prefix) {
-                return Err(rollback_bridge(&bridge, err));
-            }
+            network::ensure::ensure_network(&mut record)?;
 
             if let Err(err) = store.create(&record) {
-                return Err(rollback_bridge(&bridge, err));
+                let _ = network::bridge::destroy_bridge(&bridge, true);
+                return Err(err);
             }
 
-            println!("Created network '{}' on bridge '{}'", name, bridge);
+            println!(
+                "Created network '{}' on bridge '{}' ({})",
+                name, bridge, record.backend
+            );
             println!("  Subnet: {}", subnet);
             println!("  Gateway: {}", gateway_ip);
+            if let Some(host_iface) = &record.host_iface {
+                println!("  Host gateway interface: {}", host_iface);
+            }
         }
         NetworkAction::Destroy { name, force } => {
             let record = store
                 .get(&name)?
                 .ok_or_else(|| error::Error::NetworkNotFound(name.clone()))?;
 
-            if Bridge::exists(&record.bridge)? {
-                destroy_bridge(&record.bridge, force)?;
-            } else if !force {
-                return Err(error::Error::Network(format!(
-                    "Network '{}' points to missing bridge '{}'. Use --force to remove stale metadata.",
-                    record.name, record.bridge
-                )));
+            // destroy_bridge handles both if_bridge and ng_bridge backends.
+            match destroy_bridge(&record.bridge, force) {
+                Ok(()) => {}
+                Err(error::Error::InterfaceNotFound(_)) if force => {
+                    // Bridge already gone - force flag allows removing stale metadata.
+                }
+                Err(e) => return Err(e),
             }
 
             store.delete(&name)?;
@@ -107,14 +113,33 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
             } else {
                 println!("Networks:");
                 for network in networks {
-                    let status = if Bridge::exists(&network.bridge)? {
-                        "active"
-                    } else {
-                        "missing-bridge"
+                    // NgBridge::open needs a control socket (root); the host
+                    // eiface's ifnet is visible to everyone, so check that.
+                    let alive = match network.backend.as_str() {
+                        "netgraph" => network
+                            .host_iface
+                            .as_deref()
+                            .map(network::ioctl::interface_exists)
+                            .transpose()?
+                            .unwrap_or(false)
+                            || NgBridge::open(&network.bridge).is_ok(),
+                        _ => Bridge::exists(&network.bridge)?,
                     };
+                    let status = if alive { "active" } else { "missing-bridge" };
+                    let host_iface = network
+                        .host_iface
+                        .as_deref()
+                        .map(|i| format!(" host_iface={}", i))
+                        .unwrap_or_default();
                     println!(
-                        "  {}: bridge={} subnet={} gateway={} status={}",
-                        network.name, network.bridge, network.subnet, network.gateway, status
+                        "  {}: bridge={} backend={} subnet={} gateway={}{} status={}",
+                        network.name,
+                        network.bridge,
+                        network.backend,
+                        network.subnet,
+                        network.gateway,
+                        host_iface,
+                        status
                     );
                 }
             }
@@ -122,14 +147,4 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
     }
 
     Ok(())
-}
-
-fn rollback_bridge(bridge: &str, err: error::Error) -> error::Error {
-    match network::bridge::Bridge::open(bridge).and_then(|br| br.destroy()) {
-        Ok(()) => err,
-        Err(cleanup_err) => error::Error::Network(format!(
-            "{} (cleanup of bridge '{}' also failed: {})",
-            err, bridge, cleanup_err
-        )),
-    }
 }

@@ -4,14 +4,18 @@ A FreeBSD jail orchestrator with TOML configuration, dependency management, stat
 
 ## Features
 
-- **Declarative Configuration**: Define jails in TOML with dependencies, networking, and hooks
-- **Dependency Management**: Automatically start/stop jails in correct order using dependency graph
-- **State Machine Lifecycle**: Clean state transitions (stopped → starting → running → stopping)
-- **VNET Networking**: Bridge-based networking with epair interfaces, static IPs, and MAC addresses
-- **ZFS Integration**: Automatic dataset creation, snapshots, clones, and efficient export/import
-- **Jailfile Templates**: Docker-like build system for reproducible jail creation
-- **Health Checks**: HTTP, TCP, and command-based health monitoring
-- **Lifecycle Hooks**: Run scripts at start/stop with configurable failure handling
+- **Declarative Configuration**: Define jails in TOML with dependencies, networking, hooks, and resource limits
+- **Dependency Management**: Real dependency-graph traversal for start/stop ordering; target jails by name, unambiguous prefix, tag, or ALL
+- **State Machine Lifecycle**: Clean state transitions, devfs mounted per jail, /etc/rc boot and /etc/rc.shutdown on stop
+- **VNET Networking**: epair (if_bridge) and native netgraph (ng_bridge) backends, named networks with automatic host gateway wiring, deterministic MAC addresses
+- **Instant Provisioning**: releases bootstrap into datasets with a @pristine snapshot; jail roots are zfs clones, created in under a second
+- **Jailfile Builds with Layer Cache**: every RUN/COPY is snapshotted; rebuilds resume from the longest cached prefix like a Docker layer cache
+- **blackship commit**: freeze a configured jail into a reusable release (zero-copy snapshot + clone + promote)
+- **pkgbase Bootstrap**: FreeBSD 16+ userlands from fingerprint-verified base package repos (automatic; --pkgbase opts in earlier)
+- **Resource Limits**: rctl (memory, pcpu, maxproc, openfiles, ...) plus cpuset pinning with least-loaded core allocation
+- **Health Checks & Supervision**: HTTP, TCP, and command checks; warden auto-restart; optional dead-man ping to healthchecks.io/Uptime Kuma
+- **Migration & Import**: zfs send | ssh zfs receive between hosts with the jail definition staged inside the dataset; import from iocage, ezjail, or plain rootfs archives
+- **Stats**: per-jail CPU, RSS, and process counts from jls/ps libxo JSON
 - **Port Forwarding**: PF-based port exposure with source IP binding
 - **Shell Completion**: Bash, Zsh, and Fish completions
 
@@ -20,6 +24,12 @@ A FreeBSD jail orchestrator with TOML configuration, dependency management, stat
 - FreeBSD 15.0+ with jail support
 - ZFS (optional, for snapshots/clones)
 - PF (optional, for port forwarding)
+
+Building from source also needs a C compiler and the base system headers:
+the ioctl request codes and netgraph message constants are read out of
+`/usr/include` at build time rather than hardcoded. Both ship with a
+default FreeBSD install. The crate does not build on other operating
+systems.
 
 ## Installation
 
@@ -68,7 +78,7 @@ cache_dir = "/var/blackship/cache"
 blackship init
 
 # Create with specific FreeBSD release
-blackship init --release 15.0-RELEASE
+blackship init --release 15.1-RELEASE
 
 # TOML format instead of Dockerfile-like
 blackship init --toml
@@ -89,7 +99,7 @@ dataset = "blackship"
 
 [[jails]]
 name = "web"
-release = "15.0-RELEASE"
+release = "15.1-RELEASE"
 hostname = "web.local"
 
 [jails.network]
@@ -105,11 +115,14 @@ Or use `blackship armada init` to generate a template.
 ### 3. Bootstrap a Release
 
 ```sh
-# Download and extract FreeBSD base (requires root for extraction)
-blackship bootstrap 15.0-RELEASE
+# Download and extract FreeBSD base (requires root for extraction).
+# With ZFS enabled the release lands in its own dataset with a @pristine
+# snapshot, so jails clone-provision from it instantly.
+blackship bootstrap 15.1-RELEASE
 
-# Dry run to see what would be downloaded
-blackship bootstrap 15.0-RELEASE --dry-run
+# FreeBSD 16 has no dist sets, so pkgbase is used automatically
+# (16.0 is still -CURRENT; --pkgbase opts in on older branches)
+blackship bootstrap 16.0-CURRENT
 
 # List available releases
 blackship releases
@@ -118,13 +131,18 @@ blackship releases
 ### 4. Create Network
 
 ```sh
-# Create bridge with gateway (requires root)
+# if_bridge network with gateway on the bridge (requires root)
 blackship network create default --subnet 10.0.1.0/24 --gateway 10.0.1.1 --bridge blackship0
+
+# netgraph network: ng_bridge plus a host-side gateway eiface, wired
+# automatically; jails attached to it inherit the netgraph backend
+blackship network create default --subnet 10.0.1.0/24 --backend netgraph --bridge ngbridge0
 ```
 
-Creating or destroying a network requires root because Blackship creates and
-configures a FreeBSD bridge interface on the host. Blackship will re-exec
-through `sudo` or `doas` if needed.
+Networks persist across reboots: `blackship setup` (run by the warden rc
+script at boot) recreates missing bridges and gateway interfaces. If PF is
+not running yet, `blackship setup --enable-pf` writes a minimal pf.conf with
+the blackship anchors, sets `pf_enable=YES`, and starts it.
 
 Named networks created this way can be referenced from `blackship.toml` with
 `[jails.network] networks = ["default"]`, and the same network can be used by
@@ -171,17 +189,31 @@ mirror_url = "https://download.freebsd.org"  # FreeBSD mirror
 zfs_enabled = true                         # Enable ZFS features
 zpool = "zroot"                            # ZFS pool name
 dataset = "blackship"                      # Base dataset name
+monitor_ping_url = "https://hc-ping.com/…"  # Dead-man ping from the supervisor (optional)
 ```
+
+With ZFS enabled the jails dataset is mounted at `data_dir/jails`, so jail
+roots live at the same paths whether or not they are datasets.
 
 ### Jail Definition
 
 ```toml
 [[jails]]
 name = "myapp"                        # Jail name (required)
-release = "15.0-RELEASE"              # Base release
-path = "/jails/myapp"                 # Custom path (optional)
+release = "15.1-RELEASE"              # Base release (clone-provisioned when @pristine exists)
+path = "/jails/myapp"                 # Custom path (optional; default data_dir/jails/<name>)
 hostname = "myapp.local"              # Hostname
 depends_on = ["database"]             # Dependencies
+tags = ["web", "prod"]                # Tags for group targeting (blackship down prod)
+devfs_ruleset = 4                     # devfs ruleset (default 4; 0 disables devfs)
+init = true                           # Run /etc/rc at start, /etc/rc.shutdown at stop (default)
+
+[jails.resources]
+memory = "1g"                         # rctl memoryuse:deny
+cpu = "150"                           # rctl pcpu:deny (percent)
+maxproc = 200                         # rctl maxproc:deny
+cores = 2                             # Pin to N least-loaded CPUs
+# cpuset = "0,1"                      # Or pin to an explicit CPU list
 
 [jails.network]
 vnet = true                           # Enable VNET
@@ -189,7 +221,8 @@ networks = ["default"]                # Named networks to attach to
 bridge = "blackship0"                 # Optional if runtime network state defines a bridge
 ip = "10.0.1.10"                      # Static IP, or omit for auto-assignment
 gateway = "10.0.1.1"                  # Optional if resolved from named network
-mac_address = "02:00:00:00:00:01"     # Static MAC (optional)
+mac_address = "02:00:00:00:00:01"     # Static MAC (default: deterministic from jail name)
+# backend = "netgraph"                # Inherited from the named network when omitted
 
 [jails.network.dns]
 nameservers = ["8.8.8.8", "8.8.4.4"]  # DNS servers
@@ -230,12 +263,15 @@ on_failure = "continue"
 
 | Command | Description |
 |---------|-------------|
-| `blackship up [jail] [--all] [--dry-run]` | Start jail(s) with dependencies |
-| `blackship down [jail] [--all] [--dry-run]` | Stop jail(s) in reverse order |
-| `blackship restart [jail] [--all] [--dry-run]` | Restart jail(s) |
+| `blackship up [target] [--all] [--dry-run]` | Start jail(s) with dependencies |
+| `blackship down [target] [--all] [--dry-run]` | Stop jail(s) in reverse order |
+| `blackship restart [target] [--all] [--dry-run]` | Restart jail(s) |
+
+Targets accept a jail name, an unambiguous prefix, a tag (from `tags = [...]`
+in the jail definition), or `ALL`.
 | `blackship ps [--json]` | List jail status |
 | `blackship check` | Validate configuration |
-| `blackship setup` | Initialize PF firewall anchor and reapply persisted forwards |
+| `blackship setup [--enable-pf]` | Reapply networks and PF anchors; --enable-pf turns PF on |
 | `blackship cleanup <jail> [--force]` | Clean up failed jail resources |
 | `blackship init [-f file] [--release] [--toml]` | Create a new Jailfile |
 
@@ -258,14 +294,14 @@ on_failure = "continue"
 
 | Command | Description |
 |---------|-------------|
-| `blackship bootstrap <release> [-f] [-a archives]` | Download FreeBSD release |
+| `blackship bootstrap <release> [-f] [-a archives] [--pkgbase]` | Download FreeBSD release (pkgbase automatic for 16+) |
 | `blackship releases [list\|delete\|verify] [--json]` | Manage releases |
 
 ### Networking
 
 | Command | Description |
 |---------|-------------|
-| `blackship network create <name> -s <subnet> [-g gw] [-b bridge]` | Create network (requires root) |
+| `blackship network create <name> -s <subnet> [-g gw] [-b bridge] [--backend epair\|netgraph]` | Create network (requires root) |
 | `blackship network destroy <name> [--force]` | Destroy network (requires root) |
 | `blackship network list` | List Blackship-managed networks |
 | `blackship expose <jail> -p <port> [-I bind-ip] [--proto tcp\|udp]` | Expose port |
@@ -280,6 +316,10 @@ on_failure = "continue"
 | `blackship snapshot rollback <jail> <snap> [--force]` | Rollback to snapshot |
 | `blackship snapshot delete <jail> <snap>` | Delete snapshot |
 | `blackship clone <jail>@<snap> <newname>` | Clone from snapshot |
+| `blackship commit <jail> <release>` | Freeze a jail into a reusable release (zero-copy) |
+
+Snapshots (and commits) stage the jail definition at `.blackship/` inside
+the dataset, so `zfs send` carries everything needed to rebuild the jail.
 
 ### Export & Import
 
@@ -287,12 +327,14 @@ on_failure = "continue"
 |---------|-------------|
 | `blackship export <jail> [-o file] [--zfs-send]` | Export to archive |
 | `blackship import <file> [-n name] [--force]` | Import from archive |
+| `blackship import <file> --from iocage\|ezjail\|rootfs\|auto [-n name]` | Import from another jail manager |
+| `blackship migrate <jail> user@host [--remote-dataset ds]` | Move a jail to another host over ssh |
 
 ### Build System
 
 | Command | Description |
 |---------|-------------|
-| `blackship build [-f Jailfile] [-n name] [--build-arg K=V] [--dry-run]` | Build from Jailfile |
+| `blackship build [-f Jailfile] [-n name] [--build-arg K=V] [--dry-run]` | Build from Jailfile (ZFS layer cache: unchanged steps print CACHED) |
 | `blackship template list` | List templates |
 | `blackship template inspect <file>` | Show Jailfile details |
 | `blackship template validate <file>` | Validate Jailfile |
@@ -302,6 +344,7 @@ on_failure = "continue"
 | Command | Description |
 |---------|-------------|
 | `blackship health [jail] [-w] [-i interval] [--json]` | Health check status |
+| `blackship stats [jail] [--json]` | Per-jail CPU, RSS, and process counts |
 | `blackship supervise` | Start Warden supervisor for auto-restart |
 | `blackship logs <jail> [-f] [-n lines]` | Tail jail logs |
 
@@ -355,10 +398,10 @@ Jailfiles define reproducible jail builds, similar to Dockerfiles:
 
 ```dockerfile
 # Jailfile
-FROM 15.0-RELEASE
+FROM 15.1-RELEASE
 
-# Metadata
-METADATA name=nginx-jail version=1.0
+# Labels (metadata)
+LABEL name=nginx-jail version=1.0
 
 # Build arguments
 ARG NGINX_VERSION=1.24
@@ -393,7 +436,7 @@ CMD /usr/local/sbin/nginx -g 'daemon off;'
 name = "nginx-jail"
 version = "1.0"
 
-from = "15.0-RELEASE"
+from = "15.1-RELEASE"
 
 [[args]]
 name = "NGINX_VERSION"
@@ -430,13 +473,59 @@ blackship build -f Jailfile --dry-run
 
 ## ZFS Integration
 
-When `zfs_enabled = true`, Blackship:
+ZFS is what makes jails cheap. With `zfs_enabled = true`:
 
-1. Creates datasets automatically: `zpool/blackship/jails/<name>`
-2. Enables snapshots and clones
-3. Supports ZFS send/receive for fast export/import
+1. Releases bootstrap into their own dataset and get a `@pristine` snapshot
+2. Jail roots are `zfs clone`s of that snapshot, so creation is near-instant
+   and jails share the base blocks instead of copying them
+3. Jailfile builds snapshot each step, giving rebuilds a layer cache
+4. `blackship commit` freezes a jail back into a reusable release
+5. Snapshots carry the jail's own definition, and send/receive moves jails
+   between hosts
+
+The jails dataset is mounted at `data_dir/jails`, so a jail root is at the
+same path whether or not it is a dataset. Without ZFS everything still works,
+but each jail is a full copy of the release (Blackship refuses the copy if the
+filesystem cannot take it).
+
+### Instant provisioning and commit
+
+```sh
+# Bootstrap once: extracts to a dataset, snapshots it @pristine
+blackship bootstrap 15.1-RELEASE
+
+# Jails clone from it: sub-second, and nearly free on disk
+blackship up web
+
+# Configure a jail, then freeze it into a reusable release
+blackship build -f Jailfile -n runner
+blackship commit runner runner-golden
+
+# Everything cloned from it starts pre-configured
+blackship run --name ci-1 --release runner-golden -- ./run-tests.sh
+```
+
+### Build layer cache
+
+Every `RUN` and `COPY` is snapshotted as `bs-layer-<n>-<hash>`, keyed by a
+rolling hash of the instructions before it, the build arguments, the base
+release, and the contents of anything copied in. A rebuild rolls back to the
+longest cached prefix and continues from there:
+
+```
+$ blackship build -f runner/Jailfile -n runner
+CACHED steps 1-5 (layer bs-layer-4-a1aadc5d826c)
+Build complete! Jail root: /var/blackship/jails/armada-runner
+```
+
+Change a line in the Jailfile and only that step and everything after it
+re-runs, exactly like a Docker layer cache.
 
 ### Snapshot Workflow
+
+Snapshots stage the jail's definition (and its Jailfile, when known) at
+`.blackship/` inside the dataset first, so a `zfs send` of the snapshot
+carries everything needed to rebuild the jail elsewhere.
 
 ```sh
 # Create snapshot before changes
@@ -465,20 +554,110 @@ blackship export web -o web-backup.tar.zst
 
 # Import (auto-detects format)
 blackship import web-backup.tar.zst --name web-restored
+
+# Import from another jail manager
+blackship import old-jail.zip --from iocage --name legacy
+
+# Move a stopped jail to another host over ssh
+blackship migrate web seuros@otherbox
 ```
 
 ## Networking
 
-### VNET Setup
+Every VNET jail gets its own network stack and one interface plugged into a
+host bridge. Blackship implements that two ways, and a *named network* picks
+which one:
 
-Blackship uses VNET jails with epair interfaces connected to a bridge:
+| | `epair` (default) | `netgraph` |
+|---|---|---|
+| Host bridge | `if_bridge` | `ng_bridge` node |
+| Jail interface | `if_epair` pair (`epair0a`/`epair0b`) | `ng_eiface` (`ngethN`) |
+| Gateway lives on | the bridge interface | a host-side `ng_eiface` |
+| VLAN tagging | supported | not supported |
+
+### Named networks
+
+A named network is a persisted record (subnet, gateway, bridge, backend), not
+a live interface. Creating one realizes it on the host; `blackship setup`
+re-realizes it after a reboot, when bridges and eifaces are gone but the
+record remains:
+
+```sh
+blackship network create default --subnet 10.0.1.0/24 --backend netgraph --bridge ngbridge0
+```
 
 ```
-Host Bridge (blackship0)
-├── epair0a ←→ epair0b (jail: web, 10.0.1.10)
-├── epair1a ←→ epair1b (jail: db, 10.0.1.11)
-└── gateway: 10.0.1.1
+Created network 'default' on bridge 'ngbridge0' (netgraph)
+  Subnet: 10.0.1.0/24
+  Gateway: 10.0.1.1
+  Host gateway interface: ngeth0
 ```
+
+Jails attach by name and inherit the backend, so nothing in the jail
+definition needs to know which dataplane is in use:
+
+```toml
+[jails.network]
+vnet = true
+networks = ["default"]
+ip = "10.0.1.10"
+```
+
+### How the netgraph backend is wired
+
+`ng_bridge` is a kernel graph node with numbered `linkN` hooks. Blackship
+hangs one `ng_eiface` off a hook per jail, plus one for the host itself,
+which is where the gateway address lives:
+
+```
+                          ng_bridge (ngbridge0)
+                          ├── link0 ── ng_eiface ngeth0   [host]  10.0.1.1
+                          ├── link1 ── ng_eiface ngeth1   [jail web]  10.0.1.10
+                          └── link2 ── ng_eiface ngeth2   [jail db]   10.0.1.11
+host NIC (em0) ── PF NAT ── routing ── ngeth0
+```
+
+There is no epair pair and no `if_bridge`: the jail interface is moved into
+the jail's vnet with `SIOCSIFVNET`, and traffic reaches the outside through
+normal host routing plus a NAT rule. Outbound therefore needs
+`net.inet.ip.forwarding=1` (Blackship sets it when it realizes a gateway) and
+a NAT rule for the subnet in `pf.conf`:
+
+```
+nat on $ext_if inet from 10.0.1.0/24 to any -> ($ext_if)
+```
+
+Concurrent jail creation is safe: two creators racing for the same free
+`linkN` retry the next index, and IP claims are arbitrated by the lease store
+under a lock rather than by whoever wrote last.
+
+### Interface ownership
+
+Host-side interfaces are tagged into the `blackship` interface group
+(`ifconfig -g blackship` lists them). Cleanup checks that tag before
+destroying an interface it found by name, so a recycled name belonging to
+something else is never torn down. Only the host end is tagged, because
+moving an interface into a vnet strips its groups.
+
+Jail interfaces also get a deterministic MAC by default: the FreeBSD OUI
+`58:9c:fc` plus a hash of the jail name and bridge, so an address survives
+restarts and differs between clones. Set `mac_address` to override.
+
+### Gotcha: one namespace, two bridge types
+
+Loading `ng_ether` gives every ethernet interface a netgraph node named after
+itself, and that includes `if_bridge` interfaces. A named network created
+with the epair backend on `blackship0` therefore occupies the name
+`blackship0` in the netgraph namespace too, and a netgraph bridge cannot then
+use it:
+
+```
+Error: Network error: NgNameNode(.:bridge_tmp, blackship0) failed: Address already in use
+```
+
+Give the two backends distinct bridge names (`blackship0` and `ngbridge0`).
+
+### Port Forwardingemains the default and is what most setups want.
 
 ### Port Forwarding
 
@@ -588,7 +767,7 @@ dataset = "blackship"
 
 [[jails]]
 name = "postgres"
-release = "15.0-RELEASE"
+release = "15.1-RELEASE"
 hostname = "db.local"
 [jails.network]
 vnet = true
@@ -598,7 +777,7 @@ gateway = "10.0.1.1"
 
 [[jails]]
 name = "redis"
-release = "15.0-RELEASE"
+release = "15.1-RELEASE"
 hostname = "cache.local"
 [jails.network]
 vnet = true
@@ -608,7 +787,7 @@ gateway = "10.0.1.1"
 
 [[jails]]
 name = "webapp"
-release = "15.0-RELEASE"
+release = "15.1-RELEASE"
 hostname = "app.local"
 depends_on = ["postgres", "redis"]
 [jails.network]
@@ -657,14 +836,14 @@ Blackship could be used as a backend for [Gitea Actions](https://docs.gitea.com/
 
 1. Bootstrap a release:
 ```sh
-blackship bootstrap 15.0-RELEASE
+blackship bootstrap 15.1-RELEASE
 ```
 
 2. Configure act_runner with jail labels:
 ```yaml
 runner:
   labels:
-    - "freebsd-15:jail://15.0-RELEASE"
+    - "freebsd-15:jail://15.1-RELEASE"
 ```
 
 3. Workflows targeting `runs-on: freebsd-15` would execute in ephemeral jails.
@@ -719,6 +898,34 @@ blackship snapshot list myjail
 # Manual cleanup
 zfs destroy -r zroot/blackship/jails/myjail
 ```
+
+### `blackship up` aborts where it used to warn
+
+Resource-limit and VNET-attach failures are fatal: the jail is removed and
+its resources are rolled back rather than left running in a half-configured
+state. A jail with `[jails.resources]` set will now fail on a host without
+RCTL instead of quietly ignoring its limits.
+
+`kern.racct.enable` is a read-only tunable, so it cannot be set at runtime.
+Add it to `/boot/loader.conf` and reboot:
+
+```
+kern.racct.enable="1"
+```
+
+### Rejected `params` entries
+
+Manifest `params` cannot override the keys Blackship uses to establish jail
+identity and isolation — `vnet`, `path`, `name`, `securelevel`,
+`devfs_ruleset`, `enforce_statfs`, `allow.*` and similar. Those are reported
+and ignored rather than applied. Set the supported options (`[jails.network]`,
+`[jails.resources]`) instead.
+
+### `ping` fails inside `blackship run`
+
+Ephemeral `run` jails are not granted `allow.raw_sockets`, `allow.socket_af`
+or `allow.chflags`. Use a managed jail defined in the manifest for workloads
+that need raw sockets or `chflags`.
 
 ## License
 

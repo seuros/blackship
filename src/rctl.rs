@@ -4,7 +4,7 @@
 //! Rule format: "jail:<name>:<resource>:<action>=<amount>"
 
 use crate::error::{Error, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // Syscall numbers from sys/syscall.h
 const SYS_RCTL_ADD_RULE: libc::c_int = 528;
@@ -12,7 +12,7 @@ const SYS_RCTL_REMOVE_RULE: libc::c_int = 529;
 const SYS_RCTL_GET_RACCT: libc::c_int = 525;
 
 /// Resource limit configuration for a jail
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ResourceConfig {
     /// Memory limit (e.g., "1g", "512m")
     pub memory: Option<String>,
@@ -28,6 +28,11 @@ pub struct ResourceConfig {
     pub openfiles: Option<u32>,
     /// Maximum swap usage
     pub swap: Option<String>,
+    /// Pin the jail to this many cores, chosen least-loaded across the
+    /// other jails' pins
+    pub cores: Option<u16>,
+    /// Pin the jail to an explicit CPU list (e.g., "0,1,2"); wins over cores
+    pub cpuset: Option<String>,
     /// Custom RCTL rules (advanced, raw format)
     #[serde(default)]
     pub rules: Vec<String>,
@@ -42,7 +47,21 @@ impl ResourceConfig {
             && self.maxthreads.is_none()
             && self.openfiles.is_none()
             && self.swap.is_none()
+            && self.cores.is_none()
+            && self.cpuset.is_none()
             && self.rules.is_empty()
+    }
+
+    /// True when only cpuset pinning is configured (no rctl rules needed)
+    pub fn has_rctl_rules(&self) -> bool {
+        self.memory.is_some()
+            || self.vmemory.is_some()
+            || self.cpu.is_some()
+            || self.maxproc.is_some()
+            || self.maxthreads.is_some()
+            || self.openfiles.is_some()
+            || self.swap.is_some()
+            || !self.rules.is_empty()
     }
 
     /// Convert to a list of RCTL rule strings for a given jail name
@@ -71,9 +90,16 @@ impl ResourceConfig {
             rules.push(format!("jail:{}:swapuse:deny={}", jail_name, swap));
         }
 
-        // Add raw custom rules
+        let own_prefix = format!("jail:{}:", jail_name);
         for rule in &self.rules {
             if rule.starts_with("jail:") {
+                if !rule.starts_with(&own_prefix) {
+                    eprintln!(
+                        "Warning: rejecting RCTL rule '{}' -- targets a different jail",
+                        rule
+                    );
+                    continue;
+                }
                 rules.push(rule.clone());
             } else {
                 // Prefix with jail subject if not already
@@ -85,10 +111,65 @@ impl ResourceConfig {
     }
 }
 
+/// Resolve the CPU list a jail should be pinned to.
+///
+/// Explicit `cpuset` wins. `cores = N` picks the N logical CPUs with the
+/// fewest explicit claims across the other jails' configs (least-loaded
+/// spreading), so co-hosted jails end up on different cores by default.
+pub fn resolve_cpu_list(
+    config: &ResourceConfig,
+    other_pins: impl Iterator<Item = String>,
+) -> Option<String> {
+    if let Some(list) = &config.cpuset {
+        return Some(list.clone());
+    }
+    let want = config.cores? as usize;
+    let ncpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    let ncpu = if ncpu > 0 { ncpu as usize } else { 1 };
+
+    let mut load = vec![0usize; ncpu];
+    for pin in other_pins {
+        for part in pin.split(',') {
+            if let Ok(core) = part.trim().parse::<usize>()
+                && core < ncpu
+            {
+                load[core] += 1;
+            }
+        }
+    }
+
+    let mut cores: Vec<usize> = (0..ncpu).collect();
+    cores.sort_by_key(|&c| (load[c], c));
+    cores.truncate(want.min(ncpu));
+    cores.sort();
+    Some(
+        cores
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+    )
+}
+
+/// Pin a running jail to a CPU list via cpuset(1)
+pub fn apply_cpuset(jid: i32, cpu_list: &str) -> Result<()> {
+    let status = std::process::Command::new("/usr/bin/cpuset")
+        .args(["-l", cpu_list, "-j", &jid.to_string()])
+        .status()
+        .map_err(|e| Error::Rctl(format!("Failed to run cpuset: {}", e)))?;
+    if !status.success() {
+        return Err(Error::Rctl(format!(
+            "cpuset -l {} -j {} failed",
+            cpu_list, jid
+        )));
+    }
+    Ok(())
+}
+
 /// Check if RCTL is enabled in the kernel
 pub fn is_enabled() -> bool {
     // Check kern.racct.enable sysctl
-    let output = std::process::Command::new("sysctl")
+    let output = std::process::Command::new("/sbin/sysctl")
         .args(["-n", "kern.racct.enable"])
         .output();
 
@@ -103,7 +184,8 @@ pub fn is_enabled() -> bool {
 
 /// Apply resource limits to a jail
 pub fn apply_limits(jail_name: &str, config: &ResourceConfig) -> Result<()> {
-    if config.is_empty() {
+    if !config.has_rctl_rules() {
+        // Pure cpuset pinning needs no rctl (and no RACCT).
         return Ok(());
     }
 
@@ -140,54 +222,43 @@ pub fn get_usage(jail_name: &str) -> Result<std::collections::HashMap<String, u6
     rctl_get_racct(&filter)
 }
 
-/// Add an RCTL rule via syscall
-fn rctl_add_rule(rule: &str) -> Result<()> {
-    let rule_bytes = rule.as_bytes();
+/// Invoke an RCTL syscall that takes a rule/filter string and no output buffer
+fn rctl_string_syscall(
+    syscall_num: libc::c_int,
+    arg: &str,
+    fail_msg: impl FnOnce(std::io::Error) -> String,
+) -> Result<()> {
+    let arg_bytes = arg.as_bytes();
 
     let ret = unsafe {
         libc::syscall(
-            SYS_RCTL_ADD_RULE,
-            rule_bytes.as_ptr() as *const libc::c_void,
-            rule_bytes.len(),
+            syscall_num,
+            arg_bytes.as_ptr() as *const libc::c_void,
+            arg_bytes.len(),
             std::ptr::null_mut::<libc::c_void>(),
             0usize,
         )
     };
 
     if ret != 0 {
-        return Err(Error::Rctl(format!(
-            "Failed to add rule '{}': {}",
-            rule,
-            std::io::Error::last_os_error()
-        )));
+        return Err(Error::Rctl(fail_msg(std::io::Error::last_os_error())));
     }
 
     Ok(())
 }
 
+/// Add an RCTL rule via syscall
+fn rctl_add_rule(rule: &str) -> Result<()> {
+    rctl_string_syscall(SYS_RCTL_ADD_RULE, rule, |e| {
+        format!("Failed to add rule '{}': {}", rule, e)
+    })
+}
+
 /// Remove RCTL rules matching a filter
 fn rctl_remove_rule(filter: &str) -> Result<()> {
-    let filter_bytes = filter.as_bytes();
-
-    let ret = unsafe {
-        libc::syscall(
-            SYS_RCTL_REMOVE_RULE,
-            filter_bytes.as_ptr() as *const libc::c_void,
-            filter_bytes.len(),
-            std::ptr::null_mut::<libc::c_void>(),
-            0usize,
-        )
-    };
-
-    if ret != 0 {
-        return Err(Error::Rctl(format!(
-            "Failed to remove rules for '{}': {}",
-            filter,
-            std::io::Error::last_os_error()
-        )));
-    }
-
-    Ok(())
+    rctl_string_syscall(SYS_RCTL_REMOVE_RULE, filter, |e| {
+        format!("Failed to remove rules for '{}': {}", filter, e)
+    })
 }
 
 /// Get resource accounting data for a subject

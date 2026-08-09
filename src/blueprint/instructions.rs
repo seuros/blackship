@@ -47,7 +47,8 @@ fn default_protocol() -> String {
 }
 
 impl ExposePort {
-    /// Create a TCP port exposure
+    /// Create a TCP port exposure (_unused: future feature)
+    #[allow(dead_code)]
     pub fn tcp(port: u16) -> Self {
         Self {
             port,
@@ -72,6 +73,10 @@ impl ExposePort {
             .get(1)
             .map(|s| s.to_string())
             .unwrap_or_else(default_protocol);
+        // Only allow known protocols to prevent injection if wired into PF later
+        if protocol != "tcp" && protocol != "udp" && protocol != "sctp" {
+            return None;
+        }
         Some(Self { port, protocol })
     }
 }

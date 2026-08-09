@@ -39,12 +39,12 @@ jobs:
     if: ${{ needs.release-please.outputs.release_created || inputs.force_build }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: cross-platform-actions/action@v1
         with:
           operating_system: freebsd
-          version: '15.0'
+          version: '15.1'
           run: |
             sudo pkg install -y curl
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y

@@ -117,7 +117,11 @@ impl Bridge {
 
         let zfs = if config.config.zfs_enabled {
             let pool = config.config.zpool.as_ref().ok_or(Error::ZfsNotEnabled)?;
-            Some(ZfsManager::new(pool, &config.config.dataset))
+            Some(ZfsManager::new(
+                pool,
+                &config.config.dataset,
+                config.config.data_dir.join("jails"),
+            ))
         } else {
             None
         };
@@ -154,6 +158,11 @@ impl Bridge {
     pub fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
+    }
+
+    /// Convenience constructor: create and apply verbose flag in one call.
+    pub fn open(config: BlackshipConfig, verbose: bool) -> Result<Self> {
+        Ok(Self::new(config)?.verbose(verbose))
     }
 
     /// Set a Warden handle for jail event notifications

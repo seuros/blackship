@@ -19,7 +19,7 @@ load_rc_config $name
 
 pidfile="/var/run/${name}.pid"
 command="%%PREFIX%%/bin/blackship"
-command_args="warden --config ${blackship_warden_config}"
+command_args="-c ${blackship_warden_config} supervise"
 
 start_cmd="${name}_start"
 stop_cmd="${name}_stop"
@@ -32,6 +32,11 @@ blackship_warden_start()
 		return 1
 	fi
 	echo "Starting ${name}."
+	# Recreate networks and PF anchors lost at reboot, then boot the fleet.
+	${command} -c ${blackship_warden_config} setup || \
+		warn "blackship setup failed; continuing"
+	${command} -c ${blackship_warden_config} up --all || \
+		warn "blackship up --all failed; continuing"
 	/usr/sbin/daemon -p ${pidfile} -u ${blackship_warden_user} \
 		${command} ${command_args}
 }

@@ -17,7 +17,7 @@ pub fn handle_expose(
     use std::net::IpAddr;
 
     let config = manifest::load(config_path)?;
-    let mut bridge = bridge::Bridge::new(config)?.verbose(verbose);
+    let mut bridge = bridge::Bridge::open(config, verbose)?;
 
     let bind_addr: Option<IpAddr> =
         if let Some(ip_str) = bind_ip {
@@ -41,7 +41,7 @@ pub fn handle_expose(
         forward.jail_ip,
         internal.unwrap_or(port)
     );
-    println!("\nPF rule applied: {}", forward.to_pf_rule());
+    println!("\nPF rule applied: {}", forward.to_pf_rule()?);
     println!("\nNote: Ensure these lines are in /etc/pf.conf:");
     println!("  rdr-anchor \"blackship\"");
     println!("  anchor \"blackship\"");
@@ -95,7 +95,7 @@ pub fn handle_unexpose(config_path: &Path, verbose: bool, jail: String) -> Resul
     let (_service_name, full_name) = config
         .resolve_jail_names(&jail)
         .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
-    let mut bridge = bridge::Bridge::new(config)?.verbose(verbose);
+    let mut bridge = bridge::Bridge::open(config, verbose)?;
     bridge.remove_port_forwards(&full_name)?;
     println!("Removed all port forwards for jail '{}'", full_name);
 

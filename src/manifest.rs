@@ -5,43 +5,125 @@
 use crate::error::{Error, Result};
 use crate::hooks::Hook;
 use crate::sickbay::checker::HealthCheckConfig;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
-/// Load configuration from a file
-pub fn load(path: &Path) -> Result<BlackshipConfig> {
-    let content = fs::read_to_string(path).map_err(|e| Error::ConfigRead {
+/// Validate a jail/project/network name: these reach paths, ZFS datasets and netgraph nodes.
+pub fn validate_name(kind: &str, name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::ConfigValidation(format!(
+            "{kind} name cannot be empty"
+        )));
+    }
+    if name.contains('/') || name.contains('\0') || name == "." || name == ".." {
+        return Err(Error::ConfigValidation(format!(
+            "{kind} name '{}' contains invalid characters",
+            name
+        )));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(Error::ConfigValidation(format!(
+            "{kind} name '{}' contains invalid characters (only alphanumeric, dash, underscore, dot allowed)",
+            name
+        )));
+    }
+    Ok(())
+}
+
+/// Validate a ZFS pool/dataset/snapshot name; leading dashes would parse as zfs(8) options.
+fn validate_zfs_component(kind: &str, name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::ConfigValidation(format!(
+            "{kind} name cannot be empty"
+        )));
+    }
+    if name.starts_with('-') {
+        return Err(Error::ConfigValidation(format!(
+            "{kind} name '{}' must not start with '-'",
+            name
+        )));
+    }
+    if name == "." || name == ".." || name.contains("..") {
+        return Err(Error::ConfigValidation(format!(
+            "{kind} name '{}' contains invalid component",
+            name
+        )));
+    }
+    if name.contains('@') || name.contains('\0') {
+        return Err(Error::ConfigValidation(format!(
+            "{kind} name '{}' contains invalid characters",
+            name
+        )));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':' | '/'))
+    {
+        return Err(Error::ConfigValidation(format!(
+            "{kind} name '{}' contains invalid characters",
+            name
+        )));
+    }
+    Ok(())
+}
+
+/// Read a config file, mapping IO errors to ConfigRead
+fn read_config_file(path: &Path) -> Result<String> {
+    fs::read_to_string(path).map_err(|e| Error::ConfigRead {
         path: path.to_path_buf(),
         source: e,
-    })?;
+    })
+}
+
+/// Derive a project name from a config file path (falls back to cwd, then random name)
+fn project_name_from_path(path: &Path) -> String {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty() && p.as_os_str() != ".")
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            // Config in current directory - use cwd name
+            std::env::current_dir()
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        })
+        .unwrap_or_else(|| black_ship_name_from_path(path))
+}
+
+/// Load configuration from a file
+pub fn load(path: &Path) -> Result<BlackshipConfig> {
+    let content = read_config_file(path)?;
 
     let mut config: BlackshipConfig = toml::from_str(&content)?;
 
-    // Set default project name from directory if not specified
     if config.config.project.is_none() {
-        // Try to get directory name from config path, or current working directory
-        let project_name = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty() && p.as_os_str() != ".")
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                // Config in current directory - use cwd name
-                std::env::current_dir()
-                    .ok()
-                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            })
-            .unwrap_or_else(|| black_ship_name_from_path(path));
-        config.config.project = Some(project_name);
+        config.config.project = Some(project_name_from_path(path));
     }
 
     config.validate()?;
 
     Ok(config)
+}
+
+/// Load a config, falling back to defaults when the file does not exist.
+///
+/// System-level commands (bootstrap, releases, setup) work against the
+/// default paths and should not demand a blackship.toml.
+pub fn load_or_default(path: &Path) -> Result<BlackshipConfig> {
+    if path.exists() {
+        load(path)
+    } else {
+        let mut config: BlackshipConfig = toml::from_str("[config]\n")?;
+        config.config.project = Some(project_name_from_path(path));
+        Ok(config)
+    }
 }
 
 /// Load and merge multiple configuration files
@@ -59,10 +141,7 @@ pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
     let first_path = &paths[0];
 
     for path in paths {
-        let content = fs::read_to_string(path).map_err(|e| Error::ConfigRead {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        let content = read_config_file(path)?;
 
         let config: BlackshipConfig = toml::from_str(&content)?;
 
@@ -74,23 +153,8 @@ pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
 
     let mut config = base.unwrap();
 
-    // Set default project name from first config's directory if not specified
     if config.config.project.is_none() {
-        // Try to get directory name from config path, or current working directory
-        let project_name = first_path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty() && p.as_os_str() != ".")
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                // Config in current directory - use cwd name
-                std::env::current_dir()
-                    .ok()
-                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            })
-            .unwrap_or_else(|| black_ship_name_from_path(first_path));
-        config.config.project = Some(project_name);
+        config.config.project = Some(project_name_from_path(first_path));
     }
 
     config.validate()?;
@@ -98,7 +162,7 @@ pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
 }
 
 /// Root configuration structure
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct BlackshipConfig {
     /// Global configuration settings
     pub config: GlobalConfig,
@@ -116,13 +180,24 @@ pub struct BlackshipConfig {
 impl BlackshipConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
-        // Check for duplicate jail names
+        validate_name("project", &self.config.project_name())?;
+
         let mut names = std::collections::HashSet::new();
+        let mut full_names = std::collections::HashSet::new();
         for jail in &self.jails {
+            validate_name("jail", &jail.name)?;
             if !names.insert(&jail.name) {
                 return Err(Error::ConfigValidation(format!(
                     "Duplicate jail name: {}",
                     jail.name
+                )));
+            }
+            // project="demo" + jails "web"/"demo-web" both resolve to "demo-web".
+            let full = self.jail_name(&jail.name);
+            if !full_names.insert(full.clone()) {
+                return Err(Error::ConfigValidation(format!(
+                    "Jail '{}' resolves to full name '{}' which collides with another jail",
+                    jail.name, full
                 )));
             }
         }
@@ -146,11 +221,35 @@ impl BlackshipConfig {
             }
         }
 
+        for net in &self.networks {
+            validate_name("network", &net.name)?;
+        }
+
+        for jail in &self.jails {
+            if let Some(release) = &jail.release {
+                validate_name("release", release)?;
+            }
+            if let Some(net) = &jail.network {
+                if let Some(bridge) = &net.bridge {
+                    validate_name("bridge", bridge)?;
+                }
+                for net_ref in &net.networks {
+                    validate_name("network reference", net_ref)?;
+                }
+            }
+        }
+
         // Check ZFS configuration
-        if self.config.zfs_enabled && self.config.zpool.is_none() {
-            return Err(Error::ConfigValidation(
-                "ZFS is enabled but no zpool specified".into(),
-            ));
+        if self.config.zfs_enabled {
+            if self.config.zpool.is_none() {
+                return Err(Error::ConfigValidation(
+                    "ZFS is enabled but no zpool specified".into(),
+                ));
+            }
+            if let Some(pool) = &self.config.zpool {
+                validate_zfs_component("zpool", pool)?;
+            }
+            validate_zfs_component("dataset", &self.config.dataset)?;
         }
 
         Ok(())
@@ -168,14 +267,23 @@ impl BlackshipConfig {
 
     /// Resolve a jail identifier to (service_name, full_name)
     pub fn resolve_jail_names(&self, name: &str) -> Option<(String, String)> {
+        let names_of = |jail: &JailDef| (jail.name.clone(), self.jail_name(&jail.name));
+
         if let Some(jail) = self.jails.iter().find(|j| j.name == name) {
-            let full = self.jail_name(&jail.name);
-            return Some((jail.name.clone(), full));
+            return Some(names_of(jail));
+        }
+        if let Some(jail) = self.jails.iter().find(|j| self.jail_name(&j.name) == name) {
+            return Some(names_of(jail));
         }
 
-        if let Some(jail) = self.jails.iter().find(|j| self.jail_name(&j.name) == name) {
-            let full = self.jail_name(&jail.name);
-            return Some((jail.name.clone(), full));
+        // Unambiguous prefix of a service or full name
+        let matches: Vec<&JailDef> = self
+            .jails
+            .iter()
+            .filter(|j| j.name.starts_with(name) || self.jail_name(&j.name).starts_with(name))
+            .collect();
+        if let [jail] = matches.as_slice() {
+            return Some(names_of(jail));
         }
 
         None
@@ -257,7 +365,7 @@ pub fn black_ship_name_from_path(path: &Path) -> String {
 }
 
 /// Global configuration settings
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct GlobalConfig {
     /// Project name (used as prefix for jail names)
     /// If not set, a random Black Ship name will be used
@@ -289,6 +397,10 @@ pub struct GlobalConfig {
     /// FreeBSD mirror URL
     #[serde(default = "default_mirror_url")]
     pub mirror_url: String,
+
+    /// Dead-man switch: URL fetched periodically by the supervisor
+    /// (healthchecks.io / Uptime Kuma style). Silence means trouble.
+    pub monitor_ping_url: Option<String>,
 
     /// Archives to bootstrap (base, lib32, ports, src)
     #[serde(default = "default_bootstrap_archives")]
@@ -331,6 +443,7 @@ impl GlobalConfig {
                 self.data_dir
             },
             zfs_enabled: other.zfs_enabled,
+            monitor_ping_url: other.monitor_ping_url.or(self.monitor_ping_url),
             zpool: other.zpool.or(self.zpool),
             dataset: if other.dataset != default_dataset() {
                 other.dataset
@@ -426,7 +539,7 @@ fn default_health_refill_rate() -> f64 {
 }
 
 /// Rate limiting configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RateLimitConfig {
     /// Max jails to start concurrently
     #[serde(default = "default_jail_start_capacity")]
@@ -471,7 +584,7 @@ fn default_health_retries() -> u32 {
 ///
 /// These values are used as defaults for health checks when not specified
 /// at the individual check level.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[allow(dead_code)] // Config struct - fields are parsed from TOML
 pub struct HealthDefaults {
     /// Default interval between health checks in seconds
@@ -524,7 +637,7 @@ fn default_jitter_factor() -> f64 {
 }
 
 /// Retry/backoff configuration for HTTP operations
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RetryConfig {
     /// Base delay in milliseconds before first retry
     #[serde(default = "default_base_delay_ms")]
@@ -562,7 +675,7 @@ impl Default for RetryConfig {
 /// Network configuration
 ///
 /// Used for defining virtual networks that jails can be attached to.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[allow(dead_code)] // Config struct - fields are parsed from TOML
 pub struct NetworkConfig {
     /// Network name
@@ -576,7 +689,7 @@ pub struct NetworkConfig {
 }
 
 /// Bridge with VLAN filtering configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[allow(dead_code)] // Config struct - fields are parsed from TOML
 pub struct BridgeVlanConfig {
     /// Bridge interface name (e.g., "vswitch1")
@@ -591,7 +704,7 @@ pub struct BridgeVlanConfig {
 }
 
 /// Physical trunk interface configuration for VLAN filtering
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TrunkConfig {
     /// Physical interface (e.g., "igb1", "em0")
     pub interface: String,
@@ -606,7 +719,7 @@ pub struct TrunkConfig {
 }
 
 /// Jail definition from config file
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JailDef {
     /// Unique jail name
     pub name: String,
@@ -614,7 +727,7 @@ pub struct JailDef {
     /// Path to jail root (can be auto-generated with ZFS)
     pub path: Option<PathBuf>,
 
-    /// FreeBSD release to use for auto-provisioning (e.g., "15.0-RELEASE")
+    /// FreeBSD release to use for auto-provisioning (e.g., "15.1-RELEASE")
     /// If specified and jail path doesn't exist, it will be created from this release
     pub release: Option<String>,
 
@@ -655,6 +768,18 @@ pub struct JailDef {
     /// Resource limits (RCTL)
     #[serde(default)]
     pub resources: crate::rctl::ResourceConfig,
+
+    /// devfs ruleset applied to the jail's /dev mount.
+    /// Defaults to ruleset 4 (devfsrules_jail); set to 0 to skip mounting devfs.
+    pub devfs_ruleset: Option<u32>,
+
+    /// Run /etc/rc at start and /etc/rc.shutdown at stop (default: true).
+    /// Disable for process-style jails that exec a single command.
+    pub init: Option<bool>,
+
+    /// Tags for group targeting (e.g., `blackship down web`)
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 impl JailDef {
@@ -665,16 +790,9 @@ impl JailDef {
     pub fn effective_path(&self, global: &GlobalConfig, full_name: &str) -> PathBuf {
         if let Some(path) = &self.path {
             path.clone()
-        } else if global.zfs_enabled {
-            // ZFS mountpoint: /<pool>/<dataset>/jails/<name>
-            PathBuf::from(format!(
-                "/{}/{}/jails/{}",
-                global.zpool.as_deref().unwrap_or("zroot"),
-                global.dataset,
-                full_name
-            ))
         } else {
-            // Fallback to data_dir
+            // With ZFS enabled the jails dataset is mounted at data_dir/jails,
+            // so this is the jail root either way.
             global.data_dir.join("jails").join(full_name)
         }
     }
@@ -717,12 +835,19 @@ impl JailDef {
             } else {
                 other.resources
             },
+            devfs_ruleset: other.devfs_ruleset.or(self.devfs_ruleset),
+            init: other.init.or(self.init),
+            tags: if other.tags.is_empty() {
+                self.tags
+            } else {
+                other.tags
+            },
         }
     }
 }
 
 /// Jail network configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JailNetworkConfig {
     /// Enable VNET (virtual network stack) for this jail
     /// When true, the jail gets its own network stack with epair interface
@@ -754,13 +879,17 @@ pub struct JailNetworkConfig {
     /// When using VLAN filtering, this sets the port VLAN ID for the jail's epair
     pub vlan_id: Option<u16>,
 
+    /// Network backend: "epair" or "netgraph".
+    /// When omitted, inherited from the attached named network (default: epair).
+    pub backend: Option<crate::network::vnet::NetworkBackend>,
+
     /// DNS configuration for this jail
     #[serde(default)]
     pub dns: DnsConfig,
 }
 
 /// DNS configuration for a jail
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct DnsConfig {
     /// DNS servers (e.g., ["8.8.8.8", "8.8.4.4"])
     /// If empty, uses "inherit" mode (copies from host)
@@ -815,7 +944,7 @@ impl DnsConfig {
 }
 
 /// Jail mount configuration (_unused: future feature)
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JailMountConfig {
     /// Volume mounts in "host:jail" format (_unused: future feature)
     #[serde(default)]

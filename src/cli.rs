@@ -80,7 +80,12 @@ pub enum Commands {
     Check,
 
     /// System setup (PF firewall anchor, etc.)
-    Setup,
+    Setup {
+        /// Enable PF if it is not running: write a minimal /etc/pf.conf
+        /// with blackship anchors if none exists, set pf_enable=YES, start pf
+        #[arg(long)]
+        enable_pf: bool,
+    },
 
     /// Initialize a new Jailfile in the current directory
     Init {
@@ -139,7 +144,7 @@ pub enum Commands {
         #[arg(long)]
         name: String,
 
-        /// FreeBSD release to use (e.g., 15.0-RELEASE)
+        /// FreeBSD release to use (e.g., 15.1-RELEASE)
         #[arg(long)]
         release: String,
 
@@ -205,6 +210,11 @@ pub enum Commands {
         /// Archives to download (default: base)
         #[arg(short, long, value_delimiter = ',')]
         archives: Option<Vec<String>>,
+
+        /// Bootstrap from base packages instead of base.txz
+        /// (automatic for FreeBSD 16 and newer, which have no dist sets)
+        #[arg(long)]
+        pkgbase: bool,
     },
 
     /// List or manage releases
@@ -221,6 +231,33 @@ pub enum Commands {
     Network {
         #[command(subcommand)]
         action: NetworkAction,
+    },
+
+    /// Migrate a jail to another host (zfs send | ssh zfs receive)
+    Migrate {
+        /// Jail to migrate (must be stopped)
+        jail: String,
+
+        /// Target host (user@host, ssh BatchMode)
+        target: String,
+
+        /// Remote dataset (default: zroot/blackship/jails/<jail>)
+        #[arg(long)]
+        remote_dataset: Option<String>,
+
+        /// Keep the local jail after transfer (default: keep, prints removal hint)
+        #[arg(long)]
+        keep: bool,
+    },
+
+    /// Per-jail CPU, memory, and process statistics
+    Stats {
+        /// Specific jail (shows all running jails if omitted)
+        jail: Option<String>,
+
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
     },
 
     /// Health check status and monitoring
@@ -340,12 +377,26 @@ pub enum Commands {
         /// Overwrite existing jail
         #[arg(long)]
         force: bool,
+
+        /// Source manager: iocage, ezjail, rootfs, or auto (native when omitted)
+        #[arg(long)]
+        from: Option<String>,
     },
 
     /// Manage jail snapshots
     Snapshot {
         #[command(subcommand)]
         action: SnapshotAction,
+    },
+
+    /// Freeze a jail into a reusable release (zero-copy snapshot + promote)
+    Commit {
+        /// Jail to commit
+        jail: String,
+
+        /// Name of the new release (used as FROM in Jailfiles or release =
+        /// in jail definitions)
+        release: String,
     },
 
     /// Clone a jail from a snapshot
@@ -564,6 +615,11 @@ pub enum NetworkAction {
         /// Bridge interface name (defaults to blackship0)
         #[arg(short, long, default_value = "blackship0")]
         bridge: String,
+
+        /// Network backend: epair (if_bridge) or netgraph (ng_bridge with a
+        /// host gateway eiface)
+        #[arg(long, default_value = "epair")]
+        backend: String,
     },
 
     /// Destroy a network
@@ -586,7 +642,7 @@ impl Commands {
             Self::Up { dry_run, .. }
             | Self::Down { dry_run, .. }
             | Self::Restart { dry_run, .. } => !dry_run,
-            Self::Setup
+            Self::Setup { .. }
             | Self::Exec { .. }
             | Self::Run { .. }
             | Self::Cp { .. }
@@ -599,6 +655,8 @@ impl Commands {
             | Self::Export { .. }
             | Self::Import { .. }
             | Self::Clone { .. }
+            | Self::Commit { .. }
+            | Self::Migrate { .. }
             | Self::Supervise => true,
             Self::Armada { action, .. } => action.requires_root(),
             Self::Releases { action, .. } => {
@@ -614,6 +672,7 @@ impl Commands {
             | Self::Template { .. }
             | Self::Ports { .. }
             | Self::Logs { .. }
+            | Self::Stats { .. }
             | Self::Completion { .. } => false,
         }
     }
@@ -671,6 +730,7 @@ mod tests {
                 subnet: "10.0.1.0/24".into(),
                 gateway: None,
                 bridge: "blackship0".into(),
+                backend: "epair".into(),
             },
         };
 
@@ -692,6 +752,7 @@ mod tests {
             release: "15.0-RELEASE".into(),
             force: false,
             archives: None,
+            pkgbase: false,
         };
 
         assert!(command.requires_root());

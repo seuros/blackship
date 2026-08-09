@@ -45,28 +45,22 @@ struct IntentionalStops {
 }
 
 impl IntentionalStops {
-    fn mark(&self, jid: i32) {
-        let mut jids = self
-            .jids
+    fn lock_jids(&self) -> std::sync::MutexGuard<'_, HashSet<i32>> {
+        self.jids
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        jids.insert(jid);
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn mark(&self, jid: i32) {
+        self.lock_jids().insert(jid);
     }
 
     fn clear(&self, jid: i32) {
-        let mut jids = self
-            .jids
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        jids.remove(&jid);
+        self.lock_jids().remove(&jid);
     }
 
     fn contains(&self, jid: i32) -> bool {
-        let jids = self
-            .jids
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        jids.contains(&jid)
+        self.lock_jids().contains(&jid)
     }
 }
 
@@ -282,7 +276,6 @@ impl Warden {
                     }
                 }
 
-                // kqueue becomes readable — kernel jail events available
                 ready = async_fd.readable() => {
                     if let Ok(mut guard) = ready {
                         let events = self.process_kqueue_events();
@@ -304,13 +297,10 @@ impl Warden {
                                     }
                                 }
                                 JailEvent::Child { .. } => {
-                                    // Child jail created — informational
                                 }
                                 JailEvent::Set { .. } => {
-                                    // Jail modified — informational
                                 }
                                 JailEvent::Attach { .. } => {
-                                    // Process attached — informational
                                 }
                             }
                         }
@@ -320,7 +310,6 @@ impl Warden {
             }
         }
 
-        // AsyncFd must not outlive the fd it wraps — drop it explicitly
         // The kqueue fd is owned by self.kqueue, so AsyncFd borrows it.
         // We need to forget the AsyncFd to prevent it from closing the fd.
         std::mem::forget(async_fd);
@@ -463,52 +452,52 @@ impl WardenHandle {
         self.intentional_stops.clear(jid);
     }
 
+    fn channel_closed_err() -> crate::error::Error {
+        crate::error::Error::Io(std::io::Error::other("Warden channel closed"))
+    }
+
+    fn blocking_send(&self, event: WardenEvent) -> Result<()> {
+        self.sender
+            .blocking_send(event)
+            .map_err(|_| Self::channel_closed_err())
+    }
+
     /// Notify that a jail failed (blocking version for sync code)
     pub fn notify_failure_blocking(&self, name: &str) -> Result<()> {
-        self.sender
-            .blocking_send(WardenEvent::JailFailed {
-                name: name.to_string(),
-            })
-            .map_err(|_| crate::error::Error::Io(std::io::Error::other("Warden channel closed")))
+        self.blocking_send(WardenEvent::JailFailed {
+            name: name.to_string(),
+        })
     }
 
     /// Notify that a jail's health check failed (blocking version)
     pub fn notify_health_failure_blocking(&self, name: &str) -> Result<()> {
-        self.sender
-            .blocking_send(WardenEvent::JailHealthFailed {
-                name: name.to_string(),
-            })
-            .map_err(|_| crate::error::Error::Io(std::io::Error::other("Warden channel closed")))
+        self.blocking_send(WardenEvent::JailHealthFailed {
+            name: name.to_string(),
+        })
     }
 
     /// Notify that a jail started (blocking version)
     pub fn notify_started_blocking(&self, name: &str) -> Result<()> {
-        self.sender
-            .blocking_send(WardenEvent::JailStarted {
-                name: name.to_string(),
-            })
-            .map_err(|_| crate::error::Error::Io(std::io::Error::other("Warden channel closed")))
+        self.blocking_send(WardenEvent::JailStarted {
+            name: name.to_string(),
+        })
     }
 
     /// Notify that a jail stopped intentionally (blocking version)
     pub fn notify_stopped_blocking(&self, name: &str, jid: i32) -> Result<()> {
-        self.sender
-            .blocking_send(WardenEvent::JailStopped {
-                name: name.to_string(),
-                jid,
-            })
-            .map_err(|_| crate::error::Error::Io(std::io::Error::other("Warden channel closed")))
+        self.blocking_send(WardenEvent::JailStopped {
+            name: name.to_string(),
+            jid,
+        })
     }
 
     /// Register a jail for kqueue monitoring (blocking version)
     #[allow(dead_code)]
     pub fn register_jail_blocking(&self, name: &str, jid: i32) -> Result<()> {
-        self.sender
-            .blocking_send(WardenEvent::RegisterJail {
-                name: name.to_string(),
-                jid,
-            })
-            .map_err(|_| crate::error::Error::Io(std::io::Error::other("Warden channel closed")))
+        self.blocking_send(WardenEvent::RegisterJail {
+            name: name.to_string(),
+            jid,
+        })
     }
 }
 

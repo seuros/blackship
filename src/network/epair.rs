@@ -41,7 +41,14 @@ impl EpairInterface {
             })?;
 
         // Bring host side up using native ioctl
-        ioctl::set_interface_up(&host_side, true)?;
+        if let Err(e) = ioctl::set_interface_up(&host_side, true) {
+            let _ = ioctl::destroy_interface(&host_side);
+            return Err(e);
+        }
+
+        // Ownership marker: only the host side keeps groups (VNET transfer
+        // strips them from the jail side), so cleanup checks the a-end.
+        let _ = crate::sys::tag_interface(&host_side);
 
         Ok(Self::from_existing(host_side, jail_side))
     }

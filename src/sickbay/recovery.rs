@@ -2,10 +2,10 @@
 //!
 //! Provides configurable recovery actions when health checks fail.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Action to take when health checks fail
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum RecoveryAction {
@@ -22,7 +22,7 @@ pub enum RecoveryAction {
 }
 
 /// Recovery configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RecoveryConfig {
     /// Action to take on failure
     #[serde(default)]

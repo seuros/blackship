@@ -12,6 +12,6 @@ pub mod instructions;
 pub mod parser;
 
 pub use context::BuildContext;
-pub use executor::TemplateExecutor;
+pub use executor::{LayerCache, TemplateExecutor};
 pub use instructions::Instruction;
 pub use parser::parse_jailfile;

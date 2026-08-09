@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tar::{Archive, Builder};
 
 /// Metadata stored in the archive
@@ -31,11 +31,56 @@ pub struct ExportMetadata {
     pub hostname: Option<String>,
 }
 
+/// Get the path of a tar entry, mapping errors to JailOperation
+fn entry_path<R: std::io::Read>(entry: &tar::Entry<R>) -> Result<std::path::PathBuf> {
+    entry
+        .path()
+        .map_err(|e| Error::JailOperation(format!("Failed to read entry path: {}", e)))
+        .map(|p| p.to_path_buf())
+}
+
+/// Maximum size for metadata entries read from tar archives (10 MB).
+const MAX_TAR_METADATA_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Read a tar entry to string, refusing entries over `MAX_TAR_METADATA_SIZE`.
+fn entry_read_to_string<R: std::io::Read>(
+    entry: &mut tar::Entry<R>,
+    buf: &mut String,
+) -> Result<()> {
+    let size = entry.header().size().unwrap_or(0);
+    if size > MAX_TAR_METADATA_SIZE {
+        return Err(Error::JailOperation(format!(
+            "Metadata entry size {} exceeds maximum allowed size of {} bytes",
+            size, MAX_TAR_METADATA_SIZE
+        )));
+    }
+    entry
+        .read_to_string(buf)
+        .map_err(|e| Error::JailOperation(format!("Failed to read metadata: {}", e)))
+        .map(|_| ())
+}
+
+/// Open a jail archive file, mapping the IO error to JailOperation
+fn open_archive(path: &Path) -> Result<File> {
+    File::open(path).map_err(|e| Error::JailOperation(format!("Failed to open archive: {}", e)))
+}
+
+/// Create an output file, mapping the IO error to JailOperation
+fn create_output_file(path: &Path) -> Result<File> {
+    File::create(path)
+        .map_err(|e| Error::JailOperation(format!("Failed to create output file: {}", e)))
+}
+
+/// Wrap a file in a zstd decoder
+fn open_decoder(file: File) -> Result<zstd::stream::Decoder<'static, std::io::BufReader<File>>> {
+    zstd::stream::Decoder::new(file)
+        .map_err(|e| Error::JailOperation(format!("Failed to decompress: {}", e)))
+}
+
 /// Read export metadata without importing the archive
 pub fn read_metadata(archive_path: &Path) -> Result<ExportMetadata> {
     // Open archive
-    let file = File::open(archive_path)
-        .map_err(|e| Error::JailOperation(format!("Failed to open archive: {}", e)))?;
+    let file = open_archive(archive_path)?;
 
     // Check for ZFS format
     let mut magic = [0u8; 8];
@@ -47,6 +92,13 @@ pub fn read_metadata(archive_path: &Path) -> Result<ExportMetadata> {
                 Error::JailOperation(format!("Failed to read metadata length: {}", e))
             })?;
             let len = u32::from_le_bytes(len_bytes) as usize;
+            const MAX_METADATA_LEN: usize = 10 * 1024 * 1024; // 10 MB
+            if len > MAX_METADATA_LEN {
+                return Err(Error::JailOperation(format!(
+                    "Metadata length {} exceeds maximum allowed size of {} bytes",
+                    len, MAX_METADATA_LEN
+                )));
+            }
             let mut buf = vec![0u8; len];
             reader
                 .read_exact(&mut buf)
@@ -57,12 +109,10 @@ pub fn read_metadata(archive_path: &Path) -> Result<ExportMetadata> {
     }
 
     // Reopen file for tar/zstd
-    let file = File::open(archive_path)
-        .map_err(|e| Error::JailOperation(format!("Failed to reopen archive: {}", e)))?;
+    let file = open_archive(archive_path)?;
 
     // Decompress
-    let decoder = zstd::stream::Decoder::new(file)
-        .map_err(|e| Error::JailOperation(format!("Failed to decompress: {}", e)))?;
+    let decoder = open_decoder(file)?;
 
     // Open tar archive
     let mut archive = Archive::new(decoder);
@@ -73,16 +123,11 @@ pub fn read_metadata(archive_path: &Path) -> Result<ExportMetadata> {
     {
         let mut entry = entry
             .map_err(|e| Error::JailOperation(format!("Failed to read archive entry: {}", e)))?;
-        let path = entry
-            .path()
-            .map_err(|e| Error::JailOperation(format!("Failed to read entry path: {}", e)))?
-            .to_path_buf();
+        let path = entry_path(&entry)?;
 
         if path.to_string_lossy() == ".blackship-metadata.json" {
             let mut content = String::new();
-            entry
-                .read_to_string(&mut content)
-                .map_err(|e| Error::JailOperation(format!("Failed to read metadata: {}", e)))?;
+            entry_read_to_string(&mut entry, &mut content)?;
             return serde_json::from_str(&content)
                 .map_err(|e| Error::JailOperation(format!("Failed to parse metadata: {}", e)));
         }
@@ -102,8 +147,7 @@ pub fn export_jail(
     println!("Exporting jail '{}' to {}", name, output_path.display());
 
     // Create output file
-    let file = File::create(output_path)
-        .map_err(|e| Error::JailOperation(format!("Failed to create output file: {}", e)))?;
+    let file = create_output_file(output_path)?;
 
     // Wrap in zstd compressor
     let encoder = zstd::stream::Encoder::new(file, 3)
@@ -111,6 +155,8 @@ pub fn export_jail(
 
     // Create tar builder
     let mut builder = Builder::new(encoder);
+    // Archive symlinks as symlinks: following them would leak host files.
+    builder.follow_symlinks(false);
 
     // Create and add metadata
     let metadata = ExportMetadata {
@@ -173,7 +219,7 @@ pub fn export_jail_zfs(
     let snapshot_name = format!("{}@blackship-export", dataset);
 
     // Create snapshot
-    let status = Command::new("zfs")
+    let status = Command::new("/sbin/zfs")
         .args(["snapshot", &snapshot_name])
         .status()
         .map_err(|e| Error::Zfs(format!("Failed to create snapshot: {}", e)))?;
@@ -182,9 +228,28 @@ pub fn export_jail_zfs(
         return Err(Error::Zfs("Failed to create export snapshot".into()));
     }
 
+    let result = export_jail_zfs_inner(&snapshot_name, output_path, name, hostname, ip);
+
+    // Destroy the snapshot on success or failure.
+    let _ = Command::new("/sbin/zfs")
+        .args(["destroy", &snapshot_name])
+        .status();
+
+    result
+}
+
+/// Split out so the caller can guarantee snapshot cleanup.
+fn export_jail_zfs_inner(
+    snapshot_name: &str,
+    output_path: &Path,
+    name: &str,
+    hostname: Option<&str>,
+    ip: Option<&str>,
+) -> Result<()> {
     // Create output file
-    let output_file = File::create(output_path)
-        .map_err(|e| Error::JailOperation(format!("Failed to create output file: {}", e)))?;
+    let output_file = create_output_file(output_path)?;
+
+    let dataset = snapshot_name.split('@').next().unwrap_or(snapshot_name);
 
     // Write metadata header first
     let metadata = ExportMetadata {
@@ -216,20 +281,29 @@ pub fn export_jail_zfs(
         .flush()
         .map_err(|e| Error::JailOperation(format!("Failed to flush: {}", e)))?;
 
-    // Run zfs send piped to output
-    let output_path_str = output_path.to_string_lossy();
-    let status = Command::new("sh")
-        .args([
-            "-c",
-            &format!("zfs send {} >> \"{}\"", snapshot_name, output_path_str),
-        ])
-        .status()
-        .map_err(|e| Error::Zfs(format!("Failed to run zfs send: {}", e)))?;
+    let mut zfs_send = Command::new("/sbin/zfs")
+        .args(["send", snapshot_name])
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::Zfs(format!("Failed to spawn zfs send: {}", e)))?;
 
-    // Clean up snapshot
-    let _ = Command::new("zfs")
-        .args(["destroy", &snapshot_name])
-        .status();
+    {
+        let mut outfile = std::fs::OpenOptions::new()
+            .append(true)
+            .open(output_path)
+            .map_err(|e| Error::Zfs(format!("Failed to open output for append: {}", e)))?;
+        let zfs_stdout = zfs_send
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Zfs("Failed to capture zfs send stdout".into()))?;
+        let mut reader = std::io::BufReader::new(zfs_stdout);
+        std::io::copy(&mut reader, &mut outfile)
+            .map_err(|e| Error::Zfs(format!("Failed to write zfs send output: {}", e)))?;
+    }
+
+    let status = zfs_send
+        .wait()
+        .map_err(|e| Error::Zfs(format!("Failed to wait for zfs send: {}", e)))?;
 
     if !status.success() {
         return Err(Error::Zfs("ZFS send failed".into()));
@@ -244,12 +318,12 @@ pub fn import_jail(
     archive_path: &Path,
     target_path: &Path,
     new_name: Option<&str>,
+    zfs_dataset: Option<&str>,
 ) -> Result<String> {
     println!("Importing jail from {}", archive_path.display());
 
     // Open archive
-    let file = File::open(archive_path)
-        .map_err(|e| Error::JailOperation(format!("Failed to open archive: {}", e)))?;
+    let file = open_archive(archive_path)?;
 
     // Check for ZFS format
     let mut magic = [0u8; 8];
@@ -257,17 +331,15 @@ pub fn import_jail(
         let mut reader = std::io::BufReader::new(&file);
         if reader.read_exact(&mut magic).is_ok() && &magic == b"BSZFS001" {
             drop(reader);
-            return import_jail_zfs(archive_path, target_path, new_name);
+            return import_jail_zfs(archive_path, target_path, new_name, zfs_dataset);
         }
     }
 
     // Reopen file for tar/zstd
-    let file = File::open(archive_path)
-        .map_err(|e| Error::JailOperation(format!("Failed to reopen archive: {}", e)))?;
+    let file = open_archive(archive_path)?;
 
     // Decompress
-    let decoder = zstd::stream::Decoder::new(file)
-        .map_err(|e| Error::JailOperation(format!("Failed to decompress: {}", e)))?;
+    let decoder = open_decoder(file)?;
 
     // Open tar archive
     let mut archive = Archive::new(decoder);
@@ -275,55 +347,106 @@ pub fn import_jail(
     // Extract metadata first
     let mut metadata: Option<ExportMetadata> = None;
 
-    // Create temp dir for extraction
     let temp_dir = target_path.parent().unwrap_or(Path::new("/tmp"));
-    let temp_extract = temp_dir.join(format!(".import-{}", std::process::id()));
+    let temp_extract = temp_dir.join(format!(".import-{:016x}", rand::random::<u64>()));
+
+    // A pre-existing temp path may be a planted symlink.
+    if let Ok(meta) = std::fs::symlink_metadata(&temp_extract) {
+        let _ = meta; // path exists -- refuse to use it
+        return Err(Error::JailOperation(format!(
+            "Temp directory {} already exists, refusing to proceed",
+            temp_extract.display()
+        )));
+    }
+
     std::fs::create_dir_all(&temp_extract)
         .map_err(|e| Error::JailOperation(format!("Failed to create temp dir: {}", e)))?;
 
-    // Extract archive
-    for entry in archive
-        .entries()
-        .map_err(|e| Error::JailOperation(format!("Failed to read archive entries: {}", e)))?
-    {
-        let mut entry = entry
-            .map_err(|e| Error::JailOperation(format!("Failed to read archive entry: {}", e)))?;
+    let extract_result = (|| -> Result<ExportMetadata> {
+        for entry in archive
+            .entries()
+            .map_err(|e| Error::JailOperation(format!("Failed to read archive entries: {}", e)))?
+        {
+            let mut entry = entry.map_err(|e| {
+                Error::JailOperation(format!("Failed to read archive entry: {}", e))
+            })?;
 
-        let path = entry
-            .path()
-            .map_err(|e| Error::JailOperation(format!("Failed to read entry path: {}", e)))?
-            .to_path_buf(); // Convert to owned PathBuf to avoid borrow conflict
+            let path = entry_path(&entry)?;
 
-        if path.to_string_lossy() == ".blackship-metadata.json" {
-            let mut content = String::new();
-            entry
-                .read_to_string(&mut content)
-                .map_err(|e| Error::JailOperation(format!("Failed to read metadata: {}", e)))?;
-            metadata =
-                Some(serde_json::from_str(&content).map_err(|e| {
+            if path.to_string_lossy() == ".blackship-metadata.json" {
+                let mut content = String::new();
+                entry_read_to_string(&mut entry, &mut content)?;
+                metadata = Some(serde_json::from_str(&content).map_err(|e| {
                     Error::JailOperation(format!("Failed to parse metadata: {}", e))
                 })?);
-        } else {
-            entry.unpack_in(&temp_extract).map_err(|e| {
-                Error::JailOperation(format!("Failed to extract {}: {}", path.display(), e))
-            })?;
+            } else {
+                entry.unpack_in(&temp_extract).map_err(|e| {
+                    Error::JailOperation(format!("Failed to extract {}: {}", path.display(), e))
+                })?;
+            }
         }
-    }
 
-    let metadata =
-        metadata.ok_or_else(|| Error::JailOperation("Archive missing metadata".into()))?;
+        metadata.ok_or_else(|| Error::JailOperation("Archive missing metadata".into()))
+    })();
+
+    let metadata = match extract_result {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&temp_extract);
+            return Err(e);
+        }
+    };
 
     let jail_name = new_name.unwrap_or(&metadata.name);
 
     // Move rootfs to target
     let rootfs_src = temp_extract.join("rootfs");
-    if rootfs_src.exists() {
-        if target_path.exists() {
-            std::fs::remove_dir_all(target_path)
-                .map_err(|e| Error::JailOperation(format!("Failed to remove existing: {}", e)))?;
-        }
-        std::fs::rename(&rootfs_src, target_path)
-            .map_err(|e| Error::JailOperation(format!("Failed to move rootfs: {}", e)))?;
+
+    if !rootfs_src.exists() {
+        let _ = std::fs::remove_dir_all(&temp_extract);
+        return Err(Error::JailOperation(
+            "Archive does not contain a rootfs directory".into(),
+        ));
+    }
+
+    // A symlinked rootfs from a hostile archive would redirect the rename below.
+    let rootfs_meta = std::fs::symlink_metadata(&rootfs_src)
+        .map_err(|e| Error::JailOperation(format!("Failed to stat rootfs: {}", e)))?;
+    if rootfs_meta.file_type().is_symlink() {
+        let _ = std::fs::remove_dir_all(&temp_extract);
+        return Err(Error::JailOperation(
+            "Extracted rootfs is a symlink, refusing to proceed".into(),
+        ));
+    }
+    if !rootfs_meta.is_dir() {
+        let _ = std::fs::remove_dir_all(&temp_extract);
+        return Err(Error::JailOperation(
+            "Extracted rootfs is not a directory".into(),
+        ));
+    }
+
+    // Validate no ancestor of the target path is a symlink
+    if let Some(data_dir) = target_path.parent().and_then(|p| p.parent()) {
+        crate::blueprint::context::reject_symlink_ancestors(data_dir, target_path)?;
+    }
+
+    if target_path.exists() {
+        std::fs::remove_dir_all(target_path)
+            .map_err(|e| Error::JailOperation(format!("Failed to remove existing: {}", e)))?;
+    }
+    std::fs::rename(&rootfs_src, target_path)
+        .map_err(|e| Error::JailOperation(format!("Failed to move rootfs: {}", e)))?;
+
+    let canonical = std::fs::canonicalize(target_path)
+        .map_err(|e| Error::JailOperation(format!("Failed to canonicalize target: {}", e)))?;
+    let parent = target_path.parent().unwrap_or(Path::new("/"));
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|e| Error::JailOperation(format!("Failed to canonicalize parent: {}", e)))?;
+    if !canonical.starts_with(&canonical_parent) {
+        let _ = std::fs::remove_dir_all(target_path);
+        return Err(Error::JailOperation(
+            "Imported rootfs resolved outside target directory".into(),
+        ));
     }
 
     // Clean up temp
@@ -343,11 +466,11 @@ fn import_jail_zfs(
     archive_path: &Path,
     target_path: &Path,
     new_name: Option<&str>,
+    zfs_dataset: Option<&str>,
 ) -> Result<String> {
     println!("Importing ZFS stream from {}", archive_path.display());
 
-    let file = File::open(archive_path)
-        .map_err(|e| Error::JailOperation(format!("Failed to open archive: {}", e)))?;
+    let file = open_archive(archive_path)?;
 
     let mut reader = std::io::BufReader::new(file);
 
@@ -363,6 +486,13 @@ fn import_jail_zfs(
         .read_exact(&mut len_bytes)
         .map_err(|e| Error::JailOperation(format!("Failed to read length: {}", e)))?;
     let meta_len = u32::from_le_bytes(len_bytes) as usize;
+    const MAX_METADATA_LEN: usize = 10 * 1024 * 1024; // 10 MB
+    if meta_len > MAX_METADATA_LEN {
+        return Err(Error::JailOperation(format!(
+            "Metadata length {} exceeds maximum allowed size of {} bytes",
+            meta_len, MAX_METADATA_LEN
+        )));
+    }
 
     // Read metadata
     let mut meta_bytes = vec![0u8; meta_len];
@@ -375,29 +505,42 @@ fn import_jail_zfs(
 
     let jail_name = new_name.unwrap_or(&metadata.name);
 
-    // Derive dataset name from target path
-    // This assumes target_path is like /pool/dataset/jails/name
-    let dataset = target_path
-        .strip_prefix("/")
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| target_path.to_string_lossy().to_string());
+    let dataset = if let Some(ds) = zfs_dataset {
+        ds.to_string()
+    } else {
+        target_path
+            .strip_prefix("/")
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| target_path.to_string_lossy().to_string())
+    };
 
-    // Pipe remaining file to zfs receive
-    let archive_path_str = archive_path.to_string_lossy();
-    let skip_bytes = 8 + 4 + meta_len;
-
-    let status = Command::new("sh")
+    let mut zfs_recv = Command::new("/sbin/zfs")
         .args([
-            "-c",
-            &format!(
-                "tail -c +{} \"{}\" | zfs receive {}",
-                skip_bytes + 1,
-                archive_path_str,
-                dataset
-            ),
+            "receive",
+            "-u",
+            "-x",
+            "mountpoint",
+            "-x",
+            "canmount",
+            &dataset,
         ])
-        .status()
-        .map_err(|e| Error::Zfs(format!("Failed to run zfs receive: {}", e)))?;
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::Zfs(format!("Failed to spawn zfs receive: {}", e)))?;
+
+    {
+        let zfs_stdin = zfs_recv
+            .stdin
+            .take()
+            .ok_or_else(|| Error::Zfs("Failed to capture zfs receive stdin".into()))?;
+        let mut writer = std::io::BufWriter::new(zfs_stdin);
+        std::io::copy(&mut reader, &mut writer)
+            .map_err(|e| Error::Zfs(format!("Failed to pipe to zfs receive: {}", e)))?;
+    }
+
+    let status = zfs_recv
+        .wait()
+        .map_err(|e| Error::Zfs(format!("Failed to wait for zfs receive: {}", e)))?;
 
     if !status.success() {
         return Err(Error::Zfs("ZFS receive failed".into()));
