@@ -38,7 +38,7 @@ bitflags = "2.11"
 byteorder = "1.5"
 
 # HTTP/Bootstrap
-ureq = "3.3"
+ureq = "3.4"
 sha2 = "0.11"
 hex = "0.4"
 tar = "0.4"
@@ -53,8 +53,8 @@ nom = "8.0"
 
 # State machine and resilience (seuros crates)
 state-machines = "0.20"
-breaker-machines = "0.15"
-chrono-machines = "0.4"
+breaker-machines = "0.16.1"
+chrono-machines = "0.6"
 throttle-machines = "0.2"
 rand = "0.10"
 
