@@ -9,6 +9,7 @@ compile_error!(
 );
 
 mod app;
+mod atomic;
 mod blueprint;
 mod bridge;
 mod bulkhead;

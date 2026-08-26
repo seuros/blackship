@@ -7,6 +7,7 @@
 //! - persistent VNET attachment state for cleanup across CLI invocations
 
 use super::ip::{IpAllocator, IpPool};
+use crate::atomic::{read_toml, write_toml_atomic};
 use crate::error::{Error, Result};
 use crate::manifest;
 use ipnet::IpNet;
@@ -522,73 +523,6 @@ pub fn build_runtime_allocator(
 
 fn read_network_record(path: &Path) -> Result<Option<NetworkRecord>> {
     read_toml::<NetworkRecord>(path, "network metadata").map(Some)
-}
-
-fn read_toml<T>(path: &Path, label: &str) -> Result<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let content = fs::read_to_string(path)
-        .map_err(|e| Error::Network(format!("Failed to read {}: {}", label, e)))?;
-    toml::from_str(&content)
-        .map_err(|e| Error::Network(format!("Failed to parse {}: {}", label, e)))
-}
-
-fn write_toml_atomic<T>(path: &Path, value: &T, label: &str) -> Result<()>
-where
-    T: Serialize,
-{
-    let content = toml::to_string(value)
-        .map_err(|e| Error::Network(format!("Failed to serialize {}: {}", label, e)))?;
-    let nonce = {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos();
-        std::process::id() ^ nanos
-    };
-    // create_new fails on an existing path (symlink attack), so walk the
-    // suffix until we win a name: concurrent writers otherwise collide.
-    let mut tmp_path = path.with_extension(format!("{}.tmp", nonce));
-    let mut file = None;
-    for attempt in 0..64u32 {
-        if attempt > 0 {
-            tmp_path = path.with_extension(format!("{}-{}.tmp", nonce, attempt));
-        }
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp_path)
-        {
-            Ok(f) => {
-                file = Some(f);
-                break;
-            }
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
-            Err(e) => {
-                return Err(Error::Network(format!(
-                    "Failed to create {} temp file: {}",
-                    label, e
-                )));
-            }
-        }
-    }
-    {
-        use std::io::Write;
-        let mut f = file.ok_or_else(|| {
-            Error::Network(format!(
-                "Failed to create {} temp file: no free name",
-                label
-            ))
-        })?;
-        f.write_all(content.as_bytes())
-            .map_err(|e| Error::Network(format!("Failed to write {}: {}", label, e)))?;
-    }
-    fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = fs::remove_file(&tmp_path);
-        Error::Network(format!("Failed to finalize {}: {}", label, e))
-    })
 }
 
 /// Allocate an address and durably claim it, retrying when another process

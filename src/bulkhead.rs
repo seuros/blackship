@@ -323,46 +323,18 @@ fn read_forwards(path: &Path) -> Result<Vec<PortForward>> {
         return Ok(Vec::new());
     }
 
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| Error::Network(format!("Failed to read port-forward state: {}", e)))?;
-    let state: PortForwardFile = toml::from_str(&content)
-        .map_err(|e| Error::Network(format!("Failed to parse port-forward state: {}", e)))?;
+    let state: PortForwardFile = crate::atomic::read_toml(path, "port-forward state")?;
     Ok(state.forwards)
 }
 
 fn write_forwards(path: &Path, forwards: &[PortForward]) -> Result<()> {
-    let content = toml::to_string(&PortForwardFile {
-        forwards: forwards.to_vec(),
-    })
-    .map_err(|e| Error::Network(format!("Failed to serialize port-forward state: {}", e)))?;
-    let nonce = {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos();
-        std::process::id() ^ nanos
-    };
-    let tmp_path = path.with_extension(format!("{}.tmp", nonce));
-    {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp_path)
-            .map_err(|e| {
-                Error::Network(format!(
-                    "Failed to create port-forward state temp file: {}",
-                    e
-                ))
-            })?;
-        f.write_all(content.as_bytes())
-            .map_err(|e| Error::Network(format!("Failed to write port-forward state: {}", e)))?;
-    }
-    std::fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
-        Error::Network(format!("Failed to finalize port-forward state: {}", e))
-    })
+    crate::atomic::write_toml_atomic(
+        path,
+        &PortForwardFile {
+            forwards: forwards.to_vec(),
+        },
+        "port-forward state",
+    )
 }
 
 #[cfg(test)]
