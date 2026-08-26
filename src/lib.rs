@@ -21,6 +21,7 @@ mod hooks;
 mod jail;
 mod manifest;
 mod network;
+mod proc;
 mod provision;
 mod rctl;
 mod sickbay;

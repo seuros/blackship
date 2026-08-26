@@ -8,14 +8,12 @@
 
 use crate::error::{Error, Result};
 use crate::jail::jexec::jexec_with_timeout;
+use crate::proc::{Outcome, run_supervised};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Read;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 /// Lifecycle phases when hooks can be executed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -390,108 +388,25 @@ impl HookRunner {
         args: &[String],
         timeout_secs: u64,
     ) -> Result<HookResult> {
-        let timeout = Duration::from_secs(timeout_secs);
+        let mut cmd = Command::new(command);
+        cmd.args(args);
 
-        let mut child = unsafe {
-            Command::new(command)
-                .args(args)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .pre_exec(|| {
-                    if libc::setpgid(0, 0) == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    // Descendants that setsid() would otherwise keep our pipe fds open.
-                    libc::closefrom(3);
-                    Ok(())
-                })
-                .spawn()
-                .map_err(|e| Error::HookFailed {
-                    phase: String::new(),
-                    command: command.to_string(),
-                    message: e.to_string(),
-                })?
+        let failed = |message: String| Error::HookFailed {
+            phase: String::new(),
+            command: command.to_string(),
+            message,
         };
 
-        // Drain the pipes in threads: >64KB of output would block the child before try_wait().
-        let mut stdout_thread = child.stdout.take().map(|mut s| {
-            thread::spawn(move || {
-                let mut buf = String::new();
-                let _ = s.read_to_string(&mut buf);
-                buf
-            })
-        });
-        let mut stderr_thread = child.stderr.take().map(|mut s| {
-            thread::spawn(move || {
-                let mut buf = String::new();
-                let _ = s.read_to_string(&mut buf);
-                buf
-            })
-        });
-
-        let start = Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    // Kill the group so grandchildren drop the pipe fds and readers finish.
-                    let pid = child.id() as libc::pid_t;
-                    unsafe {
-                        libc::kill(-pid, libc::SIGKILL);
-                    }
-                    let stdout = stdout_thread
-                        .take()
-                        .map(|t| t.join().unwrap_or_default())
-                        .unwrap_or_default();
-                    let stderr = stderr_thread
-                        .take()
-                        .map(|t| t.join().unwrap_or_default())
-                        .unwrap_or_default();
-
-                    return Ok(HookResult {
-                        success: status.success(),
-                        exit_code: status.code(),
-                        stdout,
-                        stderr,
-                    });
-                }
-                Ok(None) => {
-                    // Process still running, check timeout
-                    if start.elapsed() > timeout {
-                        let pid = child.id() as libc::pid_t;
-                        let kill_ret = unsafe { libc::kill(-pid, libc::SIGKILL) };
-                        if kill_ret == -1 {
-                            unsafe { libc::kill(pid, libc::SIGKILL) };
-                        }
-                        let _ = child.wait();
-                        if let Some(t) = stdout_thread.take() {
-                            let _ = t.join();
-                        }
-                        if let Some(t) = stderr_thread.take() {
-                            let _ = t.join();
-                        }
-                        return Err(Error::HookTimeout(timeout_secs));
-                    }
-                    thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => {
-                    let pid = child.id() as libc::pid_t;
-                    unsafe {
-                        libc::kill(-pid, libc::SIGKILL);
-                    }
-                    let _ = child.wait();
-                    if let Some(t) = stdout_thread.take() {
-                        let _ = t.join();
-                    }
-                    if let Some(t) = stderr_thread.take() {
-                        let _ = t.join();
-                    }
-                    return Err(Error::HookFailed {
-                        phase: String::new(),
-                        command: command.to_string(),
-                        message: format!("Failed to wait on process: {}", e),
-                    });
-                }
-            }
+        match run_supervised(&mut cmd, Duration::from_secs(timeout_secs))
+            .map_err(|e| failed(e.to_string()))?
+        {
+            Outcome::Exited(out) => Ok(HookResult {
+                success: out.success,
+                exit_code: out.exit_code,
+                stdout: out.stdout,
+                stderr: out.stderr,
+            }),
+            Outcome::TimedOut => Err(Error::HookTimeout(timeout_secs)),
         }
     }
 

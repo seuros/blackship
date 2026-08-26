@@ -5,6 +5,7 @@
 use crate::error::{Error, Result};
 use crate::jail::ffi::{jail_getid, jail_remove};
 use crate::jail::jexec::jexec_with_timeout;
+use crate::proc::{Outcome, run_supervised};
 use crate::sickbay::recovery::{RecoveryAction, RecoveryConfig};
 use crate::warden::WardenHandle;
 use breaker_machines::{CircuitBreaker, CircuitBuilder};
@@ -535,109 +536,24 @@ impl HealthChecker {
 
     /// Execute a check command on the host with timeout enforcement
     fn execute_on_host(&self, command: &str, timeout: u64) -> Result<(bool, String)> {
-        use std::os::unix::process::CommandExt;
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", command]);
 
-        let mut child = unsafe {
-            Command::new("/bin/sh")
-                .args(["-c", command])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .pre_exec(|| {
-                    if libc::setpgid(0, 0) == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    // Descendants that setsid() would otherwise keep our pipe fds open.
-                    libc::closefrom(3);
-                    Ok(())
-                })
-                .spawn()
-                .map_err(|e| Error::HealthCheckFailed {
-                    jail: self.jail_name.clone(),
-                    check: "host".to_string(),
-                    message: e.to_string(),
-                })?
+        let failed = |message: String| Error::HealthCheckFailed {
+            jail: self.jail_name.clone(),
+            check: "host".to_string(),
+            message,
         };
 
-        // Drain the pipes in threads: >64KB of output would block the child before try_wait().
-        let mut stdout_thread = child.stdout.take().map(|mut s| {
-            std::thread::spawn(move || {
-                let mut buf = String::new();
-                std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                buf
-            })
-        });
-        let mut stderr_thread = child.stderr.take().map(|mut s| {
-            std::thread::spawn(move || {
-                let mut buf = String::new();
-                std::io::Read::read_to_string(&mut s, &mut buf).ok();
-                buf
-            })
-        });
-
-        let timeout_duration = Duration::from_secs(timeout);
-        let start = Instant::now();
-
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    // Kill the group so grandchildren drop the pipe fds and readers finish.
-                    let pid = child.id() as libc::pid_t;
-                    unsafe {
-                        libc::kill(-pid, libc::SIGKILL);
-                    }
-                    let stdout = stdout_thread
-                        .take()
-                        .map(|t| t.join().unwrap_or_default())
-                        .unwrap_or_default();
-                    let stderr = stderr_thread
-                        .take()
-                        .map(|t| t.join().unwrap_or_default())
-                        .unwrap_or_default();
-                    let combined = format!("{}{}", stdout, stderr);
-                    return Ok((status.success(), combined));
-                }
-                Ok(None) => {
-                    // Process still running, check timeout
-                    if start.elapsed() > timeout_duration {
-                        let pid = child.id() as libc::pid_t;
-                        let kill_ret = unsafe { libc::kill(-pid, libc::SIGKILL) };
-                        if kill_ret == -1 {
-                            unsafe { libc::kill(pid, libc::SIGKILL) };
-                        }
-                        let _ = child.wait();
-                        if let Some(t) = stdout_thread.take() {
-                            let _ = t.join();
-                        }
-                        if let Some(t) = stderr_thread.take() {
-                            let _ = t.join();
-                        }
-                        return Ok((
-                            false,
-                            format!("Health check timed out after {} seconds", timeout),
-                        ));
-                    }
-                    // Sleep briefly before polling again
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => {
-                    let pid = child.id() as libc::pid_t;
-                    unsafe {
-                        libc::kill(-pid, libc::SIGKILL);
-                    }
-                    let _ = child.wait();
-                    if let Some(t) = stdout_thread.take() {
-                        let _ = t.join();
-                    }
-                    if let Some(t) = stderr_thread.take() {
-                        let _ = t.join();
-                    }
-                    return Err(Error::HealthCheckFailed {
-                        jail: self.jail_name.clone(),
-                        check: "host".to_string(),
-                        message: format!("Failed to wait for process: {}", e),
-                    });
-                }
-            }
+        match run_supervised(&mut cmd, Duration::from_secs(timeout))
+            .map_err(|e| failed(e.to_string()))?
+        {
+            Outcome::Exited(out) => Ok((out.success, format!("{}{}", out.stdout, out.stderr))),
+            // A timed-out check is a failing check, not a broken one.
+            Outcome::TimedOut => Ok((
+                false,
+                format!("Health check timed out after {} seconds", timeout),
+            )),
         }
     }
 
