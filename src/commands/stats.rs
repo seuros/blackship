@@ -60,10 +60,7 @@ pub fn handle(config_path: &Path, jail: Option<String>, json: bool) -> Result<()
     }
 
     // Aggregate per-process CPU and RSS by jail id
-    let ps = run_json(
-        "/bin/ps",
-        &["ax", "-o", "jid,pcpu,rss", "--libxo", "json"],
-    )?;
+    let ps = run_json("/bin/ps", &["ax", "-o", "jid,pcpu,rss", "--libxo", "json"])?;
     let mut stats: HashMap<String, JailStats> = HashMap::new();
     if let Some(processes) = ps
         .get("process-information")

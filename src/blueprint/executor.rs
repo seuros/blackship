@@ -103,8 +103,7 @@ impl TemplateExecutor {
                 hash = self.instruction_key(&hash, instruction);
                 keys.push(hash.clone());
                 if chain_intact && Self::is_layer_boundary(instruction) {
-                    let layer =
-                        crate::zfs::ZfsManager::layer_snapshot_name(index, &hash[..12]);
+                    let layer = crate::zfs::ZfsManager::layer_snapshot_name(index, &hash[..12]);
                     if cache.zfs.has_layer(&cache.jail, &layer) {
                         last_cached = Some((index, layer));
                     } else {
@@ -135,8 +134,7 @@ impl TemplateExecutor {
                 && Self::is_layer_boundary(instruction)
                 && let Some(cache) = &self.layer_cache
             {
-                let layer =
-                    crate::zfs::ZfsManager::layer_snapshot_name(index, &keys[index][..12]);
+                let layer = crate::zfs::ZfsManager::layer_snapshot_name(index, &keys[index][..12]);
                 if let Err(e) = cache.zfs.create_layer(&cache.jail, &layer) {
                     eprintln!("Warning: failed to snapshot build layer: {}", e);
                 }

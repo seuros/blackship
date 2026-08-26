@@ -35,11 +35,7 @@ impl Bridge {
     fn reachable(&self, roots: &[String], dependents: bool) -> HashSet<String> {
         let mut set = HashSet::new();
         for root in roots {
-            let Some(start) = self
-                .graph
-                .node_indices()
-                .find(|&n| self.graph[n] == *root)
-            else {
+            let Some(start) = self.graph.node_indices().find(|&n| self.graph[n] == *root) else {
                 continue;
             };
             if dependents {

@@ -119,11 +119,7 @@ pub fn handle_foreign_import(
     }
     let _ = crate::sys::remove_tree_with_flags(&staging);
 
-    println!(
-        "Imported '{}' -> {}",
-        file.display(),
-        target.display()
-    );
+    println!("Imported '{}' -> {}", file.display(), target.display());
     println!("\nAdd it to blackship.toml:");
     println!("[[jails]]");
     println!("name = \"{}\"", jail_name);

@@ -38,7 +38,11 @@ fn resolve_jail(config: &BlackshipConfig, jail: &str) -> Result<(String, String)
 /// Stage the jail's definition (and Jailfile, when known) inside the dataset
 /// at .blackship/ so snapshots, exports, and zfs send carry everything needed
 /// to reconstruct the jail elsewhere.
-pub(crate) fn stage_config_in_dataset(config: &BlackshipConfig, service_name: &str, full_name: &str) {
+pub(crate) fn stage_config_in_dataset(
+    config: &BlackshipConfig,
+    service_name: &str,
+    full_name: &str,
+) {
     let Some(jail_def) = config.get_jail(service_name) else {
         return;
     };
@@ -93,7 +97,10 @@ pub fn handle_commit(config_path: &Path, jail: String, release: String) -> Resul
         release,
         release_path.display()
     );
-    println!("Use it with: FROM {}  (Jailfile) or release = \"{}\"", release, release);
+    println!(
+        "Use it with: FROM {}  (Jailfile) or release = \"{}\"",
+        release, release
+    );
     Ok(())
 }
 

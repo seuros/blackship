@@ -56,22 +56,16 @@ pub fn jexec_with_output(jid: i32, command: &[&str]) -> Result<(i32, Vec<u8>, Ve
 
             result.map(|code| (code, stdout, stderr))
         }
-        Ok(ForkResult::Child) => {
-            // Child process: attach to jail and execute command
-            // Close read ends
-            drop(stdout_read);
-            drop(stderr_read);
-
-            // Own process group so the parent can kill child + grandchildren.
-            unsafe {
-                libc::setpgid(0, 0);
-            }
-
-            // Redirect stdout and stderr to pipes
-            redirect_child_io(stdout_write, stderr_write);
-
-            attach_and_exec(jid, command);
-        }
+        Ok(ForkResult::Child) => piped_child(
+            ChildPipes {
+                stdout_read,
+                stderr_read,
+                stdout_write,
+                stderr_write,
+            },
+            jid,
+            command,
+        ),
         Err(e) => Err(jexec_fork_error(e)),
     }
 }
@@ -191,6 +185,38 @@ fn jexec_pipe(label: &str) -> Result<(OwnedFd, OwnedFd)> {
         command: "jexec".to_string(),
         message: format!("Failed to create {} pipe: {}", label, e),
     })
+}
+
+/// Child side of a piped jexec: drop the read ends, take our own process group
+/// so the parent can kill grandchildren, wire up the pipes, attach, exec.
+fn piped_child(pipes: ChildPipes, jid: i32, command: &[&str]) -> ! {
+    drop(pipes.stdout_read);
+    drop(pipes.stderr_read);
+    unsafe {
+        libc::setpgid(0, 0);
+    }
+    redirect_child_io(pipes.stdout_write, pipes.stderr_write);
+    attach_and_exec(jid, command);
+}
+
+/// Stop being a reaper; descendants revert to init.
+fn reap_release() {
+    unsafe {
+        libc::procctl(
+            libc::P_PID as libc::idtype_t,
+            0,
+            libc::PROC_REAP_RELEASE,
+            std::ptr::null_mut(),
+        );
+    }
+}
+
+/// The four pipe ends a forked child inherits.
+struct ChildPipes {
+    stdout_read: OwnedFd,
+    stderr_read: OwnedFd,
+    stdout_write: OwnedFd,
+    stderr_write: OwnedFd,
 }
 
 /// Redirect stdout/stderr to the given pipe write-ends and drop them.
@@ -320,20 +346,16 @@ pub fn jexec_with_timeout(
                 }
             }
         }
-        Ok(ForkResult::Child) => {
-            // Child process: attach to jail and execute command
-            drop(stdout_read);
-            drop(stderr_read);
-
-            unsafe {
-                libc::setpgid(0, 0);
-            }
-
-            // Redirect stdout and stderr to pipes
-            redirect_child_io(stdout_write, stderr_write);
-
-            attach_and_exec(jid, command);
-        }
+        Ok(ForkResult::Child) => piped_child(
+            ChildPipes {
+                stdout_read,
+                stderr_read,
+                stdout_write,
+                stderr_write,
+            },
+            jid,
+            command,
+        ),
         Err(e) => Err(jexec_fork_error(e)),
     }
 }
@@ -447,14 +469,7 @@ pub fn chroot_exec(
             let stdout = stdout_thread.join().unwrap_or_default();
             let stderr = stderr_thread.join().unwrap_or_default();
 
-            unsafe {
-                libc::procctl(
-                    libc::P_PID as libc::idtype_t,
-                    0,
-                    libc::PROC_REAP_RELEASE,
-                    std::ptr::null_mut(),
-                );
-            }
+            reap_release();
 
             match wait_result {
                 Ok(WaitStatus::Exited(_, exit_code)) => Ok((exit_code, stdout, stderr)),
@@ -542,14 +557,7 @@ pub fn chroot_exec(
             std::process::exit(127);
         }
         Err(e) => {
-            unsafe {
-                libc::procctl(
-                    libc::P_PID as libc::idtype_t,
-                    0,
-                    libc::PROC_REAP_RELEASE,
-                    std::ptr::null_mut(),
-                );
-            }
+            reap_release();
             Err(Error::CommandFailed {
                 command: "chroot".to_string(),
                 message: format!("Fork failed: {}", e),
