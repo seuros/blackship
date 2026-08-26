@@ -3,7 +3,6 @@
 //! Provides:
 //! - Progress-tracked downloads
 //! - SHA256 checksum verification
-//! - Resume support for interrupted downloads
 //! - Retry with exponential backoff
 
 use crate::error::{Error, Result};
@@ -27,6 +26,20 @@ pub(crate) fn backoff_from_config(config: &RetryConfig) -> ExponentialBackoff {
         .jitter_factor(config.jitter_factor)
 }
 
+/// Whether a failed request is worth retrying.
+///
+/// Transport failures and 5xx are transient. Most 4xx are not: a 404 will not
+/// become a 200 after five backoff sleeps, so retrying one just stalls the
+/// caller for the full budget before reporting what the first response already
+/// said. 408 and 429 are the retryable exceptions.
+fn is_retryable(err: &ureq::Error) -> bool {
+    match err {
+        ureq::Error::StatusCode(408 | 429) => true,
+        ureq::Error::StatusCode(code) => !(400..500).contains(code),
+        _ => true,
+    }
+}
+
 /// Retry an HTTP call with exponential backoff; `what` labels log and error messages.
 fn retry_call<T>(
     url: &str,
@@ -42,6 +55,12 @@ fn retry_call<T>(
         attempt += 1;
         match call() {
             Ok(v) => return Ok(v),
+            Err(e) if !is_retryable(&e) => {
+                return Err(Error::DownloadFailed(format!(
+                    "{} failed for {}: {}",
+                    what, url, e
+                )));
+            }
             Err(e) => {
                 if let Some(delay_ms) = backoff.delay(attempt, &mut rng) {
                     eprintln!(
@@ -194,25 +213,12 @@ pub fn fetch_text(url: &str, retry_config: &RetryConfig) -> Result<String> {
 }
 
 /// Check if a URL exists (HEAD request)
+///
+/// A failure that outlives the retry budget is reported as "missing": callers
+/// use this to pick a mirror path, and an unreachable URL is indistinguishable
+/// from an absent one for that purpose.
 pub fn url_exists(url: &str, retry_config: &RetryConfig) -> bool {
-    let backoff = backoff_from_config(retry_config);
-    let mut rng = rng();
-    let mut attempt: u8 = 0;
-
-    loop {
-        attempt += 1;
-        match ureq::head(url).call() {
-            Ok(_) => return true,
-            Err(ureq::Error::StatusCode(404)) => return false,
-            Err(_) => {
-                if let Some(delay_ms) = backoff.delay(attempt, &mut rng) {
-                    thread::sleep(Duration::from_millis(delay_ms));
-                } else {
-                    return false;
-                }
-            }
-        }
-    }
+    retry_call(url, retry_config, "Probe", || ureq::head(url).call()).is_ok()
 }
 
 #[cfg(test)]
@@ -238,5 +244,34 @@ mod tests {
 
         // Clean up
         let _ = fs::remove_file(&test_file);
+    }
+
+    #[test]
+    fn test_client_errors_are_not_retried() {
+        for code in [400, 401, 403, 404, 410, 451] {
+            assert!(
+                !is_retryable(&ureq::Error::StatusCode(code)),
+                "{} should fail fast",
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn test_transient_statuses_are_retried() {
+        // 408/429 are 4xx but explicitly retryable; 5xx always is.
+        for code in [408, 429, 500, 502, 503, 504] {
+            assert!(
+                is_retryable(&ureq::Error::StatusCode(code)),
+                "{} should be retried",
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn test_non_status_errors_are_retried() {
+        // Transport-level failures (DNS, connect, TLS) are transient.
+        assert!(is_retryable(&ureq::Error::HostNotFound));
     }
 }
