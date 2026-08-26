@@ -577,7 +577,10 @@ where
     {
         use std::io::Write;
         let mut f = file.ok_or_else(|| {
-            Error::Network(format!("Failed to create {} temp file: no free name", label))
+            Error::Network(format!(
+                "Failed to create {} temp file: no free name",
+                label
+            ))
         })?;
         f.write_all(content.as_bytes())
             .map_err(|e| Error::Network(format!("Failed to write {}: {}", label, e)))?;

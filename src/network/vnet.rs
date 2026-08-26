@@ -95,7 +95,10 @@ fn deterministic_mac(jail_name: &str, bridge: &str) -> String {
     hasher.update(jail_name.as_bytes());
     hasher.update(bridge.as_bytes());
     let digest = hasher.finalize();
-    format!("58:9c:fc:{:02x}:{:02x}:{:02x}", digest[0], digest[1], digest[2])
+    format!(
+        "58:9c:fc:{:02x}:{:02x}:{:02x}",
+        digest[0], digest[1], digest[2]
+    )
 }
 
 #[derive(Debug, Clone)]

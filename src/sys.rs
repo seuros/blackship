@@ -303,8 +303,8 @@ pub fn mount_devfs(dev_path: &std::path::Path) -> Result<()> {
     let fstype_key = CString::new("fstype").unwrap();
     let fstype_val = CString::new("devfs").unwrap();
     let fspath_key = CString::new("fspath").unwrap();
-    let fspath_val = CString::new(path_str)
-        .map_err(|e| Error::JailOperation(format!("Invalid path: {}", e)))?;
+    let fspath_val =
+        CString::new(path_str).map_err(|e| Error::JailOperation(format!("Invalid path: {}", e)))?;
 
     let mut iov = [&fstype_key, &fstype_val, &fspath_key, &fspath_val].map(|s| libc::iovec {
         iov_base: s.as_ptr() as *mut libc::c_void,

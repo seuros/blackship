@@ -650,7 +650,10 @@ impl Bridge {
             crate::rctl::resolve_cpu_list(&jail_def.resources, other_pins.into_iter())
         {
             if let Err(e) = crate::rctl::apply_cpuset(jid, &cpu_list) {
-                eprintln!("Failed to pin jail '{}' to CPUs: {}, stopping jail", full_name, e);
+                eprintln!(
+                    "Failed to pin jail '{}' to CPUs: {}, stopping jail",
+                    full_name, e
+                );
                 if let Err(remove_err) = jail_remove(jid) {
                     eprintln!(
                         "Warning: Failed to remove jail '{}' (JID {}) during cpuset rollback: {}",

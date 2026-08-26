@@ -246,13 +246,13 @@ impl Provisioner {
             ),
         )?;
 
-        eprintln!(
-            "Bootstrapping {} via pkgbase ({} / {})",
-            release, abi, repo
-        );
+        eprintln!("Bootstrapping {} via pkgbase ({} / {})", release, abi, repo);
         // pkg(8) itself lives in the ports repo, not base; jails bootstrap
         // it on first `pkg` use like any fresh FreeBSD install.
-        for pkg_args in [vec!["update"], vec!["install", "-y", "FreeBSD-set-base-jail"]] {
+        for pkg_args in [
+            vec!["update"],
+            vec!["install", "-y", "FreeBSD-set-base-jail"],
+        ] {
             let status = std::process::Command::new("/usr/sbin/pkg")
                 .arg("--rootdir")
                 .arg(&release_path)
@@ -543,8 +543,9 @@ pub(crate) fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
         for entry in fs::read_dir(src)
             .map_err(|e| Error::ExtractionFailed(format!("readdir {}: {}", src.display(), e)))?
         {
-            let entry = entry
-                .map_err(|e| Error::ExtractionFailed(format!("readdir {}: {}", src.display(), e)))?;
+            let entry = entry.map_err(|e| {
+                Error::ExtractionFailed(format!("readdir {}: {}", src.display(), e))
+            })?;
             copy_tree(&entry.path(), &dest.join(entry.file_name()))?;
         }
     } else {

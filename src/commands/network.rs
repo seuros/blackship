@@ -116,13 +116,15 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
                     // NgBridge::open needs a control socket (root); the host
                     // eiface's ifnet is visible to everyone, so check that.
                     let alive = match network.backend.as_str() {
-                        "netgraph" => network
-                            .host_iface
-                            .as_deref()
-                            .map(network::ioctl::interface_exists)
-                            .transpose()?
-                            .unwrap_or(false)
-                            || NgBridge::open(&network.bridge).is_ok(),
+                        "netgraph" => {
+                            network
+                                .host_iface
+                                .as_deref()
+                                .map(network::ioctl::interface_exists)
+                                .transpose()?
+                                .unwrap_or(false)
+                                || NgBridge::open(&network.bridge).is_ok()
+                        }
                         _ => Bridge::exists(&network.bridge)?,
                     };
                     let status = if alive { "active" } else { "missing-bridge" };

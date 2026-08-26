@@ -67,9 +67,10 @@ pub fn handle_migrate(
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| Error::JailOperation(format!("Failed to run zfs send: {}", e)))?;
-    let send_out = send.stdout.take().ok_or_else(|| {
-        Error::JailOperation("Failed to capture zfs send output".to_string())
-    })?;
+    let send_out = send
+        .stdout
+        .take()
+        .ok_or_else(|| Error::JailOperation("Failed to capture zfs send output".to_string()))?;
     let receive = Command::new("/usr/bin/ssh")
         .args(["-o", "BatchMode=yes", &target])
         .args(["zfs", "receive", "-u", &remote_dataset])
@@ -88,12 +89,18 @@ pub fn handle_migrate(
 
     println!("Transfer complete.");
     println!("On {target}, finish with:");
-    println!("  zfs set mountpoint=/var/blackship/jails/{} {}", full_name, remote_dataset);
+    println!(
+        "  zfs set mountpoint=/var/blackship/jails/{} {}",
+        full_name, remote_dataset
+    );
     println!("  # jail definition travels at .blackship/jail.toml inside the dataset");
     println!("  blackship up {}", service_name);
 
     if !keep {
-        println!("Source dataset kept; remove it with: blackship rm {} --volumes", service_name);
+        println!(
+            "Source dataset kept; remove it with: blackship rm {} --volumes",
+            service_name
+        );
     }
 
     Ok(())
