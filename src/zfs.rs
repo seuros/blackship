@@ -246,21 +246,6 @@ impl ZfsManager {
         })
     }
 
-    /// List a jail's build layer snapshot names
-    pub fn list_layers(&self, jail: &str) -> Result<Vec<String>> {
-        Ok(self
-            .list_snapshots(jail)?
-            .into_iter()
-            .filter_map(|s| {
-                s.name
-                    .split('@')
-                    .nth(1)
-                    .filter(|n| n.starts_with("bs-layer-"))
-                    .map(String::from)
-            })
-            .collect())
-    }
-
     /// Take a snapshot by full name (dataset@snap)
     fn take_snapshot(&self, snapshot_full: &str) -> Result<()> {
         zfs_run(&["snapshot", snapshot_full], || {
