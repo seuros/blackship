@@ -66,11 +66,31 @@ pub fn handle(
         ArmadaAction::Up {
             detach,
             jails,
-            build: _,
-            no_build: _,
+            build,
+            no_build,
             dry_run,
         } => {
             let config = manifest::load_merged(&files)?;
+
+            let selected = select_jails(&config, &jails)?;
+            if no_build {
+                for jail_def in &selected {
+                    if jail_def.build.is_some() && !jail_rootfs(&config, &jail_def.name).exists() {
+                        return Err(error::Error::User(format!(
+                            "Jail '{}' is not built and --no-build was given. Run 'blackship armada build {}' first.",
+                            jail_def.name, jail_def.name
+                        )));
+                    }
+                }
+            } else {
+                let mode = if build {
+                    BuildMode::Force
+                } else {
+                    BuildMode::IfMissing
+                };
+                build_jails(&config, &selected, mode, dry_run, verbose)?;
+            }
+
             let mut bridge = bridge::Bridge::open(config, verbose)?;
 
             if jails.is_empty() {
@@ -121,63 +141,13 @@ pub fn handle(
         ArmadaAction::Build { jails, dry_run } => {
             let config = manifest::load_merged(&files)?;
 
-            let jails_to_build: Vec<_> = if jails.is_empty() {
-                config.jails.iter().collect()
-            } else {
-                let mut service_names = Vec::new();
-                for name in &jails {
-                    let (service_name, _full_name) = config
-                        .resolve_jail_names(name)
-                        .ok_or_else(|| error::Error::JailNotFound(name.clone()))?;
-                    service_names.push(service_name);
-                }
-                config
-                    .jails
-                    .iter()
-                    .filter(|j| service_names.contains(&j.name))
-                    .collect()
-            };
+            let jails_to_build = select_jails(&config, &jails)?;
 
             if dry_run {
                 println!("=== DRY RUN - No changes will be made ===\n");
             }
 
-            for jail_def in jails_to_build {
-                if let Some(build_path) = &jail_def.build {
-                    let jailfile_path = build_path.join("Jailfile");
-                    if jailfile_path.exists() {
-                        build_jail_from_file(
-                            &config,
-                            &jailfile_path,
-                            &jail_def.name,
-                            Some(build_path),
-                            dry_run,
-                            verbose,
-                        )?;
-                    } else if let Some(jailfile_explicit) = &jail_def.jailfile {
-                        if jailfile_explicit.exists() {
-                            let context_dir = jailfile_explicit
-                                .parent()
-                                .unwrap_or(std::path::Path::new("."));
-                            build_jail_from_file(
-                                &config,
-                                jailfile_explicit,
-                                &jail_def.name,
-                                Some(&context_dir.to_path_buf()),
-                                dry_run,
-                                verbose,
-                            )?;
-                        } else {
-                            eprintln!(
-                                "Warning: Jailfile not found at {}",
-                                jailfile_explicit.display()
-                            );
-                        }
-                    } else {
-                        eprintln!("Warning: No Jailfile found at {}", jailfile_path.display());
-                    }
-                }
-            }
+            build_jails(&config, &jails_to_build, BuildMode::Force, dry_run, verbose)?;
             Ok(())
         }
 
@@ -227,6 +197,94 @@ pub fn handle(
             Ok(())
         }
     }
+}
+
+/// Whether a build should replace an existing rootfs or only fill a missing one
+enum BuildMode {
+    Force,
+    IfMissing,
+}
+
+/// Resolve requested jail names against the config, or select all jails
+fn select_jails<'a>(
+    config: &'a manifest::BlackshipConfig,
+    jails: &[String],
+) -> Result<Vec<&'a manifest::JailDef>> {
+    if jails.is_empty() {
+        return Ok(config.jails.iter().collect());
+    }
+    let mut service_names = Vec::new();
+    for name in jails {
+        let (service_name, _full_name) = config
+            .resolve_jail_names(name)
+            .ok_or_else(|| error::Error::JailNotFound(name.clone()))?;
+        service_names.push(service_name);
+    }
+    Ok(config
+        .jails
+        .iter()
+        .filter(|j| service_names.contains(&j.name))
+        .collect())
+}
+
+/// Where a jail's built rootfs lives
+fn jail_rootfs(config: &manifest::BlackshipConfig, service_name: &str) -> std::path::PathBuf {
+    config
+        .config
+        .data_dir
+        .join("jails")
+        .join(config.jail_name(service_name))
+}
+
+/// Build every selected jail that has a build context, honoring `mode`
+fn build_jails(
+    config: &manifest::BlackshipConfig,
+    jails: &[&manifest::JailDef],
+    mode: BuildMode,
+    dry_run: bool,
+    verbose: bool,
+) -> Result<()> {
+    for jail_def in jails {
+        let Some(build_path) = &jail_def.build else {
+            continue;
+        };
+        if matches!(mode, BuildMode::IfMissing) && jail_rootfs(config, &jail_def.name).exists() {
+            continue;
+        }
+        let jailfile_path = build_path.join("Jailfile");
+        if jailfile_path.exists() {
+            build_jail_from_file(
+                config,
+                &jailfile_path,
+                &jail_def.name,
+                Some(build_path),
+                dry_run,
+                verbose,
+            )?;
+        } else if let Some(jailfile_explicit) = &jail_def.jailfile {
+            if jailfile_explicit.exists() {
+                let context_dir = jailfile_explicit
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."));
+                build_jail_from_file(
+                    config,
+                    jailfile_explicit,
+                    &jail_def.name,
+                    Some(&context_dir.to_path_buf()),
+                    dry_run,
+                    verbose,
+                )?;
+            } else {
+                eprintln!(
+                    "Warning: Jailfile not found at {}",
+                    jailfile_explicit.display()
+                );
+            }
+        } else {
+            eprintln!("Warning: No Jailfile found at {}", jailfile_path.display());
+        }
+    }
+    Ok(())
 }
 
 /// Build a jail from a Jailfile, bootstrapping the base release if needed

@@ -592,7 +592,7 @@ pub enum ArmadaAction {
         jails: Vec<String>,
 
         /// Force rebuild even if jail exists
-        #[usage(long)]
+        #[usage(long, conflicts = "--no-build")]
         build: bool,
 
         /// Don't build, fail if jail doesn't exist
