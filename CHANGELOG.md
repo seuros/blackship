@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.7](https://github.com/seuros/blackship/compare/blackship-v0.1.6...blackship-v0.1.7) (2026-09-04)
+
+
+### Bug Fixes
+
+* **armada:** honor --build/--no-build on armada up ([bf6fed3](https://github.com/seuros/blackship/commit/bf6fed36c90765c07086ff88b5d7bed361e551a6))
+* **proc:** share host-command runner, stop masking exec failures ([e39df0c](https://github.com/seuros/blackship/commit/e39df0cf88a23332ac739c452cee16decf7375a5))
+* **supply:** fail fast on non-retryable statuses, dedupe probe retry loop ([69818cd](https://github.com/seuros/blackship/commit/69818cd90f2794825082660d937e4cf8166e520c))
+
 ## [0.1.6](https://github.com/seuros/blackship/compare/blackship-v0.1.5...blackship-v0.1.6) (2026-08-09)
 
 
