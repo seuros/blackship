@@ -44,7 +44,7 @@ impl AppContext {
                 let opts = console::ExecOptions {
                     user,
                     workdir,
-                    env,
+                    env: crate::cli::into_pairs(env),
                     ..Default::default()
                 };
                 let status = console::exec_in_jail(&jail, &command, &opts)?;
@@ -174,7 +174,7 @@ impl AppContext {
                 self.verbose,
                 file,
                 name,
-                build_args,
+                crate::cli::into_pairs(build_args),
                 context,
                 dry_run,
             ),

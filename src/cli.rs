@@ -1,31 +1,28 @@
 //! Command-line interface for Blackship
 //!
-//! Uses clap with derive for type-safe CLI parsing
+//! Uses usage-rs derives for type-safe CLI parsing
 
-use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::Shell;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 /// Blackship - FreeBSD jail orchestrator
-#[derive(Parser)]
-#[command(name = "blackship")]
-#[command(author, version, about, long_about = None)]
-#[command(propagate_version = true)]
+#[derive(usage::Cli)]
+#[usage(bin = "blackship", version, completion)]
 pub struct Cli {
     /// Configuration file path
-    #[arg(short, long, default_value = "blackship.toml")]
+    #[usage(short, long, default = "blackship.toml")]
     pub config: PathBuf,
 
     /// Enable verbose output
-    #[arg(short, long)]
+    #[usage(short, long)]
     pub verbose: bool,
 
-    #[command(subcommand)]
+    #[usage(subcommand)]
     pub command: Commands,
 }
 
 /// Available commands
-#[derive(Subcommand)]
+#[derive(usage::Subcommands)]
 pub enum Commands {
     /// Start jails (respecting dependencies)
     Up {
@@ -33,11 +30,11 @@ pub enum Commands {
         jail: Option<String>,
 
         /// Start all jails (required if no jail specified)
-        #[arg(long, conflicts_with = "jail")]
+        #[usage(long, conflicts = "jail")]
         all: bool,
 
         /// Show what would be done without making changes
-        #[arg(long)]
+        #[usage(long)]
         dry_run: bool,
     },
 
@@ -47,11 +44,11 @@ pub enum Commands {
         jail: Option<String>,
 
         /// Stop all jails (required if no jail specified)
-        #[arg(long, conflicts_with = "jail")]
+        #[usage(long, conflicts = "jail")]
         all: bool,
 
         /// Show what would be done without making changes
-        #[arg(long)]
+        #[usage(long)]
         dry_run: bool,
     },
 
@@ -61,18 +58,18 @@ pub enum Commands {
         jail: Option<String>,
 
         /// Restart all jails (required if no jail specified)
-        #[arg(long, conflicts_with = "jail")]
+        #[usage(long, conflicts = "jail")]
         all: bool,
 
         /// Show what would be done without making changes
-        #[arg(long)]
+        #[usage(long)]
         dry_run: bool,
     },
 
     /// List jail status
     Ps {
         /// Output in JSON format
-        #[arg(long)]
+        #[usage(long)]
         json: bool,
     },
 
@@ -83,36 +80,36 @@ pub enum Commands {
     Setup {
         /// Enable PF if it is not running: write a minimal /etc/pf.conf
         /// with blackship anchors if none exists, set pf_enable=YES, start pf
-        #[arg(long)]
+        #[usage(long)]
         enable_pf: bool,
     },
 
     /// Initialize a new Jailfile in the current directory
     Init {
         /// Output file name
-        #[arg(short, long, default_value = "Jailfile")]
+        #[usage(short, long, default = "Jailfile")]
         file: PathBuf,
 
         /// Base FreeBSD release
-        #[arg(short, long)]
+        #[usage(short, long)]
         release: Option<String>,
 
         /// Use TOML format instead of Dockerfile-like format
-        #[arg(long)]
+        #[usage(long)]
         toml: bool,
 
         /// Overwrite existing file
-        #[arg(short = 'y', long)]
+        #[usage(short = 'y', long)]
         force: bool,
     },
 
     /// Orchestrate multiple jails (like docker-compose)
     Armada {
         /// Configuration files (can specify multiple, merged in order)
-        #[arg(short, long = "file", default_value = "blackship.toml")]
+        #[usage(short, long = "file", var, default = "blackship.toml")]
         files: Vec<PathBuf>,
 
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: ArmadaAction,
     },
 
@@ -122,42 +119,42 @@ pub enum Commands {
         jail: String,
 
         /// User to run as
-        #[arg(short, long, default_value = "root")]
+        #[usage(short, long, default = "root")]
         user: String,
 
         /// Working directory inside the jail
-        #[arg(short = 'w', long)]
+        #[usage(short = 'w', long)]
         workdir: Option<String>,
 
         /// Environment variables (KEY=VALUE format, can be repeated)
-        #[arg(short = 'e', long = "env", value_parser = parse_key_val)]
-        env: Vec<(String, String)>,
+        #[usage(short = 'e', long = "env", var)]
+        env: Vec<KeyVal>,
 
         /// Command to execute (use -- to separate from options)
-        #[arg(last = true, required = true)]
+        #[usage(value_name = "COMMAND", double_dash = "required", required = true)]
         command: Vec<String>,
     },
 
     /// Run a command in a new ephemeral jail (always cleans up when command exits)
     Run {
         /// Jail name
-        #[arg(long)]
+        #[usage(long)]
         name: String,
 
         /// FreeBSD release to use (e.g., 15.1-RELEASE)
-        #[arg(long)]
+        #[usage(long)]
         release: String,
 
         /// Run in background (detached mode) - jail persists until removed with 'blackship rm'
-        #[arg(short = 'd', long)]
+        #[usage(short = 'd', long)]
         detach: bool,
 
         /// Network to attach to
-        #[arg(long)]
+        #[usage(long)]
         network: Option<String>,
 
         /// Command to execute (use -- to separate from options)
-        #[arg(last = true)]
+        #[usage(value_name = "COMMAND", double_dash = "required")]
         command: Vec<String>,
     },
 
@@ -170,7 +167,7 @@ pub enum Commands {
         dest: String,
 
         /// Preserve file attributes
-        #[arg(short, long)]
+        #[usage(short, long)]
         preserve: bool,
     },
 
@@ -180,11 +177,11 @@ pub enum Commands {
         jails: Vec<String>,
 
         /// Force removal even if jail is running
-        #[arg(short, long)]
+        #[usage(short, long)]
         force: bool,
 
         /// Remove associated ZFS datasets
-        #[arg(long)]
+        #[usage(long)]
         volumes: bool,
     },
 
@@ -194,7 +191,7 @@ pub enum Commands {
         jail: String,
 
         /// User to run as
-        #[arg(short, long, default_value = "root")]
+        #[usage(short, long, default = "root")]
         user: String,
     },
 
@@ -204,32 +201,32 @@ pub enum Commands {
         release: String,
 
         /// Force re-download even if release exists
-        #[arg(short, long)]
+        #[usage(short, long)]
         force: bool,
 
         /// Archives to download (default: base)
-        #[arg(short, long, value_delimiter = ',')]
+        #[usage(short, long, delimiter = ',')]
         archives: Option<Vec<String>>,
 
         /// Bootstrap from base packages instead of base.txz
         /// (automatic for FreeBSD 16 and newer, which have no dist sets)
-        #[arg(long)]
+        #[usage(long)]
         pkgbase: bool,
     },
 
     /// List or manage releases
     Releases {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: Option<ReleasesAction>,
 
         /// Output in JSON format (for list action)
-        #[arg(long)]
+        #[usage(long)]
         json: bool,
     },
 
     /// Network management
     Network {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: NetworkAction,
     },
 
@@ -242,11 +239,11 @@ pub enum Commands {
         target: String,
 
         /// Remote dataset (default: zroot/blackship/jails/<jail>)
-        #[arg(long)]
+        #[usage(long)]
         remote_dataset: Option<String>,
 
         /// Keep the local jail after transfer (default: keep, prints removal hint)
-        #[arg(long)]
+        #[usage(long)]
         keep: bool,
     },
 
@@ -256,7 +253,7 @@ pub enum Commands {
         jail: Option<String>,
 
         /// Output in JSON format
-        #[arg(long)]
+        #[usage(long)]
         json: bool,
     },
 
@@ -266,44 +263,44 @@ pub enum Commands {
         jail: Option<String>,
 
         /// Watch mode - continuously monitor health
-        #[arg(short, long)]
+        #[usage(short, long)]
         watch: bool,
 
         /// Update interval in seconds (for watch mode)
-        #[arg(short, long, default_value = "5")]
+        #[usage(short, long, default = "5")]
         interval: u64,
 
         /// Output in JSON format
-        #[arg(long)]
+        #[usage(long)]
         json: bool,
     },
 
     /// Build a jail from a Jailfile
     Build {
         /// Path to Jailfile (default: ./Jailfile)
-        #[arg(short, long, default_value = "Jailfile")]
+        #[usage(short, long, default = "Jailfile")]
         file: PathBuf,
 
         /// Jail name (overrides metadata name)
-        #[arg(short, long)]
+        #[usage(short, long)]
         name: Option<String>,
 
         /// Build arguments (KEY=VALUE)
-        #[arg(long = "build-arg", value_parser = parse_key_val)]
-        build_args: Vec<(String, String)>,
+        #[usage(long = "build-arg", var)]
+        build_args: Vec<KeyVal>,
 
         /// Build context directory (default: directory containing Jailfile)
-        #[arg(short, long)]
+        #[usage(short, long)]
         context: Option<PathBuf>,
 
         /// Don't execute, just show what would be done
-        #[arg(long)]
+        #[usage(long)]
         dry_run: bool,
     },
 
     /// Template management
     Template {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: TemplateAction,
     },
 
@@ -313,19 +310,19 @@ pub enum Commands {
         jail: String,
 
         /// External port (host-side)
-        #[arg(short = 'p', long)]
+        #[usage(short = 'p', long)]
         port: u16,
 
         /// Internal port (jail-side, defaults to external port)
-        #[arg(short, long)]
+        #[usage(short, long)]
         internal: Option<u16>,
 
         /// Protocol (tcp or udp)
-        #[arg(long, default_value = "tcp")]
+        #[usage(long, default = "tcp")]
         proto: String,
 
         /// Bind to specific host IP (defaults to all interfaces)
-        #[arg(short = 'I', long)]
+        #[usage(short = 'I', long)]
         bind_ip: Option<String>,
     },
 
@@ -347,7 +344,7 @@ pub enum Commands {
         jail: String,
 
         /// Force cleanup even if errors occur
-        #[arg(short, long)]
+        #[usage(short, long)]
         force: bool,
     },
 
@@ -357,11 +354,11 @@ pub enum Commands {
         jail: String,
 
         /// Output file path (default: <jail>.tar.zst)
-        #[arg(short, long)]
+        #[usage(short, long)]
         output: Option<PathBuf>,
 
         /// Use ZFS send for faster export (requires ZFS)
-        #[arg(long)]
+        #[usage(long)]
         zfs_send: bool,
     },
 
@@ -371,21 +368,21 @@ pub enum Commands {
         file: PathBuf,
 
         /// Name for the imported jail (default: original name)
-        #[arg(short, long)]
+        #[usage(short, long)]
         name: Option<String>,
 
         /// Overwrite existing jail
-        #[arg(long)]
+        #[usage(long)]
         force: bool,
 
         /// Source manager: iocage, ezjail, rootfs, or auto (native when omitted)
-        #[arg(long)]
+        #[usage(long)]
         from: Option<String>,
     },
 
     /// Manage jail snapshots
     Snapshot {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: SnapshotAction,
     },
 
@@ -411,7 +408,7 @@ pub enum Commands {
     /// Generate shell completion scripts
     Completion {
         /// Shell to generate completion for
-        #[arg(value_enum)]
+        #[usage(value_enum)]
         shell: Shell,
     },
 
@@ -424,25 +421,71 @@ pub enum Commands {
         jail: String,
 
         /// Follow log output (like tail -f)
-        #[arg(short = 'f', long)]
+        #[usage(short = 'f', long)]
         follow: bool,
 
         /// Number of lines to show
-        #[arg(short = 'n', long, default_value = "100")]
+        #[usage(short = 'n', long, default = "100")]
         lines: usize,
     },
 }
 
-/// Parse key=value pairs for build arguments
-fn parse_key_val(s: &str) -> Result<(String, String), String> {
-    let pos = s
-        .find('=')
-        .ok_or_else(|| format!("invalid KEY=VALUE: no `=` found in `{s}`"))?;
-    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
+/// A KEY=VALUE pair, parsed at the CLI boundary
+#[derive(Clone, Debug)]
+pub struct KeyVal {
+    pub key: String,
+    pub value: String,
+}
+
+impl FromStr for KeyVal {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let pos = s
+            .find('=')
+            .ok_or_else(|| format!("invalid KEY=VALUE: no `=` found in `{s}`"))?;
+        Ok(Self {
+            key: s[..pos].to_string(),
+            value: s[pos + 1..].to_string(),
+        })
+    }
+}
+
+impl From<KeyVal> for (String, String) {
+    fn from(kv: KeyVal) -> Self {
+        (kv.key, kv.value)
+    }
+}
+
+/// Convert parsed KEY=VALUE pairs into plain tuples for downstream APIs
+pub fn into_pairs(pairs: Vec<KeyVal>) -> Vec<(String, String)> {
+    pairs.into_iter().map(Into::into).collect()
+}
+
+/// Shells completion scripts can be generated for
+#[derive(Clone, Copy, usage::ValueEnum)]
+pub enum Shell {
+    Bash,
+    Elvish,
+    Fish,
+    Nu,
+    Zsh,
+}
+
+impl Shell {
+    fn runtime(self) -> usage::complete::Shell {
+        match self {
+            Self::Bash => usage::complete::Shell::Bash,
+            Self::Elvish => usage::complete::Shell::Elvish,
+            Self::Fish => usage::complete::Shell::Fish,
+            Self::Nu => usage::complete::Shell::Nu,
+            Self::Zsh => usage::complete::Shell::Zsh,
+        }
+    }
 }
 
 /// Actions for the template command
-#[derive(Subcommand)]
+#[derive(usage::Subcommands)]
 pub enum TemplateAction {
     /// List available templates
     List,
@@ -456,13 +499,13 @@ pub enum TemplateAction {
     /// Validate a Jailfile
     Validate {
         /// Path to Jailfile
-        #[arg(default_value = "Jailfile")]
+        #[usage(default = "Jailfile")]
         file: PathBuf,
     },
 }
 
 /// Actions for the releases command
-#[derive(Subcommand)]
+#[derive(usage::Subcommands)]
 pub enum ReleasesAction {
     /// List all bootstrapped releases (default)
     List,
@@ -481,7 +524,7 @@ pub enum ReleasesAction {
 }
 
 /// Actions for the snapshot command
-#[derive(Subcommand)]
+#[derive(usage::Subcommands)]
 pub enum SnapshotAction {
     /// Create a snapshot of a jail
     Create {
@@ -498,7 +541,7 @@ pub enum SnapshotAction {
         jail: String,
 
         /// Output in JSON format
-        #[arg(long)]
+        #[usage(long)]
         json: bool,
     },
 
@@ -511,7 +554,7 @@ pub enum SnapshotAction {
         snapshot: String,
 
         /// Force rollback, destroying newer snapshots
-        #[arg(short, long)]
+        #[usage(short, long)]
         force: bool,
     },
 
@@ -526,38 +569,38 @@ pub enum SnapshotAction {
 }
 
 /// Actions for the armada command (docker-compose style orchestration)
-#[derive(Subcommand)]
+#[derive(usage::Subcommands)]
 pub enum ArmadaAction {
     /// Initialize a new blackship.toml
     Init {
         /// Output file name
-        #[arg(short, long, default_value = "blackship.toml")]
+        #[usage(short, long, default = "blackship.toml")]
         file: PathBuf,
 
         /// Overwrite existing file
-        #[arg(short = 'y', long)]
+        #[usage(short = 'y', long)]
         force: bool,
     },
 
     /// Start all jails (auto-builds if needed)
     Up {
         /// Run in background (warden mode)
-        #[arg(short, long)]
+        #[usage(short, long)]
         detach: bool,
 
         /// Only start specific jails
         jails: Vec<String>,
 
         /// Force rebuild even if jail exists
-        #[arg(long)]
+        #[usage(long)]
         build: bool,
 
         /// Don't build, fail if jail doesn't exist
-        #[arg(long)]
+        #[usage(long)]
         no_build: bool,
 
         /// Show what would be done without making changes
-        #[arg(long)]
+        #[usage(long)]
         dry_run: bool,
     },
 
@@ -567,7 +610,7 @@ pub enum ArmadaAction {
         jails: Vec<String>,
 
         /// Show what would be done without making changes
-        #[arg(long)]
+        #[usage(long)]
         dry_run: bool,
     },
 
@@ -577,27 +620,27 @@ pub enum ArmadaAction {
         jails: Vec<String>,
 
         /// Show what would be done without making changes
-        #[arg(long)]
+        #[usage(long)]
         dry_run: bool,
     },
 
     /// Show status of all jails
     Ps {
         /// Output in JSON format
-        #[arg(long)]
+        #[usage(long)]
         json: bool,
     },
 
     /// Validate and show configuration
     Config {
         /// Show resolved (merged) configuration
-        #[arg(long)]
+        #[usage(long)]
         show: bool,
     },
 }
 
 /// Actions for the network command
-#[derive(Subcommand)]
+#[derive(usage::Subcommands)]
 pub enum NetworkAction {
     /// Create a new network
     Create {
@@ -605,20 +648,20 @@ pub enum NetworkAction {
         name: String,
 
         /// Subnet in CIDR notation (e.g., 10.0.1.0/24)
-        #[arg(short, long)]
+        #[usage(short, long)]
         subnet: String,
 
         /// Gateway address (defaults to first usable in subnet)
-        #[arg(short, long)]
+        #[usage(short, long)]
         gateway: Option<String>,
 
         /// Bridge interface name (defaults to blackship0)
-        #[arg(short, long, default_value = "blackship0")]
+        #[usage(short, long, default = "blackship0")]
         bridge: String,
 
         /// Network backend: epair (if_bridge) or netgraph (ng_bridge with a
         /// host gateway eiface)
-        #[arg(long, default_value = "epair")]
+        #[usage(long, default = "epair")]
         backend: String,
     },
 
@@ -628,7 +671,7 @@ pub enum NetworkAction {
         name: String,
 
         /// Force destruction even if jails are attached
-        #[arg(short, long)]
+        #[usage(short, long)]
         force: bool,
     },
 
@@ -713,8 +756,7 @@ impl Cli {
 
     /// Generate shell completion scripts
     pub fn generate_completion(shell: Shell) {
-        let mut cmd = Self::command();
-        clap_complete::generate(shell, &mut cmd, "blackship", &mut std::io::stdout());
+        print!("{}", Self::completion_script(shell.runtime()));
     }
 }
 
