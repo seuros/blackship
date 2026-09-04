@@ -115,7 +115,7 @@ impl TemplateExecutor {
                 if !self.dry_run {
                     cache.zfs.rollback_to_layer(&cache.jail, &layer)?;
                 }
-                println!("CACHED steps 1-{} (layer {})", index + 1, &layer);
+                println!("CACHED steps 1-{} (layer {})", index + 1, layer);
                 resume_from = index + 1;
             }
         }

@@ -122,16 +122,15 @@ pub fn run_ephemeral_jail(
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false);
-            if !mount_ok {
-                if let Ok(output) = Command::new("/sbin/zfs")
+            if !mount_ok
+                && let Ok(output) = Command::new("/sbin/zfs")
                     .args(["get", "-H", "-o", "value", "mountpoint", &new_dataset])
                     .output()
-                    && output.status.success()
-                {
-                    let mp = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !mp.is_empty() && mp != "-" {
-                        jail_root = PathBuf::from(mp);
-                    }
+                && output.status.success()
+            {
+                let mp = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !mp.is_empty() && mp != "-" {
+                    jail_root = PathBuf::from(mp);
                 }
             }
             true
