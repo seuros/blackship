@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.9](https://github.com/seuros/blackship/compare/blackship-v0.1.8...blackship-v0.1.9) (2026-09-11)
+
+
+### Features
+
+* **eva:** hot-update running jails via jail_set(JAIL_UPDATE) ([824194c](https://github.com/seuros/blackship/commit/824194c1ab0f9e19c64c98fad2326089ca072930))
+* **jail:** reserved params from sys/jail.h JAIL_PARAM constants ([dc23dc9](https://github.com/seuros/blackship/commit/dc23dc9629ffb25c1132bfbe42f4885459dae148))
+
 ## [0.1.8](https://github.com/seuros/blackship/compare/blackship-v0.1.7...blackship-v0.1.8) (2026-09-04)
 
 
