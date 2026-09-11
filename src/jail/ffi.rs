@@ -195,6 +195,40 @@ pub fn jail_create(path: &Path, params: HashMap<String, ParamValue>) -> Result<i
     check_jail_set_result(jid, &errmsg)
 }
 
+/// Update parameters of a running jail (jail_set with JAIL_UPDATE).
+///
+/// All-or-nothing: a non-updatable key fails the whole call and the kernel
+/// applies none of it.
+pub fn jail_update(jid: i32, params: &HashMap<String, ParamValue>) -> Result<(), Error> {
+    let raw_params = build_raw_params(params)?;
+
+    let mut jiov: Vec<libc::iovec> = raw_params
+        .iter()
+        .flat_map(|(key, value)| iovec!(key => value))
+        .collect();
+
+    let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
+    jiov.append(
+        &mut vec![
+            iovec!(b"jid\0" => (&jid as *const _, mem::size_of::<i32>())),
+            iovec!(b"errmsg\0" => mut errmsg),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    );
+
+    let ret = unsafe {
+        libc::jail_set(
+            jiov[..].as_mut_ptr(),
+            jiov.len() as u32,
+            JailFlags::UPDATE.bits(),
+        )
+    };
+
+    check_jail_set_result(ret, &errmsg).map(|_| ())
+}
+
 /// Get the jail ID from a jail name
 ///
 /// If the name can be parsed as an i32, it's returned directly

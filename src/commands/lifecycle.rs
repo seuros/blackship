@@ -39,6 +39,24 @@ pub fn handle_down(
     Ok(())
 }
 
+pub fn handle_eva(
+    bridge: &mut bridge::Bridge,
+    jail: Option<&str>,
+    all: bool,
+    dry_run: bool,
+) -> Result<()> {
+    if jail.is_none() && !all {
+        eprintln!("Error: specify a jail name or use --all to update all jails");
+        std::process::exit(1);
+    }
+    if dry_run {
+        bridge.eva_dry_run(jail)?;
+    } else {
+        bridge.eva(jail)?;
+    }
+    Ok(())
+}
+
 pub fn handle_restart(
     bridge: &mut bridge::Bridge,
     jail: Option<&str>,

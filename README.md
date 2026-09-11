@@ -7,6 +7,7 @@ A FreeBSD jail orchestrator with TOML configuration, dependency management, stat
 - **Declarative Configuration**: Define jails in TOML with dependencies, networking, hooks, and resource limits
 - **Dependency Management**: Real dependency-graph traversal for start/stop ordering; target jails by name, unambiguous prefix, tag, or ALL
 - **State Machine Lifecycle**: Clean state transitions, devfs mounted per jail, /etc/rc boot and /etc/rc.shutdown on stop
+- **Hot Updates (EVA)**: `blackship eva` diffs the config against running jails and applies parameter, rctl, and cpuset changes live via jail_set(JAIL_UPDATE) -- no restart, with drift warnings for changes that need one
 - **VNET Networking**: epair (if_bridge) and native netgraph (ng_bridge) backends, named networks with automatic host gateway wiring, deterministic MAC addresses
 - **Instant Provisioning**: releases bootstrap into datasets with a @pristine snapshot; jail roots are zfs clones, created in under a second
 - **Jailfile Builds with Layer Cache**: every RUN/COPY is snapshotted; rebuilds resume from the longest cached prefix like a Docker layer cache
@@ -245,8 +246,8 @@ command = "pgrep nginx"
 target = "jail"
 
 [[jails.hooks]]
-phase = "post_start"
-target = "jail"
+phase = "post_start"                  # pre_create, post_create, pre_start, post_start,
+target = "jail"                       # pre_stop, post_stop, pre_eva, post_eva
 command = "/etc/rc.d/nginx start"
 on_failure = "abort"                  # abort or continue
 
@@ -266,9 +267,17 @@ on_failure = "continue"
 | `blackship up [target] [--all] [--dry-run]` | Start jail(s) with dependencies |
 | `blackship down [target] [--all] [--dry-run]` | Stop jail(s) in reverse order |
 | `blackship restart [target] [--all] [--dry-run]` | Restart jail(s) |
+| `blackship eva [target] [--all] [--dry-run]` | Hot-update running jail(s) to match the config, no restart |
 
 Targets accept a jail name, an unambiguous prefix, a tag (from `tags = [...]`
 in the jail definition), or `ALL`.
+
+`eva` recomputes each jail's parameters from the config, diffs them against
+the live values from jls, and applies only the changes in one
+jail_set(JAIL_UPDATE) call, then replaces rctl rules and re-pins the cpuset.
+`path`, `vnet`, and IP addresses cannot change live: drift on those is
+reported as a restart-required warning and skipped. Not-running jails are
+skipped. `--dry-run` prints the diff without touching anything.
 | `blackship ps [--json]` | List jail status |
 | `blackship check` | Validate configuration |
 | `blackship setup [--enable-pf]` | Reapply networks and PF anchors; --enable-pf turns PF on |

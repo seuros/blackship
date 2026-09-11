@@ -31,6 +31,10 @@ pub enum HookPhase {
     PreStop,
     /// After jail is stopped
     PostStop,
+    /// Before a hot update (eva) is applied to a running jail
+    PreEva,
+    /// After a hot update (eva) is applied to a running jail
+    PostEva,
 }
 
 impl HookPhase {
@@ -44,13 +48,18 @@ impl HookPhase {
             HookPhase::PostStart,
             HookPhase::PreStop,
             HookPhase::PostStop,
+            HookPhase::PreEva,
+            HookPhase::PostEva,
         ]
     }
 
     /// Check if this phase requires a running jail
     #[allow(dead_code)]
     pub fn requires_running_jail(&self) -> bool {
-        matches!(self, HookPhase::PostStart | HookPhase::PreStop)
+        matches!(
+            self,
+            HookPhase::PostStart | HookPhase::PreStop | HookPhase::PreEva | HookPhase::PostEva
+        )
     }
 }
 
@@ -63,6 +72,8 @@ impl std::fmt::Display for HookPhase {
             HookPhase::PostStart => "post_start",
             HookPhase::PreStop => "pre_stop",
             HookPhase::PostStop => "post_stop",
+            HookPhase::PreEva => "pre_eva",
+            HookPhase::PostEva => "post_eva",
         };
         write!(f, "{}", s)
     }
@@ -504,6 +515,8 @@ mod tests {
         assert!(HookPhase::PostStart.requires_running_jail());
         assert!(HookPhase::PreStop.requires_running_jail());
         assert!(!HookPhase::PostStop.requires_running_jail());
+        assert!(HookPhase::PreEva.requires_running_jail());
+        assert!(HookPhase::PostEva.requires_running_jail());
     }
 
     #[test]

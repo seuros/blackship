@@ -65,7 +65,7 @@ impl ResourceConfig {
     }
 
     /// Convert to a list of RCTL rule strings for a given jail name
-    fn to_rules(&self, jail_name: &str) -> Vec<String> {
+    pub(crate) fn to_rules(&self, jail_name: &str) -> Vec<String> {
         let mut rules = Vec::new();
 
         if let Some(ref mem) = self.memory {

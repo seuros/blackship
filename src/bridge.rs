@@ -8,6 +8,7 @@
 
 mod core;
 mod dns;
+mod eva;
 mod graph;
 mod lifecycle;
 mod ports;

@@ -18,7 +18,7 @@ struct JailStats {
     rss_kib: u64,
 }
 
-fn run_json(program: &str, args: &[&str]) -> Result<serde_json::Value> {
+pub(crate) fn run_json(program: &str, args: &[&str]) -> Result<serde_json::Value> {
     let output = Command::new(program)
         .args(args)
         .output()

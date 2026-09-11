@@ -66,6 +66,20 @@ pub enum Commands {
         dry_run: bool,
     },
 
+    /// Hot-update running jails to match the config (no restart)
+    Eva {
+        /// Specific jail to update (with its dependencies)
+        jail: Option<String>,
+
+        /// Update all running jails (required if no jail specified)
+        #[usage(long, conflicts = "jail")]
+        all: bool,
+
+        /// Show the diff without applying changes
+        #[usage(long)]
+        dry_run: bool,
+    },
+
     /// List jail status
     Ps {
         /// Output in JSON format
@@ -684,7 +698,8 @@ impl Commands {
         match self {
             Self::Up { dry_run, .. }
             | Self::Down { dry_run, .. }
-            | Self::Restart { dry_run, .. } => !dry_run,
+            | Self::Restart { dry_run, .. }
+            | Self::Eva { dry_run, .. } => !dry_run,
             Self::Setup { .. }
             | Self::Exec { .. }
             | Self::Run { .. }

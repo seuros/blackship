@@ -260,6 +260,11 @@ impl AppContext {
                 commands::lifecycle::handle_restart(&mut bridge, jail.as_deref(), all, dry_run)
             }
 
+            Commands::Eva { jail, all, dry_run } => {
+                let mut bridge = self.verbose_bridge()?;
+                commands::lifecycle::handle_eva(&mut bridge, jail.as_deref(), all, dry_run)
+            }
+
             Commands::Ps { json } => {
                 let bridge = self.verbose_bridge()?;
                 bridge.ps(json)?;
