@@ -16,6 +16,79 @@ use throttle_machines::token_bucket::{TokenBucket, TokenBucketParams, TokenBucke
 
 use super::Bridge;
 
+/// Reserved params are rejected so manifests cannot bypass jail isolation.
+/// `allow.` is matched by prefix: module-registered params are runtime
+/// sysctl entries no header can enumerate.
+pub(super) fn is_reserved_param(key: &str) -> bool {
+    use crate::sys::consts::*;
+    key.starts_with("allow.")
+        || matches!(
+            key,
+            JAIL_PARAM_NAME
+                | JAIL_PARAM_JID
+                | JAIL_PARAM_PATH
+                | JAIL_PARAM_ERRMSG
+                | JAIL_PARAM_PERSIST
+                | JAIL_PARAM_NOPERSIST
+                | JAIL_PARAM_VNET
+                | JAIL_PARAM_IP4_ADDR
+                | JAIL_PARAM_IP6_ADDR
+                | JAIL_PARAM_HOST_HOSTNAME
+                | JAIL_PARAM_SECURELEVEL
+                | JAIL_PARAM_DEVFS_RULESET
+                | JAIL_PARAM_CHILDREN_MAX
+                | JAIL_PARAM_ENFORCE_STATFS
+        )
+}
+
+/// Build the jail_set parameter map shared by creation and eva.
+pub(super) fn build_jail_params(
+    jail_def: &crate::manifest::JailDef,
+    full_name: &str,
+    is_vnet: bool,
+    effective_ip: Option<IpAddr>,
+) -> Result<HashMap<String, ParamValue>> {
+    let mut params = HashMap::new();
+
+    for (key, value) in &jail_def.params {
+        if is_reserved_param(key) {
+            eprintln!(
+                "Warning: ignoring reserved jail parameter '{}' in manifest",
+                key
+            );
+            continue;
+        }
+        let param_value = ParamValue::try_from(value)?;
+        params.insert(key.clone(), param_value);
+    }
+
+    params.insert("name".to_string(), ParamValue::String(full_name.to_string()));
+
+    if let Some(hostname) = &jail_def.hostname {
+        params.insert(
+            "host.hostname".to_string(),
+            ParamValue::String(hostname.clone()),
+        );
+    }
+
+    if is_vnet {
+        // `vnet` is a jailsys CTLTYPE_INT param in the kernel, even though
+        // jail.conf exposes it as the strings "inherit"/"new".
+        params.insert("vnet".to_string(), ParamValue::Int(libc::JAIL_SYS_NEW));
+    } else if let Some(ip) = effective_ip {
+        match ip {
+            IpAddr::V4(addr) => {
+                params.insert("ip4.addr".to_string(), ParamValue::Ipv4(vec![addr]));
+            }
+            IpAddr::V6(addr) => {
+                params.insert("ip6.addr".to_string(), ParamValue::Ipv6(vec![addr]));
+            }
+        }
+    }
+
+    Ok(params)
+}
+
 impl Bridge {
     /// Roll back resources allocated during a failed `start_jail`.
     fn rollback_start(
@@ -485,76 +558,13 @@ impl Bridge {
             vnet_setup = Some(setup);
         }
 
-        // Reserved params are rejected so manifests cannot bypass jail isolation.
-        const RESERVED_PARAMS: &[&str] = &[
-            "name",
-            "jid",
-            "path",
-            "errmsg",
-            "persist",
-            "nopersist",
-            "vnet",
-            "ip4.addr",
-            "ip6.addr",
-            "host.hostname",
-            "securelevel",
-            "devfs_ruleset",
-            "allow.mount",
-            "allow.mount.devfs",
-            "allow.mount.fdescfs",
-            "allow.mount.fusefs",
-            "allow.mount.nullfs",
-            "allow.mount.procfs",
-            "allow.mount.tmpfs",
-            "allow.mount.zfs",
-            "allow.mount.linprocfs",
-            "allow.raw_sockets",
-            "allow.chflags",
-            "allow.sysvipc",
-            "allow.quotas",
-            "allow.socket_af",
-            "allow.mlock",
-            "children.max",
-            "enforce_statfs",
-        ];
-
-        let mut params = HashMap::new();
-
-        for (key, value) in &jail_def.params {
-            if RESERVED_PARAMS.contains(&key.as_str()) {
-                eprintln!(
-                    "Warning: ignoring reserved jail parameter '{}' in manifest",
-                    key
-                );
-                continue;
+        let params = match build_jail_params(jail_def, &full_name, is_vnet, effective_ip) {
+            Ok(p) => p,
+            Err(e) => {
+                self.rollback_start(&full_name, vnet_setup, &allocated_ip, created_zfs_dataset);
+                return Err(e);
             }
-            let param_value = ParamValue::try_from(value)?;
-            params.insert(key.clone(), param_value);
-        }
-
-        params.insert("name".to_string(), ParamValue::String(full_name.clone()));
-
-        if let Some(hostname) = &jail_def.hostname {
-            params.insert(
-                "host.hostname".to_string(),
-                ParamValue::String(hostname.clone()),
-            );
-        }
-
-        if is_vnet {
-            // `vnet` is a jailsys CTLTYPE_INT param in the kernel, even though
-            // jail.conf exposes it as the strings "inherit"/"new".
-            params.insert("vnet".to_string(), ParamValue::Int(libc::JAIL_SYS_NEW));
-        } else if let Some(ip) = effective_ip {
-            match ip {
-                IpAddr::V4(addr) => {
-                    params.insert("ip4.addr".to_string(), ParamValue::Ipv4(vec![addr]));
-                }
-                IpAddr::V6(addr) => {
-                    params.insert("ip6.addr".to_string(), ParamValue::Ipv6(vec![addr]));
-                }
-            }
-        }
+        };
 
         // Mount devfs into the jail root. The jail(2) syscall does not honor
         // mount.devfs (that is jail(8) machinery), so this is our job.
@@ -968,3 +978,4 @@ impl Bridge {
         Ok(())
     }
 }
+

@@ -6,10 +6,12 @@
  * transcribed by hand.
  */
 
+#include <sys/param.h>
 #include <sys/types.h>
 #include <sys/ioccom.h>
 #include <sys/sockio.h>
 #include <sys/procctl.h>
+#include <sys/jail.h>
 #include <net/if.h>
 #include <net/if_bridgevar.h>
 #include <netgraph/ng_message.h>
@@ -95,6 +97,25 @@ int main(void) {
 	    sizeof(struct nodeinfo));
 	printf("pub const SIZEOF_LINKINFO: usize = %zu;\n",
 	    sizeof(struct linkinfo));
+
+#define EMIT_STR(name) \
+	printf("pub const %s: &str = \"%s\";\n", #name, name)
+
+	/* <sys/jail.h> -- well-known jail parameter names */
+	EMIT_STR(JAIL_PARAM_JID);
+	EMIT_STR(JAIL_PARAM_NAME);
+	EMIT_STR(JAIL_PARAM_PATH);
+	EMIT_STR(JAIL_PARAM_ERRMSG);
+	EMIT_STR(JAIL_PARAM_PERSIST);
+	EMIT_STR(JAIL_PARAM_NOPERSIST);
+	EMIT_STR(JAIL_PARAM_SECURELEVEL);
+	EMIT_STR(JAIL_PARAM_DEVFS_RULESET);
+	EMIT_STR(JAIL_PARAM_ENFORCE_STATFS);
+	EMIT_STR(JAIL_PARAM_CHILDREN_MAX);
+	EMIT_STR(JAIL_PARAM_HOST_HOSTNAME);
+	EMIT_STR(JAIL_PARAM_IP4_ADDR);
+	EMIT_STR(JAIL_PARAM_IP6_ADDR);
+	EMIT_STR(JAIL_PARAM_VNET);
 
 	/* <sys/procctl.h> -- reaper subtree kill */
 	printf("pub const REAPER_KILL_SUBTREE: u32 = %u;\n",
