@@ -14,6 +14,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
     let jails_for_health = config.jails.clone();
     let rate_limit = config.config.rate_limit.clone();
     let monitor_ping_url = config.config.monitor_ping_url.clone();
+    let usage_sample_secs = config.config.usage_sample_secs.unwrap_or(30);
 
     let bridge = bridge::Bridge::open(config, verbose)?;
     let bridge = Arc::new(Mutex::new(bridge));
@@ -64,6 +65,33 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
         let mut health_stop_signals = Vec::new();
 
         for jail_def in &jails_for_health {
+            let Some(deadline) = jail_def
+                .qos
+                .as_ref()
+                .and_then(bridge::startup_deadline_secs)
+            else {
+                continue;
+            };
+
+            let full_name = full_jail_name(&jail_def.name);
+            let handle = warden_handle_for_health.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_secs(deadline)).await;
+                if let Err(e) = handle.notify_qos_timeout(&full_name).await {
+                    eprintln!(
+                        "Warning: Failed to signal QoS startup timeout for '{}': {}",
+                        full_name, e
+                    );
+                }
+            });
+            println!(
+                "QoS startup budget for jail '{}': {}s",
+                full_jail_name(&jail_def.name),
+                deadline
+            );
+        }
+
+        for jail_def in &jails_for_health {
             if jail_def.healthcheck.enabled && !jail_def.healthcheck.checks.is_empty() {
                 let full_name = full_jail_name(&jail_def.name);
                 let healthcheck_config = jail_def.healthcheck.clone();
@@ -107,6 +135,24 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
 
                 println!("Spawned health monitor for jail '{}'", full_name);
             }
+        }
+
+        if usage_sample_secs > 0 {
+            let sampled: Vec<String> = jails_for_health
+                .iter()
+                .map(|jail_def| full_jail_name(&jail_def.name))
+                .collect();
+            let sampler_bridge = Arc::clone(&bridge);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(usage_sample_secs)).await;
+                    let br = sampler_bridge.lock().await;
+                    for name in &sampled {
+                        br.sample_usage(name);
+                    }
+                }
+            });
+            println!("Racct usage sampling every {}s.", usage_sample_secs);
         }
 
         // Dead-man ping: prove the supervisor itself is alive.

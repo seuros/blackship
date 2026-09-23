@@ -792,43 +792,13 @@ fn cleanup_jail_root(jail_root: &Path, zfs_dataset: Option<&str>, using_zfs: boo
 }
 
 fn unmount_jail_filesystems(jail_root: &Path) -> Result<()> {
-    let output = std::process::Command::new("/sbin/mount")
-        .arg("-p")
-        .output()?;
-    if !output.status.success() {
-        return Err(error::Error::JailOperation(
-            "Failed to inspect mounted filesystems".to_string(),
-        ));
-    }
+    let table = crate::sys::mount_table()?;
 
-    let mounts = mounted_paths_under(jail_root, String::from_utf8_lossy(&output.stdout).as_ref());
-
-    for mountpoint in mounts {
+    for mountpoint in crate::sys::mounted_paths_under(jail_root, &table) {
         unmount_path(&mountpoint)?;
     }
 
     Ok(())
-}
-
-fn mounted_paths_under(jail_root: &Path, mount_output: &str) -> Vec<PathBuf> {
-    let root = jail_root.to_string_lossy();
-    let prefix = format!("{}/", root);
-    let mut mountpoints: Vec<PathBuf> = mount_output
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let _source = fields.next()?;
-            let mountpoint = fields.next()?;
-            if mountpoint == root || mountpoint.starts_with(&prefix) {
-                Some(PathBuf::from(mountpoint))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    mountpoints.sort_by_key(|path| std::cmp::Reverse(path.to_string_lossy().len()));
-    mountpoints
 }
 
 fn unmount_path(path: &Path) -> Result<()> {
@@ -896,26 +866,5 @@ mod tests {
         let (jail, path) = parse_jail_path("./local/file");
         assert_eq!(jail, None);
         assert_eq!(path, "./local/file");
-    }
-
-    #[test]
-    fn test_mounted_paths_under_sorts_deepest_first() {
-        let mounts = mounted_paths_under(
-            Path::new("/var/blackship/jails/demo"),
-            "\
-devfs /var/blackship/jails/demo/dev devfs rw 0 0\n\
-procfs /var/blackship/jails/demo/proc procfs rw 0 0\n\
-fdescfs /var/blackship/jails/demo/dev/fd fdescfs rw 0 0\n\
-tmpfs /tmp tmpfs rw 0 0\n",
-        );
-
-        assert_eq!(
-            mounts,
-            vec![
-                PathBuf::from("/var/blackship/jails/demo/dev/fd"),
-                PathBuf::from("/var/blackship/jails/demo/proc"),
-                PathBuf::from("/var/blackship/jails/demo/dev"),
-            ]
-        );
     }
 }

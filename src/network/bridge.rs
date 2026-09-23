@@ -80,14 +80,12 @@ impl Bridge {
     }
 
     /// Add a member interface to the bridge (_unused: future feature)
-    #[allow(dead_code)]
     pub fn add_member(&self, interface: &str) -> Result<()> {
         // Use native ioctl to add member to bridge
         ioctl::bridge_add_member(&self.name, interface)
     }
 
     /// Remove a member interface from the bridge (_unused: future feature)
-    #[allow(dead_code)]
     pub fn remove_member(&self, interface: &str) -> Result<()> {
         // Use native ioctl to remove member from bridge
         ioctl::bridge_delete_member(&self.name, interface)

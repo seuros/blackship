@@ -108,10 +108,7 @@ fn diff_params(
         }
 
         let (differs, live_str) = match live.get(key) {
-            Some(live_value) => (
-                !param_value_matches(value, live_value),
-                live_value.clone(),
-            ),
+            Some(live_value) => (!param_value_matches(value, live_value), live_value.clone()),
             None if unreadable.contains(key) => (true, "(unverified)".to_string()),
             None => (true, "(unset)".to_string()),
         };
@@ -136,10 +133,7 @@ fn diff_params(
 
 /// jls fails the whole invocation on any key it does not know, so fall
 /// back to per-key reads and report the losers as unreadable.
-fn read_live_params(
-    full_name: &str,
-    keys: &[&str],
-) -> (HashMap<String, String>, Vec<String>) {
+fn read_live_params(full_name: &str, keys: &[&str]) -> (HashMap<String, String>, Vec<String>) {
     match jls_json(full_name, keys) {
         Ok(map) => (map, Vec::new()),
         Err(_) => {
@@ -250,14 +244,14 @@ impl Bridge {
         let (live, unreadable) = read_live_params(&full_name, &keys);
         let diff = diff_params(&desired, &live, &unreadable);
 
-        let resources = &jail_def.resources;
+        let resources = self.effective_resources(&full_name, jail_def);
         let rctl_rules = resources.to_rules(&full_name);
         let other_pins: Vec<String> = self
             .config
             .jails
             .iter()
             .filter(|other| other.name != service_name)
-            .filter_map(|other| other.resources.cpuset.clone())
+            .filter_map(|other| other.startup_resources().cpuset.clone())
             .collect();
         let cpu_list = crate::rctl::resolve_cpu_list(resources, other_pins.into_iter());
 
@@ -394,7 +388,10 @@ mod tests {
         let diff = diff_params(&desired, &live, &[]);
         assert_eq!(diff.changes.len(), 1);
         assert!(diff.changes.contains_key("host.hostname"));
-        assert_eq!(diff.display, vec!["host.hostname: old.example -> new.example"]);
+        assert_eq!(
+            diff.display,
+            vec!["host.hostname: old.example -> new.example"]
+        );
         assert!(diff.immutable_diffs.is_empty());
     }
 

@@ -3,16 +3,19 @@
 //! Each submodule handles a group of related commands.
 
 pub mod armada;
+pub mod audit;
 pub mod bootstrap;
 pub mod build;
 pub mod container;
 pub mod foreign;
+pub mod gc;
 pub mod health;
 pub mod lifecycle;
 pub mod logs;
 pub mod migrate;
 pub mod network;
 pub mod ports;
+pub mod qos;
 pub mod snapshot;
 pub mod stats;
 pub mod supervise;

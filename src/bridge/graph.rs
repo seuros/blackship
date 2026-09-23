@@ -1,11 +1,21 @@
 //! Dependency graph operations
 
 use crate::error::{Error, Result};
+use crate::scope::CascadePolicy;
 use petgraph::algo::toposort;
 use petgraph::visit::{Bfs, Reversed};
 use std::collections::HashSet;
 
 use super::Bridge;
+
+/// What a `down` must do, split by the targets' cascade policies.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DownPlan {
+    /// Jails to stop, in stop order.
+    pub stop: Vec<String>,
+    /// Dependents left running but fenced off at the firewall, in stop order.
+    pub isolate: Vec<String>,
+}
 
 impl Bridge {
     /// Get the start order (topological sort)
@@ -28,10 +38,7 @@ impl Bridge {
         Ok(order)
     }
 
-    /// Nodes reachable from `roots` along dependency edges.
-    ///
-    /// Edges point dep -> dependent, so following them yields dependents and
-    /// following them reversed yields dependencies. Roots are included.
+    /// Nodes reachable from `roots` along dependency edges, roots included.
     fn reachable(&self, roots: &[String], dependents: bool) -> HashSet<String> {
         let mut set = HashSet::new();
         for root in roots {
@@ -87,17 +94,6 @@ impl Bridge {
             .collect())
     }
 
-    /// Get all dependents of a jail (including the jail itself)
-    pub(super) fn get_dependents(&self, name: &str) -> Result<Vec<&str>> {
-        let roots = self.expand_selector(name)?;
-        let set = self.reachable(&roots, true);
-        Ok(self
-            .stop_order()?
-            .into_iter()
-            .filter(|n| set.contains(*n))
-            .collect())
-    }
-
     /// Ordered list of jails to bring up (selector + its deps, or all in start order)
     pub(super) fn jails_for_up(&self, jail: Option<&str>) -> Result<Vec<String>> {
         if let Some(name) = jail {
@@ -113,14 +109,57 @@ impl Bridge {
 
     /// Ordered list of jails to bring down (selector + its dependents, or all in stop order)
     pub(super) fn jails_for_down(&self, jail: Option<&str>) -> Result<Vec<String>> {
-        if let Some(name) = jail {
-            Ok(self
-                .get_dependents(name)?
-                .into_iter()
-                .map(String::from)
-                .collect())
-        } else {
-            Ok(self.stop_order()?.into_iter().map(String::from).collect())
+        Ok(self.down_plan(jail)?.stop)
+    }
+
+    /// The cascade policy declared for a service, `Strict` when unspecified.
+    fn cascade_for(&self, service_name: &str) -> CascadePolicy {
+        self.config
+            .get_jail(service_name)
+            .map(|jail| jail.cascade)
+            .unwrap_or_default()
+    }
+
+    /// Resolve a `down` target into the jails to stop and the jails to fence.
+    pub(super) fn down_plan(&self, jail: Option<&str>) -> Result<DownPlan> {
+        let Some(name) = jail else {
+            return Ok(DownPlan {
+                stop: self.stop_order()?.into_iter().map(String::from).collect(),
+                isolate: Vec::new(),
+            });
+        };
+
+        let roots = self.expand_selector(name)?;
+        let mut stop: HashSet<String> = roots.iter().cloned().collect();
+        let mut isolate: HashSet<String> = HashSet::new();
+
+        for root in &roots {
+            let single = std::slice::from_ref(root);
+            match self.cascade_for(root) {
+                CascadePolicy::Strict => stop.extend(self.reachable(single, true)),
+                CascadePolicy::Detach => {}
+                CascadePolicy::Isolate => isolate.extend(
+                    self.reachable(single, true)
+                        .into_iter()
+                        .filter(|n| n != root),
+                ),
+            }
         }
+
+        isolate.retain(|name| !stop.contains(name));
+
+        let order = self.stop_order()?;
+        let in_stop_order = |set: &HashSet<String>| -> Vec<String> {
+            order
+                .iter()
+                .filter(|n| set.contains(**n))
+                .map(|n| n.to_string())
+                .collect()
+        };
+
+        Ok(DownPlan {
+            stop: in_stop_order(&stop),
+            isolate: in_stop_order(&isolate),
+        })
     }
 }

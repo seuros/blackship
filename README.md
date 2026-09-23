@@ -356,6 +356,9 @@ the dataset, so `zfs send` carries everything needed to rebuild the jail.
 | `blackship stats [jail] [--json]` | Per-jail CPU, RSS, and process counts |
 | `blackship supervise` | Start Warden supervisor for auto-restart |
 | `blackship logs <jail> [-f] [-n lines]` | Tail jail logs |
+| `blackship audit <jail> [--json]` | Durable lifecycle history, peak usage, exit reason |
+| `blackship qos <jail> [--show\|--steady\|--startup]` | Inspect or switch the QoS profile |
+| `blackship gc [jail] [--dry-run] [--force] [--json]` | Reclaim orphaned jail resources |
 
 ### Armada (Multi-Jail Orchestration)
 
@@ -738,6 +741,101 @@ blackship health --watch --interval 5
 # JSON output for scripting
 blackship health --json
 ```
+
+## Lifecycle state, reclamation, and telemetry
+
+Every host mutation `up` performs is checkpointed to a scope record at
+`<data_dir>/scope/<jail>.toml` *before* it happens, and every transition is
+appended to `<data_dir>/audit/<jail>.jsonl`. The scope record is the reclamation
+work-list; the audit log outlives it.
+
+### Reclaiming orphans
+
+A jail killed out of band (`jail -r`, a panic, a hard reset) leaves its epair,
+rctl rules, lease, mounts, and dataset behind. `gc` finds them by diffing scope
+records against what is actually running:
+
+```sh
+blackship gc --dry-run          # report only
+blackship gc                    # reap what blackship provably owns
+blackship gc --force            # also release resources it cannot prove it owns
+```
+
+Datasets blackship did not create, and jails marked `ephemeral = false`, are
+reported but never destroyed without `--force`. `up` and `supervise` run the
+report-and-reap-orphans half automatically.
+
+### Two-phase QoS
+
+A jail usually needs headroom while it warms caches and forks workers, and a
+tighter cap once it settles. `[jails.qos]` gives it both:
+
+```toml
+[jails.qos]
+transition = "healthy"      # "healthy" | "timer" | "manual"
+max_startup_secs = 120
+
+[jails.qos.startup]
+memory = "4g"
+cpu = "400"
+
+[jails.qos.steady]
+memory = "2g"
+cpu = "200"
+```
+
+The `healthy` transition fires on the first passing healthcheck and therefore
+needs `blackship supervise`; `max_startup_secs` is its fallback deadline. For
+one-shot `blackship up` there is no warden, so shift by hand:
+
+```sh
+blackship qos web --show
+blackship qos web --steady
+```
+
+Only the resources a profile names are swapped — custom `rules` entries survive
+the shift, and `eva` reconciles against the *recorded* phase rather than
+reverting it.
+
+### Draining and cascade policy
+
+`[jails.drain]` blocks new TCP connections through a per-jail PF sub-anchor
+(`blackship/drain/<jail>`) and waits for established states to close before
+teardown, up to `timeout_secs`. `cascade` decides what happens to dependents on
+`down`: `strict` stops them (default), `detach` stops only the target, `isolate`
+leaves them running but fences them off at the firewall.
+
+### Post-mortem
+
+```sh
+blackship audit web
+blackship audit web --json
+```
+
+This reads the durable JSONL, so it still answers after the jail, its scope
+record, and a reboot are gone — including peak racct usage sampled by the
+supervisor and the recorded termination reason. Peaks are bounded by
+`usage_sample_secs` (default 30s); they are sampled maxima, not exact kernel
+counters.
+
+### OTLP export
+
+Adding a `[telemetry]` block sends the same event stream to a collector over
+OTLP/HTTP, alongside racct gauges:
+
+```toml
+[telemetry]
+endpoint = "http://127.0.0.1:4318"
+service_name = "blackship"
+metrics_interval_secs = 30
+
+[telemetry.headers]
+authorization = "Bearer <token>"
+```
+
+Omitting the table costs nothing: no exporter is built, no runtime is started,
+no socket is opened. A collector that is down, slow, or misconfigured warns once
+and never fails a jail operation.
 
 ## Dependencies
 

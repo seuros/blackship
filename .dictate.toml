@@ -1,0 +1,11 @@
+[decree.supreme]
+trailing_whitespace = "deny"
+tabs_vs_spaces = "spaces"
+tab_width = 4
+final_newline = "require"
+line_endings = "lf"
+blank_line_whitespace = "deny"
+
+[decree.supreme.ignore.tab-character]
+filenames = ["Makefile", "GNUmakefile", "makefile"]
+extensions = ["md", "mdx", "c", "h", "in"]

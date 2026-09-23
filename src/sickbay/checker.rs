@@ -19,7 +19,8 @@ use throttle_machines::gate::Gate;
 use throttle_machines::token_bucket::{TokenBucket, TokenBucketParams, TokenBucketState};
 
 /// Health status of a jail
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
     /// Initial state, waiting for start_period to elapse
     Starting,
@@ -382,6 +383,21 @@ impl HealthChecker {
             return Ok(self.status);
         }
 
+        // The JID is cleared by a recovery stop and the jail may since have been
+        // restarted under a new one, so re-resolve rather than reporting
+        // "No jail ID available" forever.
+        if self.jid.is_none()
+            && self
+                .config
+                .checks
+                .iter()
+                .any(|c| c.target == CheckTarget::Jail)
+            && let Ok(jid) = jail_getid(&self.jail_name)
+        {
+            self.jid = Some(jid);
+        }
+
+        let previous_status = self.status;
         let mut any_failing = false;
         let mut all_healthy = true;
         let mut any_suspended = false;
@@ -506,6 +522,14 @@ impl HealthChecker {
         } else {
             HealthStatus::Unhealthy
         };
+
+        if self.status == HealthStatus::Healthy
+            && previous_status != HealthStatus::Healthy
+            && let Some(handle) = &self.warden_handle
+            && let Err(e) = handle.notify_healthy_blocking(&self.jail_name)
+        {
+            eprintln!("Warning: Failed to notify Warden of health recovery: {}", e);
+        }
 
         Ok(self.status)
     }

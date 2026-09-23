@@ -292,9 +292,46 @@ impl ZfsManager {
         })
     }
 
-    /// Get dataset properties
-    /// Get a ZFS property value (_unused: future feature)
-    #[allow(dead_code)]
+    /// Every jail dataset under the `jails/` namespace, by bare jail name.
+    ///
+    /// Returns an empty list when the namespace itself does not exist, so a
+    /// non-ZFS host is indistinguishable from a ZFS host with no jails.
+    pub fn list_jail_datasets(&self) -> Vec<String> {
+        let jails = self.jails_dataset();
+        let prefix = format!("{}/", jails);
+
+        zfs_output(&[
+            "list",
+            "-H",
+            "-r",
+            "-d",
+            "1",
+            "-o",
+            "name",
+            "-t",
+            "filesystem",
+            &jails,
+        ])
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix(&prefix).map(str::to_string))
+                .filter(|name| !name.is_empty() && !name.contains('/'))
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    /// The snapshot a dataset was cloned from, or `None` for a plain dataset.
+    pub fn dataset_origin(&self, dataset: &str) -> Option<String> {
+        self.get_property(dataset, "origin")
+            .ok()
+            .filter(|origin| !origin.is_empty() && origin != "-")
+    }
+
+    /// Get a ZFS property value
     pub fn get_property(&self, dataset: &str, property: &str) -> Result<String> {
         let output = zfs_output(&["get", "-H", "-o", "value", property, dataset])?;
 

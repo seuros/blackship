@@ -111,6 +111,155 @@ impl ResourceConfig {
     }
 }
 
+/// What moves a jail from its startup profile to its steady profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QosTransition {
+    /// First passing health check. Needs `blackship supervise`.
+    #[default]
+    Healthy,
+    /// `max_startup_secs` elapsing.
+    Timer,
+    /// Only `blackship qos <jail> --steady`.
+    Manual,
+}
+
+/// Two resource profiles and the rule that switches between them.
+///
+/// A jail needs headroom while it builds caches and forks workers, and a
+/// tighter cap once it settles. One static profile has to be the looser of the
+/// two, which leaves the steady state unprotected.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct QosConfig {
+    /// Applied at start, in place of `resources`.
+    pub startup: ResourceConfig,
+    /// Applied on transition. Absent means the startup profile is permanent.
+    #[serde(default)]
+    pub steady: Option<ResourceConfig>,
+    #[serde(default)]
+    pub transition: QosTransition,
+    /// Fallback deadline for the `healthy` transition, in seconds.
+    #[serde(default)]
+    pub max_startup_secs: Option<u64>,
+}
+
+impl QosConfig {
+    pub fn profile(&self, phase: crate::scope::QosPhase) -> &ResourceConfig {
+        match phase {
+            crate::scope::QosPhase::Steady => self.steady.as_ref().unwrap_or(&self.startup),
+            _ => &self.startup,
+        }
+    }
+}
+
+/// Resources a profile owns. Anything else in `rules` belongs to the user.
+const MANAGED_RESOURCES: [&str; 7] = [
+    "memoryuse",
+    "vmemoryuse",
+    "pcpu",
+    "maxproc",
+    "nthr",
+    "openfiles",
+    "swapuse",
+];
+
+fn managed_rules(config: &ResourceConfig, jail_name: &str) -> Vec<(String, String)> {
+    let prefix = format!("jail:{}:", jail_name);
+    config
+        .to_rules(jail_name)
+        .into_iter()
+        .filter_map(|rule| {
+            let resource = rule.strip_prefix(&prefix)?.split(':').next()?.to_string();
+            MANAGED_RESOURCES
+                .contains(&resource.as_str())
+                .then_some((resource, rule))
+        })
+        .collect()
+}
+
+/// Rules to remove and rules to add for a phase switch.
+///
+/// `remove_limits` uses the blanket `jail:<name>` filter, which would drop the
+/// user's custom `rules` along with the profile's. A switch therefore removes
+/// per-resource, and only for resources the profiles actually manage.
+pub fn phase_diff(
+    jail_name: &str,
+    from: &ResourceConfig,
+    to: &ResourceConfig,
+) -> (Vec<String>, Vec<String>) {
+    let from_managed = managed_rules(from, jail_name);
+    let to_managed = managed_rules(to, jail_name);
+
+    let mut removals = Vec::new();
+    let mut additions = Vec::new();
+
+    for (resource, rule) in &from_managed {
+        match to_managed.iter().find(|(r, _)| r == resource) {
+            Some((_, new_rule)) if new_rule == rule => {}
+            _ => removals.push(format!("jail:{}:{}", jail_name, resource)),
+        }
+    }
+
+    for (resource, rule) in &to_managed {
+        match from_managed.iter().find(|(r, _)| r == resource) {
+            Some((_, old_rule)) if old_rule == rule => {}
+            _ => additions.push(rule.clone()),
+        }
+    }
+
+    let from_custom = custom_rules(from, jail_name);
+    let to_custom = custom_rules(to, jail_name);
+    for rule in &from_custom {
+        if !to_custom.contains(rule) {
+            removals.push(rule.clone());
+        }
+    }
+    for rule in &to_custom {
+        if !from_custom.contains(rule) {
+            additions.push(rule.clone());
+        }
+    }
+
+    (removals, additions)
+}
+
+fn custom_rules(config: &ResourceConfig, jail_name: &str) -> Vec<String> {
+    let managed: Vec<String> = managed_rules(config, jail_name)
+        .into_iter()
+        .map(|(_, rule)| rule)
+        .collect();
+    config
+        .to_rules(jail_name)
+        .into_iter()
+        .filter(|rule| !managed.contains(rule))
+        .collect()
+}
+
+/// Switch a live jail from one profile to another.
+pub fn apply_phase(jail_name: &str, from: &ResourceConfig, to: &ResourceConfig) -> Result<()> {
+    let (removals, additions) = phase_diff(jail_name, from, to);
+    if removals.is_empty() && additions.is_empty() {
+        return Ok(());
+    }
+
+    if !is_enabled() {
+        return Err(Error::Rctl(
+            "RCTL not enabled. Set kern.racct.enable=1 in /boot/loader.conf and reboot.".into(),
+        ));
+    }
+
+    for filter in &removals {
+        if let Err(e) = rctl_remove_rule(filter) {
+            eprintln!("Warning: {}", e);
+        }
+    }
+    for rule in &additions {
+        rctl_add_rule(rule)?;
+    }
+
+    Ok(())
+}
+
 /// Resolve the CPU list a jail should be pinned to.
 ///
 /// Explicit `cpuset` wins. `cores = N` picks the N logical CPUs with the
@@ -216,7 +365,6 @@ pub fn remove_limits(jail_name: &str) {
 }
 
 /// Get current resource usage for a jail
-#[allow(dead_code)]
 pub fn get_usage(jail_name: &str) -> Result<std::collections::HashMap<String, u64>> {
     let filter = format!("jail:{}", jail_name);
     rctl_get_racct(&filter)
@@ -335,5 +483,116 @@ mod tests {
 
         let rules = config.to_rules("test");
         assert_eq!(rules, vec!["jail:test:cputime:log=3600"]);
+    }
+
+    #[test]
+    fn test_phase_diff_replaces_changed_resources_only() {
+        let startup = ResourceConfig {
+            memory: Some("2g".into()),
+            cpu: Some("400".into()),
+            maxproc: Some(100),
+            ..Default::default()
+        };
+        let steady = ResourceConfig {
+            memory: Some("2g".into()),
+            cpu: Some("100".into()),
+            maxproc: Some(100),
+            ..Default::default()
+        };
+
+        let (removals, additions) = phase_diff("web", &startup, &steady);
+
+        assert_eq!(removals, vec!["jail:web:pcpu"]);
+        assert_eq!(additions, vec!["jail:web:pcpu:deny=100"]);
+    }
+
+    #[test]
+    fn test_phase_diff_removes_resources_dropped_by_target() {
+        let startup = ResourceConfig {
+            memory: Some("2g".into()),
+            openfiles: Some(4096),
+            ..Default::default()
+        };
+        let steady = ResourceConfig {
+            memory: Some("2g".into()),
+            ..Default::default()
+        };
+
+        let (removals, additions) = phase_diff("web", &startup, &steady);
+
+        assert_eq!(removals, vec!["jail:web:openfiles"]);
+        assert!(additions.is_empty());
+    }
+
+    #[test]
+    fn test_phase_diff_preserves_custom_rules() {
+        let startup = ResourceConfig {
+            cpu: Some("400".into()),
+            rules: vec!["cputime:log=3600".into()],
+            ..Default::default()
+        };
+        let steady = ResourceConfig {
+            cpu: Some("100".into()),
+            rules: vec!["cputime:log=3600".into()],
+            ..Default::default()
+        };
+
+        let (removals, additions) = phase_diff("web", &startup, &steady);
+
+        assert!(!removals.iter().any(|rule| rule.contains("cputime")));
+        assert!(!additions.iter().any(|rule| rule.contains("cputime")));
+        assert!(!removals.contains(&"jail:web".to_string()));
+    }
+
+    #[test]
+    fn test_phase_diff_swaps_custom_rules_that_changed() {
+        let startup = ResourceConfig {
+            rules: vec!["cputime:log=3600".into()],
+            ..Default::default()
+        };
+        let steady = ResourceConfig {
+            rules: vec!["cputime:deny=7200".into()],
+            ..Default::default()
+        };
+
+        let (removals, additions) = phase_diff("web", &startup, &steady);
+
+        assert_eq!(removals, vec!["jail:web:cputime:log=3600"]);
+        assert_eq!(additions, vec!["jail:web:cputime:deny=7200"]);
+    }
+
+    #[test]
+    fn test_phase_diff_identical_profiles_are_noop() {
+        let profile = ResourceConfig {
+            memory: Some("1g".into()),
+            cpu: Some("200".into()),
+            rules: vec!["cputime:log=3600".into()],
+            ..Default::default()
+        };
+
+        let (removals, additions) = phase_diff("web", &profile, &profile);
+
+        assert!(removals.is_empty());
+        assert!(additions.is_empty());
+    }
+
+    #[test]
+    fn test_qos_config_profile_falls_back_to_startup() {
+        let qos = QosConfig {
+            startup: ResourceConfig {
+                memory: Some("4g".into()),
+                ..Default::default()
+            },
+            steady: None,
+            transition: QosTransition::Healthy,
+            max_startup_secs: None,
+        };
+
+        assert_eq!(
+            qos.profile(crate::scope::QosPhase::Steady)
+                .memory
+                .as_deref(),
+            Some("4g")
+        );
     }
 }

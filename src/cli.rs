@@ -362,6 +362,56 @@ pub enum Commands {
         force: bool,
     },
 
+    /// Reclaim resources left behind by jails that are no longer running
+    Gc {
+        /// Only reconcile this jail
+        jail: Option<String>,
+
+        /// Report what would be reaped without touching anything
+        #[usage(short, long)]
+        dry_run: bool,
+
+        /// Also destroy non-ephemeral datasets and untracked resources
+        #[usage(short, long)]
+        force: bool,
+
+        /// Include resources blackship cannot prove it owns
+        #[usage(long)]
+        prune_unreferenced: bool,
+
+        /// Emit JSON instead of a table
+        #[usage(long)]
+        json: bool,
+    },
+
+    /// Inspect or switch a jail's multi-phase QoS profile
+    Qos {
+        /// Jail name
+        jail: String,
+
+        /// Switch to the steady-state profile
+        #[usage(long)]
+        steady: bool,
+
+        /// Switch back to the startup profile
+        #[usage(long)]
+        startup: bool,
+
+        /// Report the active phase without changing it
+        #[usage(long)]
+        show: bool,
+    },
+
+    /// Render a jail's durable lifecycle history, peaks, and exit reason
+    Audit {
+        /// Jail name
+        jail: String,
+
+        /// Emit JSON instead of a timeline
+        #[usage(long)]
+        json: bool,
+    },
+
     /// Export a jail to an archive
     Export {
         /// Jail name to export
@@ -699,7 +749,9 @@ impl Commands {
             Self::Up { dry_run, .. }
             | Self::Down { dry_run, .. }
             | Self::Restart { dry_run, .. }
-            | Self::Eva { dry_run, .. } => !dry_run,
+            | Self::Eva { dry_run, .. }
+            | Self::Gc { dry_run, .. } => !dry_run,
+            Self::Qos { show, .. } => !show,
             Self::Setup { .. }
             | Self::Exec { .. }
             | Self::Run { .. }
@@ -731,6 +783,7 @@ impl Commands {
             | Self::Ports { .. }
             | Self::Logs { .. }
             | Self::Stats { .. }
+            | Self::Audit { .. }
             | Self::Completion { .. } => false,
         }
     }

@@ -110,6 +110,10 @@ pub enum Error {
     #[error("Command '{command}' failed: {message}")]
     CommandFailed { command: String, message: String },
 
+    // State file errors
+    #[error("State error: {0}")]
+    State(String),
+
     // Network errors
     #[error("Network error: {0}")]
     Network(String),

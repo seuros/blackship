@@ -15,7 +15,10 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse_args();
     maybe_escalate_to_root(&cli.command)?;
     let ctx = AppContext::new(cli.config, cli.verbose);
-    ctx.dispatch(cli.command)
+    ctx.init_telemetry();
+    let result = ctx.dispatch(cli.command);
+    crate::telemetry::shutdown();
+    result
 }
 
 struct AppContext {
@@ -48,6 +51,7 @@ impl AppContext {
                     ..Default::default()
                 };
                 let status = console::exec_in_jail(&jail, &command, &opts)?;
+                crate::telemetry::shutdown();
                 std::process::exit(status.code().unwrap_or(1));
             }
 
@@ -90,6 +94,7 @@ impl AppContext {
             Commands::Console { jail, user } => {
                 let jail = self.resolve_runtime_jail(&jail);
                 let status = console::console(&jail, &user)?;
+                crate::telemetry::shutdown();
                 std::process::exit(status.code().unwrap_or(1));
             }
 
@@ -212,6 +217,38 @@ impl AppContext {
                 Ok(())
             }
 
+            Commands::Qos {
+                jail,
+                steady,
+                startup,
+                show,
+            } => commands::qos::handle_qos(
+                &self.config_path,
+                self.verbose,
+                jail,
+                steady,
+                startup,
+                show,
+            ),
+            Commands::Audit { jail, json } => {
+                commands::audit::handle_audit(&self.config_path, jail, json)
+            }
+            Commands::Gc {
+                jail,
+                dry_run,
+                force,
+                prune_unreferenced,
+                json,
+            } => commands::gc::handle_gc(
+                &self.config_path,
+                self.verbose,
+                jail,
+                dry_run,
+                force,
+                prune_unreferenced,
+                json,
+            ),
+
             Commands::Export {
                 jail,
                 output,
@@ -321,6 +358,14 @@ impl AppContext {
             return full_name;
         }
         name.to_string()
+    }
+
+    /// Arm the OTLP exporter when the manifest carries a `[telemetry]` block.
+    /// A missing or unreadable manifest simply leaves telemetry disabled —
+    /// dispatch reports that failure properly on its own.
+    fn init_telemetry(&self) {
+        let config = self.load_config_if_present().ok().flatten();
+        crate::telemetry::init(config.as_ref().and_then(|c| c.telemetry.as_ref()));
     }
 
     fn load_config(&self) -> Result<manifest::BlackshipConfig> {

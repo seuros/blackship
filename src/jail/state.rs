@@ -11,7 +11,7 @@ state_machine! {
     name: JailMachine,
     dynamic: true,  // Enable runtime dispatch for event-driven jail management
     initial: Stopped,
-    states: [Stopped, Starting, Running, Stopping, Failed],
+    states: [Stopped, Starting, Running, Draining, Stopping, Failed],
     events {
         start {
             transition: { from: Stopped, to: Starting }
@@ -19,14 +19,17 @@ state_machine! {
         started {
             transition: { from: Starting, to: Running }
         }
+        drain {
+            transition: { from: Running, to: Draining }
+        }
         stop {
-            transition: { from: Running, to: Stopping }
+            transition: { from: [Running, Draining], to: Stopping }
         }
         stopped {
             transition: { from: Stopping, to: Stopped }
         }
         fail {
-            transition: { from: [Starting, Running, Stopping], to: Failed }
+            transition: { from: [Starting, Running, Draining, Stopping], to: Failed }
         }
         recover {
             transition: { from: Failed, to: Stopped }
@@ -40,6 +43,7 @@ pub enum State {
     Stopped,
     Starting,
     Running,
+    Draining,
     Stopping,
     Failed,
 }
@@ -138,6 +142,7 @@ impl JailInstance {
             JailMachineState::Stopped => State::Stopped,
             JailMachineState::Starting => State::Starting,
             JailMachineState::Running => State::Running,
+            JailMachineState::Draining => State::Draining,
             JailMachineState::Stopping => State::Stopping,
             JailMachineState::Failed => State::Failed,
         }
@@ -162,6 +167,11 @@ impl JailInstance {
     /// Trigger started event (transition to Running)
     pub fn started(&mut self) -> Result<(), state_machines::DynamicError> {
         self.send(JailMachineEvent::Started)
+    }
+
+    /// Trigger drain event (Running -> Draining)
+    pub fn drain(&mut self) -> Result<(), state_machines::DynamicError> {
+        self.send(JailMachineEvent::Drain)
     }
 
     /// Trigger stop event
@@ -233,6 +243,20 @@ mod tests {
 
         machine.handle(JailMachineEvent::Recover).unwrap();
         assert_eq!(machine.current_state(), JailMachineState::Stopped);
+    }
+
+    #[test]
+    fn test_drain_before_stop() {
+        let mut machine = JailMachine::new(()).into_dynamic();
+        machine.handle(JailMachineEvent::Start).unwrap();
+        machine.handle(JailMachineEvent::Started).unwrap();
+
+        machine.handle(JailMachineEvent::Drain).unwrap();
+        assert_eq!(machine.current_state(), JailMachineState::Draining);
+        assert!(machine.handle(JailMachineEvent::Drain).is_err());
+
+        machine.handle(JailMachineEvent::Stop).unwrap();
+        assert_eq!(machine.current_state(), JailMachineState::Stopping);
     }
 
     #[test]

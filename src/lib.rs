@@ -10,6 +10,7 @@ compile_error!(
 
 mod app;
 mod atomic;
+mod audit;
 mod blueprint;
 mod bridge;
 mod bulkhead;
@@ -18,6 +19,7 @@ mod commands;
 mod console;
 mod error;
 mod export;
+mod gc;
 mod hooks;
 mod jail;
 mod manifest;
@@ -25,9 +27,11 @@ mod network;
 mod proc;
 mod provision;
 mod rctl;
+mod scope;
 mod sickbay;
 mod supply;
 mod sys;
+mod telemetry;
 mod warden;
 mod zfs;
 

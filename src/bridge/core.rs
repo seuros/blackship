@@ -1,5 +1,6 @@
 //! Bridge struct definition and constructor
 
+use crate::audit::AuditLog;
 use crate::bulkhead::BulkheadManager;
 use crate::error::{Error, Result};
 use crate::jail::JailInstance;
@@ -8,6 +9,7 @@ use crate::network::{
     Bridge as NetworkBridge, IpAllocator, NetworkLeaseStore, ResolvedNetwork, VnetSetup,
     VnetStateStore, build_runtime_allocator,
 };
+use crate::scope::ScopeStore;
 use crate::sys::OsVersion;
 use crate::warden::WardenHandle;
 use crate::zfs::ZfsManager;
@@ -43,6 +45,12 @@ pub struct Bridge {
 
     /// Persistent VNET attachment state for cleanup across CLI invocations.
     pub(super) vnet_state_store: VnetStateStore,
+
+    /// Durable per-jail lifecycle scope records, the reconcile target for GC.
+    pub(super) scope_store: ScopeStore,
+
+    /// Durable lifecycle event log, mirrored to OTLP when configured.
+    pub(super) audit: AuditLog,
 
     /// Map of jail name to allocated IP (for cleanup on stop)
     pub(super) allocated_ips: HashMap<String, (String, IpAddr)>,
@@ -129,6 +137,8 @@ impl Bridge {
         let bulkhead = BulkheadManager::from_data_dir(&config.config.data_dir)?;
         let (runtime_networks, ip_allocator, lease_store) = build_runtime_allocator(Some(&config))?;
         let vnet_state_store = VnetStateStore::from_config(Some(&config));
+        let scope_store = ScopeStore::from_config(Some(&config));
+        let audit = AuditLog::from_config(Some(&config));
 
         let jail_start_capacity = config.config.rate_limit.jail_start_capacity;
         let now = Instant::now();
@@ -141,6 +151,8 @@ impl Bridge {
             ip_allocator,
             lease_store,
             vnet_state_store,
+            scope_store,
+            audit,
             allocated_ips: HashMap::new(),
             instances: HashMap::new(),
             verbose: false,
@@ -189,6 +201,7 @@ impl Bridge {
 
         self.prepare_networking()?;
         self.prepare_storage()?;
+        crate::gc::auto_reconcile(&self.config, self.verbose);
         self.runtime_prepared = true;
         Ok(())
     }

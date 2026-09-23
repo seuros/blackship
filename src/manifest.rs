@@ -36,6 +36,30 @@ pub fn validate_name(kind: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Root directory for on-disk state stores, falling back to the packaged
+/// default when no config was loaded.
+pub fn data_root(config: Option<&BlackshipConfig>) -> PathBuf {
+    config
+        .map(|cfg| cfg.config.data_dir.clone())
+        .unwrap_or_else(|| PathBuf::from("/var/blackship"))
+}
+
+/// Reject a store record name that would escape its store directory.
+pub fn validate_record_name(kind: &str, name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::InvalidArgument(format!(
+            "{kind} name cannot be empty"
+        )));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(Error::InvalidArgument(format!(
+            "{kind} name '{}' contains invalid characters",
+            name
+        )));
+    }
+    Ok(())
+}
+
 /// Validate a ZFS pool/dataset/snapshot name; leading dashes would parse as zfs(8) options.
 fn validate_zfs_component(kind: &str, name: &str) -> Result<()> {
     if name.is_empty() {
@@ -175,6 +199,9 @@ pub struct BlackshipConfig {
     /// Jail definitions
     #[serde(default)]
     pub jails: Vec<JailDef>,
+
+    /// OTLP telemetry export. Absent means fully disabled.
+    pub telemetry: Option<crate::telemetry::TelemetryConfig>,
 }
 
 impl BlackshipConfig {
@@ -412,7 +439,6 @@ pub struct GlobalConfig {
 
     /// Global health check defaults
     #[serde(default)]
-    #[allow(dead_code)] // Config field - parsed from TOML for future use
     pub health: HealthDefaults,
 
     /// Retry/backoff configuration for HTTP operations
@@ -421,6 +447,10 @@ pub struct GlobalConfig {
 
     /// Bridge VLAN configuration (FreeBSD 15.0+)
     pub bridge: Option<BridgeVlanConfig>,
+
+    /// How often `supervise` samples racct usage into scope peaks and OTel
+    /// gauges. Defaults to 30s; `0` disables sampling.
+    pub usage_sample_secs: Option<u64>,
 }
 
 impl GlobalConfig {
@@ -474,6 +504,7 @@ impl GlobalConfig {
             health: other.health,         // Take other's health defaults
             retry: other.retry,           // Take other's retry config
             bridge: other.bridge.or(self.bridge), // Merge bridge VLAN config
+            usage_sample_secs: other.usage_sample_secs.or(self.usage_sample_secs),
         }
     }
 }
@@ -585,7 +616,6 @@ fn default_health_retries() -> u32 {
 /// These values are used as defaults for health checks when not specified
 /// at the individual check level.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[allow(dead_code)] // Config struct - fields are parsed from TOML
 pub struct HealthDefaults {
     /// Default interval between health checks in seconds
     #[serde(default = "default_health_interval")]
@@ -676,7 +706,6 @@ impl Default for RetryConfig {
 ///
 /// Used for defining virtual networks that jails can be attached to.
 #[derive(Debug, Deserialize, Serialize)]
-#[allow(dead_code)] // Config struct - fields are parsed from TOML
 pub struct NetworkConfig {
     /// Network name
     pub name: String,
@@ -690,7 +719,6 @@ pub struct NetworkConfig {
 
 /// Bridge with VLAN filtering configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[allow(dead_code)] // Config struct - fields are parsed from TOML
 pub struct BridgeVlanConfig {
     /// Bridge interface name (e.g., "vswitch1")
     pub name: String,
@@ -754,7 +782,6 @@ pub struct JailDef {
     pub network: Option<JailNetworkConfig>,
 
     /// Mount configuration (_unused: future feature)
-    #[allow(dead_code)]
     pub mount: Option<JailMountConfig>,
 
     /// Lifecycle hooks
@@ -768,6 +795,19 @@ pub struct JailDef {
     /// Resource limits (RCTL)
     #[serde(default)]
     pub resources: crate::rctl::ResourceConfig,
+
+    /// Two-phase resource limits. Wins over `resources` when present.
+    pub qos: Option<crate::rctl::QosConfig>,
+
+    /// Refuse new connections and wait for established ones before teardown.
+    pub drain: Option<DrainConfig>,
+
+    /// What happens to jails that depend on this one when it stops.
+    #[serde(default)]
+    pub cascade: crate::scope::CascadePolicy,
+
+    /// Allow reclamation to destroy this jail's dataset without `--force`.
+    pub ephemeral: Option<bool>,
 
     /// devfs ruleset applied to the jail's /dev mount.
     /// Defaults to ruleset 4 (devfsrules_jail); set to 0 to skip mounting devfs.
@@ -794,6 +834,15 @@ impl JailDef {
             // With ZFS enabled the jails dataset is mounted at data_dir/jails,
             // so this is the jail root either way.
             global.data_dir.join("jails").join(full_name)
+        }
+    }
+
+    /// The resource profile to apply at start: the QoS startup profile when
+    /// two-phase QoS is configured, else the static `resources` block.
+    pub fn startup_resources(&self) -> &crate::rctl::ResourceConfig {
+        match &self.qos {
+            Some(qos) => &qos.startup,
+            None => &self.resources,
         }
     }
 
@@ -835,6 +884,14 @@ impl JailDef {
             } else {
                 other.resources
             },
+            qos: other.qos.or(self.qos),
+            drain: other.drain.or(self.drain),
+            cascade: if other.cascade == crate::scope::CascadePolicy::default() {
+                self.cascade
+            } else {
+                other.cascade
+            },
+            ephemeral: other.ephemeral.or(self.ephemeral),
             devfs_ruleset: other.devfs_ruleset.or(self.devfs_ruleset),
             init: other.init.or(self.init),
             tags: if other.tags.is_empty() {
@@ -844,6 +901,34 @@ impl JailDef {
             },
         }
     }
+}
+
+/// Connection draining before teardown
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DrainConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// How long to wait for established connections to close.
+    #[serde(default = "default_drain_timeout")]
+    pub timeout_secs: u64,
+}
+
+impl Default for DrainConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            timeout_secs: default_drain_timeout(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_drain_timeout() -> u64 {
+    30
 }
 
 /// Jail network configuration
@@ -948,7 +1033,6 @@ impl DnsConfig {
 pub struct JailMountConfig {
     /// Volume mounts in "host:jail" format (_unused: future feature)
     #[serde(default)]
-    #[allow(dead_code)]
     pub volumes: Vec<String>,
 }
 

@@ -10,6 +10,20 @@ zfs_enabled = true
 zpool = "zroot"
 dataset = "blackship"
 
+# How often `supervise` samples racct usage into scope peaks and OTLP gauges.
+# 0 disables sampling.
+usage_sample_secs = 30
+
+# Optional OTLP telemetry export. Omit the table to disable it; lifecycle
+# events are written to <data_dir>/audit/<jail>.jsonl either way.
+# [telemetry]
+# endpoint = "http://127.0.0.1:4318"
+# service_name = "blackship"
+# timeout_secs = 5
+# metrics_interval_secs = 30
+# [telemetry.headers]
+# authorization = "Bearer <token>"
+
 # Optional global network configuration
 [[networks]]
 name = "backend"
@@ -35,6 +49,27 @@ hostname = "db.local"
 networks = ["backend"]
 ip = "10.0.1.10"
 
+# Two-phase QoS. `transition` is one of "healthy" (first passing healthcheck,
+# needs `supervise`), "timer" (max_startup_secs elapses), or "manual"
+# (`blackship qos <jail> --steady`).
+[jails.qos]
+transition = "healthy"
+max_startup_secs = 120
+
+[jails.qos.startup]
+memory = "4g"
+cpu = "400"
+
+[jails.qos.steady]
+memory = "2g"
+cpu = "200"
+rules = ["jail:blackship-postgres:cputime:devctl=/dev/devctl"]
+
+# Refuse new TCP connections and wait for in-flight ones before teardown.
+[jails.drain]
+enabled = true
+timeout_secs = 30
+
 # Redis cache - depends on nothing
 [[jails]]
 name = "redis"
@@ -52,6 +87,15 @@ path = "/jails/api"
 hostname = "api.local"
 depends_on = ["postgres", "redis"]
 
+# What happens to dependents when this jail goes down:
+#   "strict"  - stop them too (default)
+#   "detach"  - stop only this jail
+#   "isolate" - leave them running but block new connections to them
+cascade = "strict"
+
+# Whether `blackship gc` may destroy this jail's dataset when reclaiming it.
+ephemeral = false
+
 [jails.params]
 "allow.sysvipc" = true
 
@@ -67,7 +111,7 @@ hostname = "web.local"
 depends_on = ["api"]
 
 [jails.network]
-networks = ["frontend", "backend"]
+networks = ["frontend"]
 ip = "10.0.2.10"
 
 [jails.mount]

@@ -60,3 +60,6 @@ rand = "0.10"
 # Async runtime for Warden
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal", "net"] }
 jiff = "0.2.32"
+
+# Telemetry
+rama = { version = "0.4", features = ["opentelemetry", "grpc", "http-full", "rustls"] }

@@ -31,6 +31,10 @@ pub enum WardenEvent {
     JailStarted { name: String },
     /// A jail was stopped (intentionally)
     JailStopped { name: String, jid: i32 },
+    /// A jail's health check passed for the first time since it last failed
+    JailHealthy { name: String },
+    /// A jail exhausted its startup QoS budget without a health signal
+    QosTimeout { name: String },
     /// Register a jail for kqueue monitoring (sent via WardenHandle after restart)
     #[allow(dead_code)]
     RegisterJail { name: String, jid: i32 },
@@ -342,6 +346,12 @@ impl Warden {
                 );
                 self.handle_failure(&name).await;
             }
+            WardenEvent::JailHealthy { name } => {
+                self.shift_to_steady(&name, "healthy").await;
+            }
+            WardenEvent::QosTimeout { name } => {
+                self.shift_to_steady(&name, "timer").await;
+            }
             WardenEvent::JailStarted { name } => {
                 println!("Warden: Jail '{}' started successfully", name);
                 if let Some(state) = self.restart_states.get_mut(&name) {
@@ -360,6 +370,28 @@ impl Warden {
             WardenEvent::Shutdown => {
                 // Handled in run loop
             }
+        }
+    }
+
+    /// Move a jail from its startup QoS profile to its steady one.
+    async fn shift_to_steady(&mut self, name: &str, trigger: &str) {
+        let result = {
+            let br = self.bridge.lock().await;
+            br.shift_qos(name, crate::scope::QosPhase::Steady)
+        };
+
+        match result {
+            Ok(crate::bridge::ShiftOutcome::Shifted) => {
+                println!(
+                    "Warden: Jail '{}' shifted to steady QoS profile ({})",
+                    name, trigger
+                );
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!(
+                "Warden: Failed to shift jail '{}' to steady QoS profile: {}",
+                name, e
+            ),
         }
     }
 
@@ -474,6 +506,23 @@ impl WardenHandle {
         self.blocking_send(WardenEvent::JailHealthFailed {
             name: name.to_string(),
         })
+    }
+
+    /// Notify that a jail's health check passed (blocking version)
+    pub fn notify_healthy_blocking(&self, name: &str) -> Result<()> {
+        self.blocking_send(WardenEvent::JailHealthy {
+            name: name.to_string(),
+        })
+    }
+
+    /// Notify that a jail exhausted its startup QoS budget
+    pub async fn notify_qos_timeout(&self, name: &str) -> Result<()> {
+        self.sender
+            .send(WardenEvent::QosTimeout {
+                name: name.to_string(),
+            })
+            .await
+            .map_err(|_| Self::channel_closed_err())
     }
 
     /// Notify that a jail started (blocking version)

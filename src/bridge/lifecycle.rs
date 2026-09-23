@@ -1,5 +1,6 @@
 //! Jail lifecycle: start, stop, restart
 
+use crate::audit::{AuditEvent, AuditRecord};
 use crate::error::{Error, Result};
 use crate::hooks::{HookContext, HookPhase, HookRunner};
 use crate::jail::state::State as JailState;
@@ -8,6 +9,7 @@ use crate::jail::{
     jail_getid, jail_remove,
 };
 use crate::network::{VnetConfig, VnetSetup};
+use crate::scope::{ScopeMachineEvent, ScopeRecord};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Instant;
@@ -62,7 +64,10 @@ pub(super) fn build_jail_params(
         params.insert(key.clone(), param_value);
     }
 
-    params.insert("name".to_string(), ParamValue::String(full_name.to_string()));
+    params.insert(
+        "name".to_string(),
+        ParamValue::String(full_name.to_string()),
+    );
 
     if let Some(hostname) = &jail_def.hostname {
         params.insert(
@@ -90,6 +95,35 @@ pub(super) fn build_jail_params(
 }
 
 impl Bridge {
+    /// Persist the in-flight scope record. Never fails the jail operation.
+    pub(super) fn persist_scope(&self, scope: &mut ScopeRecord) {
+        scope.touch();
+        if let Err(e) = self.scope_store.save(scope) {
+            eprintln!(
+                "Warning: failed to persist scope record for '{}': {}",
+                scope.name, e
+            );
+        }
+    }
+
+    /// Apply `mutate` to the stored record. Absent records are left absent.
+    fn amend_scope<F>(&self, full_name: &str, mutate: F)
+    where
+        F: FnOnce(&mut ScopeRecord),
+    {
+        match self.scope_store.get(full_name) {
+            Ok(Some(mut scope)) => {
+                mutate(&mut scope);
+                self.persist_scope(&mut scope);
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!(
+                "Warning: failed to read scope record for '{}': {}",
+                full_name, e
+            ),
+        }
+    }
+
     /// Roll back resources allocated during a failed `start_jail`.
     fn rollback_start(
         &mut self,
@@ -102,11 +136,23 @@ impl Bridge {
             match setup.cleanup() {
                 Ok(()) => {
                     let _ = self.vnet_state_store.delete(full_name);
+                    self.audit.record(
+                        &AuditRecord::new(full_name, AuditEvent::RollbackStep)
+                            .with("step", "vnet")
+                            .with("outcome", "released"),
+                    );
+                    self.amend_scope(full_name, |scope| scope.has_vnet_record = false);
                 }
                 Err(e) => {
                     eprintln!(
                         "Warning: VNET cleanup failed for '{}': {} -- keeping state record for manual cleanup",
                         full_name, e
+                    );
+                    self.audit.record(
+                        &AuditRecord::new(full_name, AuditEvent::RollbackStep)
+                            .with("step", "vnet")
+                            .with("outcome", "leaked")
+                            .with("error", e),
                     );
                 }
             }
@@ -114,12 +160,65 @@ impl Bridge {
         if let Some((network_name, ip)) = allocated_ip {
             self.ip_allocator.release(network_name, ip);
             let _ = self.lease_store.release(network_name, full_name);
+            self.audit.record(
+                &AuditRecord::new(full_name, AuditEvent::RollbackStep)
+                    .with("step", "lease")
+                    .with("outcome", "released")
+                    .with("ip", ip),
+            );
+            self.amend_scope(full_name, |scope| scope.allocated_ips.clear());
         }
         if created_zfs_dataset {
             eprintln!("Cleaning up ZFS dataset...");
-            if let Some(zfs) = &self.zfs {
-                let _ = zfs.destroy_jail_dataset(full_name);
+            let outcome = match &self.zfs {
+                Some(zfs) => match zfs.destroy_jail_dataset(full_name) {
+                    Ok(()) => "released",
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: failed to destroy dataset for '{}': {}",
+                            full_name, e
+                        );
+                        "leaked"
+                    }
+                },
+                None => "skipped",
+            };
+            self.audit.record(
+                &AuditRecord::new(full_name, AuditEvent::RollbackStep)
+                    .with("step", "zfs")
+                    .with("outcome", outcome),
+            );
+            if outcome == "released" {
+                self.amend_scope(full_name, |scope| {
+                    scope.zfs_dataset = None;
+                    scope.zfs_origin = None;
+                });
             }
+        }
+
+        self.finish_rollback(full_name);
+    }
+
+    /// Park an existing scope record in `Failed` with no live jid.
+    fn mark_scope_failed(&self, full_name: &str) {
+        self.amend_scope(full_name, |scope| {
+            scope.jid = None;
+            scope.advance_or_warn(ScopeMachineEvent::Fail);
+        });
+    }
+
+    /// Drop the scope record when the rollback released everything it claimed.
+    fn finish_rollback(&self, full_name: &str) {
+        match self.scope_store.get(full_name) {
+            Ok(Some(scope)) if !scope.holds_resources() => {
+                let _ = self.scope_store.delete(full_name);
+            }
+            Ok(Some(_)) => self.mark_scope_failed(full_name),
+            Ok(None) => {}
+            Err(e) => eprintln!(
+                "Warning: failed to read scope record for '{}': {}",
+                full_name, e
+            ),
         }
     }
 
@@ -130,6 +229,21 @@ impl Bridge {
         instance.start().ok();
         instance.fail().ok();
         self.instances.insert(full_name.to_string(), instance);
+
+        match self.scope_store.get(full_name) {
+            Ok(Some(_)) => self.mark_scope_failed(full_name),
+            Ok(None) => {
+                let mut scope = ScopeRecord::new(full_name);
+                scope.advance_or_warn(ScopeMachineEvent::Fail);
+                self.persist_scope(&mut scope);
+            }
+            Err(e) => eprintln!(
+                "Warning: failed to read scope record for '{}': {}",
+                full_name, e
+            ),
+        }
+        self.audit.event(full_name, AuditEvent::Failed);
+
         if let Some(handle) = &self.warden_handle {
             let _ = handle.notify_failure_blocking(full_name);
         }
@@ -148,13 +262,56 @@ impl Bridge {
 
     /// Stop all jails (or a specific one with its dependents)
     pub fn down(&mut self, jail: Option<&str>) -> Result<()> {
-        let jails_to_stop = self.jails_for_down(jail)?;
+        let plan = self.down_plan(jail)?;
 
-        for name in &jails_to_stop {
+        for name in &plan.isolate {
+            self.isolate_jail(name);
+        }
+
+        for name in &plan.stop {
             self.stop_jail(name)?;
         }
 
         Ok(())
+    }
+
+    /// Fence a dependent off at the firewall without stopping it. The anchor is
+    /// left loaded until the jail exits and `gc` reports it.
+    fn isolate_jail(&mut self, name: &str) {
+        let Ok((service_name, full_name)) = self.resolve_jail_names(name) else {
+            return;
+        };
+
+        if !crate::bulkhead::pf_enabled() {
+            eprintln!(
+                "Warning: cannot isolate jail '{}': PF is not enabled",
+                full_name
+            );
+            return;
+        }
+
+        let Some(jail_def) = self.config.get_jail(&service_name) else {
+            return;
+        };
+        let ips = self.drainable_ips(&full_name, jail_def);
+        match crate::bulkhead::load_drain_anchor(&full_name, &ips) {
+            Ok(anchor) => {
+                println!(
+                    "Isolated jail '{}': new connections blocked via {}",
+                    full_name, anchor
+                );
+                if let Ok(Some(mut scope)) = self.scope_store.get(&full_name) {
+                    scope.drain_anchor = Some(anchor.clone());
+                    self.persist_scope(&mut scope);
+                }
+                self.audit.record(
+                    &AuditRecord::new(&full_name, AuditEvent::DrainStart)
+                        .with("anchor", &anchor)
+                        .with("cascade", "isolate"),
+                );
+            }
+            Err(e) => eprintln!("Warning: failed to isolate jail '{}': {}", full_name, e),
+        }
     }
 
     /// Restart jails
@@ -235,6 +392,12 @@ impl Bridge {
             return Err(Error::JailAlreadyRunning(full_name));
         }
 
+        let mut scope = ScopeRecord::new(&full_name);
+        scope.cascade = jail_def.cascade;
+        scope.ephemeral = jail_def.ephemeral.unwrap_or(false);
+        self.persist_scope(&mut scope);
+        self.audit.event(&full_name, AuditEvent::Created);
+
         // Track resources for cleanup on failure
         let mut created_zfs_dataset = false;
 
@@ -265,6 +428,19 @@ impl Bridge {
         } else {
             jail_def.effective_path(&self.config.config, &full_name)
         };
+
+        if created_zfs_dataset && let Some(zfs) = &self.zfs {
+            let dataset = zfs.jail_dataset_name(&full_name);
+            scope.zfs_origin = zfs.dataset_origin(&dataset);
+            scope.zfs_dataset = Some(dataset.clone());
+            scope.ephemeral = jail_def.ephemeral.unwrap_or(true);
+            self.persist_scope(&mut scope);
+            self.audit.record(
+                &AuditRecord::new(&full_name, AuditEvent::Provisioned)
+                    .with("step", "zfs")
+                    .with("dataset", dataset),
+            );
+        }
 
         // Validate no ancestor of the jail path is a symlink
         if let Some(parent) = path.parent()
@@ -403,6 +579,14 @@ impl Bridge {
                 ) {
                     Ok(ip) => {
                         allocated_ip = Some((first_network.clone(), ip));
+                        scope.allocated_ips.push(ip);
+                        self.persist_scope(&mut scope);
+                        self.audit.record(
+                            &AuditRecord::new(&full_name, AuditEvent::Provisioned)
+                                .with("step", "lease")
+                                .with("ip", ip)
+                                .with("network", first_network),
+                        );
                         if self.verbose {
                             println!(
                                 "  Auto-allocated IP {} from network '{}'",
@@ -555,6 +739,15 @@ impl Bridge {
                 return Err(e);
             }
 
+            scope.has_vnet_record = true;
+            self.persist_scope(&mut scope);
+            self.audit.record(
+                &AuditRecord::new(&full_name, AuditEvent::Provisioned)
+                    .with("step", "vnet")
+                    .with("host_interface", setup.host_interface())
+                    .with("bridge", &bridge_name),
+            );
+
             vnet_setup = Some(setup);
         }
 
@@ -625,9 +818,18 @@ impl Bridge {
             }
         );
 
+        scope.jid = Some(jid);
+        self.persist_scope(&mut scope);
+        self.audit.record(
+            &AuditRecord::new(&full_name, AuditEvent::Provisioned)
+                .with("step", "jail_create")
+                .with("jid", jid),
+        );
+
         // Fail closed: never run without the configured resource limits.
-        if !jail_def.resources.is_empty()
-            && let Err(e) = crate::rctl::apply_limits(&full_name, &jail_def.resources)
+        let startup_profile = jail_def.startup_resources();
+        if !startup_profile.is_empty()
+            && let Err(e) = crate::rctl::apply_limits(&full_name, startup_profile)
         {
             eprintln!(
                 "Failed to apply resource limits for '{}': {}, stopping jail",
@@ -648,16 +850,36 @@ impl Bridge {
             return Err(e);
         }
 
+        if !startup_profile.is_empty() {
+            scope.rctl_subject = Some(format!("jail:{}", full_name));
+            if jail_def.qos.is_some() {
+                scope.qos_phase = crate::scope::QosPhase::Startup;
+            }
+            self.persist_scope(&mut scope);
+            self.audit.record(
+                &AuditRecord::new(&full_name, AuditEvent::Provisioned)
+                    .with("step", "rctl")
+                    .with(
+                        "qos_phase",
+                        if jail_def.qos.is_some() {
+                            "startup"
+                        } else {
+                            "none"
+                        },
+                    ),
+            );
+        }
+
         // Pin the jail to its CPU set, spreading across other jails' pins.
         let other_pins: Vec<String> = self
             .config
             .jails
             .iter()
             .filter(|other| other.name != service_name)
-            .filter_map(|other| other.resources.cpuset.clone())
+            .filter_map(|other| other.startup_resources().cpuset.clone())
             .collect();
         if let Some(cpu_list) =
-            crate::rctl::resolve_cpu_list(&jail_def.resources, other_pins.into_iter())
+            crate::rctl::resolve_cpu_list(startup_profile, other_pins.into_iter())
         {
             if let Err(e) = crate::rctl::apply_cpuset(jid, &cpu_list) {
                 eprintln!(
@@ -678,6 +900,13 @@ impl Bridge {
                 return Err(e);
             }
             println!("  Pinned to CPUs: {}", cpu_list);
+            scope.cpuset = Some(cpu_list.clone());
+            self.persist_scope(&mut scope);
+            self.audit.record(
+                &AuditRecord::new(&full_name, AuditEvent::Provisioned)
+                    .with("step", "cpuset")
+                    .with("cpus", &cpu_list),
+            );
         }
 
         // For VNET jails: attach the VnetSetup to the jail
@@ -769,6 +998,11 @@ impl Bridge {
             self.allocated_ips.insert(full_name.clone(), alloc);
         }
 
+        scope.advance_or_warn(ScopeMachineEvent::Provisioned);
+        self.persist_scope(&mut scope);
+        self.audit
+            .record(&AuditRecord::new(&full_name, AuditEvent::Running).with("jid", jid));
+
         if let Some(handle) = &self.warden_handle
             && let Err(e) = handle.notify_started_blocking(&full_name)
         {
@@ -778,7 +1012,125 @@ impl Bridge {
         Ok(())
     }
 
-    /// Stop a single jail
+    /// Addresses a draining jail can still be reached on.
+    fn drainable_ips(&self, full_name: &str, jail_def: &crate::manifest::JailDef) -> Vec<IpAddr> {
+        let mut ips: Vec<IpAddr> = Vec::new();
+
+        if let Some(network) = &jail_def.network
+            && let Some(ip) = network.ip
+        {
+            ips.push(ip);
+        }
+
+        if let Some((_, ip)) = self.allocated_ips.get(full_name) {
+            ips.push(*ip);
+        }
+
+        if let Ok(Some(scope)) = self.scope_store.get(full_name) {
+            ips.extend(scope.allocated_ips);
+        }
+
+        ips.sort();
+        ips.dedup();
+        ips
+    }
+
+    /// Refuse new connections and wait for in-flight ones. Returns the anchor.
+    fn drain_connections(
+        &self,
+        full_name: &str,
+        jail_def: &crate::manifest::JailDef,
+    ) -> Option<String> {
+        let drain = jail_def.drain.as_ref()?;
+        if !drain.enabled {
+            return None;
+        }
+
+        if !crate::bulkhead::pf_enabled() {
+            eprintln!(
+                "Warning: PF is not enabled; skipping connection drain for '{}'",
+                full_name
+            );
+            return None;
+        }
+
+        let ips = self.drainable_ips(full_name, jail_def);
+        if ips.is_empty() {
+            eprintln!(
+                "Warning: no recorded address for '{}'; skipping connection drain",
+                full_name
+            );
+            return None;
+        }
+
+        let anchor = match crate::bulkhead::load_drain_anchor(full_name, &ips) {
+            Ok(anchor) => anchor,
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to load drain rules for '{}': {} -- stopping without drain",
+                    full_name, e
+                );
+                return None;
+            }
+        };
+
+        self.amend_scope(full_name, |scope| {
+            scope.advance_or_warn(ScopeMachineEvent::Drain);
+            scope.drain_anchor = Some(anchor.clone());
+        });
+        self.audit.record(
+            &AuditRecord::new(full_name, AuditEvent::DrainStart)
+                .with("anchor", &anchor)
+                .with("timeout_secs", drain.timeout_secs),
+        );
+
+        println!(
+            "Draining connections to '{}' (timeout {}s)...",
+            full_name, drain.timeout_secs
+        );
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(drain.timeout_secs);
+        let mut remaining = usize::MAX;
+        while Instant::now() < deadline {
+            remaining = ips
+                .iter()
+                .map(|ip| crate::bulkhead::tcp_state_count(*ip))
+                .sum();
+            if remaining == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+
+        let timed_out = remaining != 0;
+        if timed_out {
+            eprintln!(
+                "Warning: '{}' still had {} TCP state(s) after {}s; proceeding with stop",
+                full_name, remaining, drain.timeout_secs
+            );
+        } else if self.verbose {
+            println!("  All TCP states for '{}' closed", full_name);
+        }
+
+        self.audit.record(
+            &AuditRecord::new(full_name, AuditEvent::DrainEnd)
+                .with("anchor", &anchor)
+                .with("residual_states", remaining)
+                .with("timed_out", timed_out),
+        );
+
+        Some(anchor)
+    }
+
+    /// Drop the drain anchor. Required on every path out of `stop_jail`.
+    fn end_drain(&self, full_name: &str, anchor: Option<&str>) {
+        let Some(anchor) = anchor else {
+            return;
+        };
+        crate::bulkhead::flush_drain_anchor(anchor);
+        self.amend_scope(full_name, |scope| scope.drain_anchor = None);
+    }
+
     pub(super) fn stop_jail(&mut self, name: &str) -> Result<()> {
         let (service_name, full_name) = self.resolve_jail_names(name)?;
 
@@ -789,11 +1141,29 @@ impl Bridge {
             }
         };
 
+        self.amend_scope(&full_name, |scope| {
+            scope.advance_or_warn(ScopeMachineEvent::Terminate)
+        });
+        self.audit
+            .record(&AuditRecord::new(&full_name, AuditEvent::Terminating).with("jid", jid));
+
         // Remove RCTL limits before stopping
         crate::rctl::remove_limits(&full_name);
+        self.amend_scope(&full_name, |scope| scope.rctl_subject = None);
+
+        if self
+            .config
+            .get_jail(&service_name)
+            .and_then(|def| def.drain.as_ref())
+            .is_some_and(|drain| drain.enabled)
+            && let Some(instance) = self.instances.get_mut(&full_name)
+        {
+            instance.drain().ok();
+        }
 
         let jail_def = self.config.get_jail(&service_name);
         let mut post_stop_hook: Option<(HookRunner, std::path::PathBuf)> = None;
+        let mut drain_anchor: Option<String> = None;
 
         if let Some(jail_def) = jail_def {
             let path = jail_def.effective_path(&self.config.config, &full_name);
@@ -807,6 +1177,8 @@ impl Bridge {
             }
 
             hook_runner.execute_phase(HookPhase::PreStop, &hook_context)?;
+
+            drain_anchor = self.drain_connections(&full_name, jail_def);
 
             // Give rc-managed services an orderly shutdown before removal.
             if jail_def.init.unwrap_or(true)
@@ -832,9 +1204,12 @@ impl Bridge {
             if let Some(handle) = &self.warden_handle {
                 handle.clear_stop_requested(jid);
             }
+            self.end_drain(&full_name, drain_anchor.as_deref());
             return Err(e);
         }
         println!("Jail '{}' stopped", full_name);
+
+        self.end_drain(&full_name, drain_anchor.as_deref());
 
         if let Some(handle) = &self.warden_handle
             && let Err(e) = handle.notify_stopped_blocking(&full_name, jid)
@@ -859,6 +1234,7 @@ impl Bridge {
             instance.handle = None;
         }
 
+        let mut leaked_resources = false;
         let mut cleaned_persisted_vnet = false;
         if let Some(vnet_setup) = self.vnet_setups.remove(&full_name) {
             match vnet_setup.cleanup() {
@@ -873,6 +1249,7 @@ impl Bridge {
                         "Warning: Failed to cleanup VNET setup for jail '{}': {} -- keeping state record for manual cleanup",
                         full_name, e
                     );
+                    leaked_resources = true;
                 }
             }
             cleaned_persisted_vnet = true;
@@ -887,6 +1264,7 @@ impl Bridge {
                         "Warning: Failed to cleanup persisted VNET setup for jail '{}': {} -- keeping state record for manual cleanup",
                         full_name, e
                     );
+                    leaked_resources = true;
                 }
             }
         }
@@ -899,6 +1277,33 @@ impl Bridge {
             }
         } else {
             let _ = self.lease_store.release_owner(&full_name);
+        }
+
+        // The scope record is the GC work-list: dropping it claims every
+        // resource was released, so anything that leaked keeps the record
+        // alive in `Failed` instead.
+        let peaks = self.peak_details(&full_name);
+        let destroyed = |record: AuditRecord| -> AuditRecord {
+            peaks
+                .iter()
+                .fold(record, |acc, (key, value)| acc.with(key, value))
+        };
+
+        if leaked_resources {
+            self.mark_scope_failed(&full_name);
+            self.audit.record(&destroyed(
+                AuditRecord::new(&full_name, AuditEvent::Destroyed).with("residual", "true"),
+            ));
+        } else {
+            self.audit.record(&destroyed(
+                AuditRecord::new(&full_name, AuditEvent::Destroyed).with("jid", jid),
+            ));
+            if let Err(e) = self.scope_store.delete(&full_name) {
+                eprintln!(
+                    "Warning: failed to remove scope record for '{}': {}",
+                    full_name, e
+                );
+            }
         }
 
         stop_result
@@ -974,8 +1379,16 @@ impl Bridge {
             }
         }
 
+        self.audit
+            .record(&AuditRecord::new(&full_name, AuditEvent::Destroyed).with("via", "cleanup"));
+        if let Err(e) = self.scope_store.delete(&full_name) {
+            eprintln!(
+                "Warning: failed to remove scope record for '{}': {}",
+                full_name, e
+            );
+        }
+
         println!("Cleanup complete for jail '{}'", full_name);
         Ok(())
     }
 }
-

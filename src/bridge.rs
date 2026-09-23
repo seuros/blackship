@@ -12,8 +12,11 @@ mod eva;
 mod graph;
 mod lifecycle;
 mod ports;
+mod qos;
 mod status;
 #[cfg(test)]
 mod tests;
+mod usage;
 
 pub use self::core::Bridge;
+pub use self::qos::{ShiftOutcome, phase_label, startup_deadline_secs};

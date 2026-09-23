@@ -126,24 +126,134 @@ impl PortForward {
             None => String::new(),
         };
 
-        // A newline in the comment would inject a new PF rule.
-        let safe_name: String = self
-            .jail_name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
+        let safe_name = sanitize_jail_name(&self.jail_name);
 
         Ok(format!(
             "rdr {}proto {} from any to any port {} -> {} port {} # jail:{}",
             bind, self.protocol, self.external_port, self.jail_ip, self.internal_port, safe_name
         ))
     }
+}
+
+/// Strip anything that could break out of a PF comment or anchor path.
+pub fn sanitize_jail_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Sub-anchor holding a jail's drain rules.
+pub fn drain_anchor_path(jail_name: &str) -> String {
+    format!("{}/drain/{}", PF_ANCHOR, sanitize_jail_name(jail_name))
+}
+
+/// Refuse new TCP connections to `ips`, leaving established states alone.
+pub fn load_drain_anchor(jail_name: &str, ips: &[IpAddr]) -> Result<String> {
+    if ips.is_empty() {
+        return Err(Error::InvalidArgument(format!(
+            "jail '{}' has no recorded IP to drain",
+            jail_name
+        )));
+    }
+
+    let anchor = drain_anchor_path(jail_name);
+    pfctl_stdin(&anchor, &drain_rules(ips))?;
+    Ok(anchor)
+}
+
+fn drain_rules(ips: &[IpAddr]) -> String {
+    ips.iter()
+        .map(|ip| format!("block drop in quick proto tcp to {} flags S/SA", ip))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Drop a drain anchor's rules. Best effort: a missing anchor is success.
+pub fn flush_drain_anchor(anchor: &str) {
+    let _ = Command::new("/sbin/pfctl")
+        .args(["-a", anchor, "-F", "rules"])
+        .output();
+}
+
+/// Every drain sub-anchor PF currently holds, for GC.
+pub fn list_drain_anchors() -> Vec<String> {
+    let prefix = format!("{}/drain/", PF_ANCHOR);
+    Command::new("/sbin/pfctl")
+        .args(["-a", &format!("{}/drain", PF_ANCHOR), "-s", "Anchors"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|line| line.trim().to_string())
+                .filter(|line| line.starts_with(&prefix))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Number of PF states currently tracked for `ip`.
+pub fn tcp_state_count(ip: IpAddr) -> usize {
+    let needle = ip.to_string();
+    Command::new("/sbin/pfctl")
+        .args(["-s", "state"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|line| line.contains("tcp") && line.contains(&needle))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// True when PF is loaded and enabled.
+pub fn pf_enabled() -> bool {
+    Command::new("/sbin/pfctl")
+        .args(["-s", "info"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("Status: Enabled"))
+        .unwrap_or(false)
+}
+
+fn pfctl_stdin(anchor: &str, rules: &str) -> Result<()> {
+    let mut child = Command::new("/sbin/pfctl")
+        .args(["-a", anchor, "-f", "-"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::Network(format!("Failed to run pfctl: {}", e)))?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin
+            .write_all(rules.as_bytes())
+            .map_err(|e| Error::Network(format!("Failed to write rules: {}", e)))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| Error::Network(format!("Failed to wait for pfctl: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(Error::Network(format!(
+            "pfctl failed for anchor '{}': {}",
+            anchor,
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    Ok(())
 }
 
 /// Bulkhead manager for PF.
@@ -349,6 +459,41 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("blackship-bulkhead-{}", unique))
+    }
+
+    #[test]
+    fn test_drain_rules_block_syn_only_per_address() {
+        let ips: Vec<IpAddr> = vec!["10.0.1.10".parse().unwrap(), "2001:db8::5".parse().unwrap()];
+
+        let rules = drain_rules(&ips);
+        let lines: Vec<&str> = rules.lines().collect();
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0],
+            "block drop in quick proto tcp to 10.0.1.10 flags S/SA"
+        );
+        assert_eq!(
+            lines[1],
+            "block drop in quick proto tcp to 2001:db8::5 flags S/SA"
+        );
+    }
+
+    #[test]
+    fn test_drain_anchor_path_is_sanitized_and_namespaced() {
+        assert_eq!(
+            drain_anchor_path("myproject-web"),
+            "blackship/drain/myproject-web"
+        );
+        assert_eq!(
+            drain_anchor_path("proj/web 1"),
+            "blackship/drain/proj_web_1"
+        );
+    }
+
+    #[test]
+    fn test_load_drain_anchor_rejects_empty_address_list() {
+        assert!(load_drain_anchor("web", &[]).is_err());
     }
 
     #[test]

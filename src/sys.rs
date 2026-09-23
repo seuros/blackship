@@ -1,7 +1,6 @@
 //! System detection and version information
 
 /// Constants read from the FreeBSD headers at build time; see build/sys_consts.c.
-#[allow(dead_code)]
 pub mod consts {
     include!(concat!(env!("OUT_DIR"), "/sys_consts.rs"));
 }
@@ -199,7 +198,6 @@ impl OsVersion {
     /// Check if pkgbase is mandatory
     ///
     /// FreeBSD 16.0+ requires pkgbase; distribution sets are removed.
-    #[allow(dead_code)]
     pub fn requires_pkgbase(&self) -> bool {
         self.major >= 16
     }
@@ -291,6 +289,65 @@ pub fn interface_is_tagged(iface: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Every interface carrying the blackship ownership group.
+///
+/// epairs are deliberately not named after their jail, so the group tag is the
+/// only reliable oracle for "blackship created this".
+pub fn list_tagged_interfaces() -> Vec<String> {
+    std::process::Command::new("/sbin/ifconfig")
+        .args(["-g", IFACE_GROUP])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Read the mount table in `mount -p` format.
+pub fn mount_table() -> Result<String> {
+    let output = std::process::Command::new("/sbin/mount")
+        .arg("-p")
+        .output()?;
+    if !output.status.success() {
+        return Err(Error::JailOperation(
+            "Failed to inspect mounted filesystems".to_string(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Mountpoints at or below `jail_root`, deepest first so unmounting in order
+/// never blocks on a child mount.
+pub fn mounted_paths_under(
+    jail_root: &std::path::Path,
+    mount_output: &str,
+) -> Vec<std::path::PathBuf> {
+    let root = jail_root.to_string_lossy();
+    let prefix = format!("{}/", root);
+    let mut mountpoints: Vec<std::path::PathBuf> = mount_output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let _source = fields.next()?;
+            let mountpoint = fields.next()?;
+            if mountpoint == root || mountpoint.starts_with(&prefix) {
+                Some(std::path::PathBuf::from(mountpoint))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    mountpoints.sort_by_key(|path| std::cmp::Reverse(path.to_string_lossy().len()));
+    mountpoints
+}
+
 /// Mount devfs at `dev_path` via nmount(2).
 ///
 /// devfs has no vfs_cmount, so the legacy mount(2) syscall returns
@@ -372,6 +429,27 @@ pub fn unmount_quiet(path: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_mounted_paths_under_sorts_deepest_first() {
+        let mounts = mounted_paths_under(
+            std::path::Path::new("/var/blackship/jails/demo"),
+            "\
+devfs /var/blackship/jails/demo/dev devfs rw 0 0\n\
+procfs /var/blackship/jails/demo/proc procfs rw 0 0\n\
+fdescfs /var/blackship/jails/demo/dev/fd fdescfs rw 0 0\n\
+tmpfs /tmp tmpfs rw 0 0\n",
+        );
+
+        assert_eq!(
+            mounts,
+            vec![
+                std::path::PathBuf::from("/var/blackship/jails/demo/dev/fd"),
+                std::path::PathBuf::from("/var/blackship/jails/demo/proc"),
+                std::path::PathBuf::from("/var/blackship/jails/demo/dev"),
+            ]
+        );
+    }
 
     #[test]
     fn test_parse_current() {

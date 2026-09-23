@@ -88,7 +88,7 @@ pub struct VnetStateStore {
 impl NetworkStore {
     pub fn from_config(config: Option<&manifest::BlackshipConfig>) -> Self {
         Self {
-            root: data_root_from_config(config).join("networks"),
+            root: manifest::data_root(config).join("networks"),
         }
     }
 
@@ -189,7 +189,7 @@ impl NetworkStore {
 impl NetworkLeaseStore {
     pub fn from_config(config: Option<&manifest::BlackshipConfig>) -> Self {
         Self {
-            root: data_root_from_config(config).join("network-leases"),
+            root: manifest::data_root(config).join("network-leases"),
         }
     }
 
@@ -331,7 +331,7 @@ impl NetworkLeaseStore {
 impl VnetStateStore {
     pub fn from_config(config: Option<&manifest::BlackshipConfig>) -> Self {
         Self {
-            root: data_root_from_config(config).join("vnet"),
+            root: manifest::data_root(config).join("vnet"),
         }
     }
 
@@ -367,6 +367,34 @@ impl VnetStateStore {
         fs::remove_file(&path)
             .map_err(|e| Error::Network(format!("Failed to remove VNET state metadata: {}", e)))?;
         Ok(true)
+    }
+
+    /// Every persisted VNET record, sorted by owner.
+    pub fn list(&self) -> Result<Vec<VnetStateRecord>> {
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => {
+                return Err(Error::Network(format!(
+                    "Failed to read VNET state dir: {}",
+                    e
+                )));
+            }
+        };
+
+        let mut records = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension() != Some(std::ffi::OsStr::new("toml")) {
+                continue;
+            }
+            match read_toml::<VnetStateRecord>(&path, "VNET state metadata") {
+                Ok(record) => records.push(record),
+                Err(e) => eprintln!("Warning: skipping VNET state record {:?}: {}", path, e),
+            }
+        }
+        records.sort_by(|a, b| a.owner.cmp(&b.owner));
+        Ok(records)
     }
 
     fn record_path(&self, owner: &str) -> PathBuf {
@@ -556,12 +584,12 @@ pub fn allocate_and_record(
 ///
 /// Separate blackship processes racing on the same lease file would
 /// otherwise lose updates: both read, both write, one wins.
-struct FileLock {
+pub struct FileLock {
     file: fs::File,
 }
 
 impl FileLock {
-    fn acquire(path: &Path) -> Result<Self> {
+    pub fn acquire(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| Error::Network(format!("Failed to create lock dir: {}", e)))?;
@@ -611,16 +639,6 @@ fn validate_network_name(name: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn data_root_from_config(config: Option<&manifest::BlackshipConfig>) -> PathBuf {
-    config
-        .map(|cfg| cfg.config.data_dir.clone())
-        .unwrap_or_else(default_unconfigured_data_dir)
-}
-
-fn default_unconfigured_data_dir() -> PathBuf {
-    PathBuf::from("/var/blackship")
 }
 
 #[cfg(test)]

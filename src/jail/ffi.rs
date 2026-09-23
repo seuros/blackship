@@ -251,10 +251,28 @@ pub fn jail_getid(name: &str) -> Result<i32, Error> {
     jail_get_call(&mut jiov, &errmsg as *const _)
 }
 
-/// Get the next jail ID after the given one (_unused: future feature)
+pub fn jail_getname(jid: i32) -> Result<String, Error> {
+    let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
+    let mut name: [u8; 256] = unsafe { mem::zeroed() };
+
+    let mut jiov: Vec<libc::iovec> = vec![
+        iovec!(b"jid\0" => (&jid as *const _, mem::size_of::<i32>())),
+        iovec!(b"name\0" => mut name),
+        iovec!(b"errmsg\0" => mut errmsg),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    jail_get_call(&mut jiov, &errmsg as *const _)?;
+
+    let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+    Ok(String::from_utf8_lossy(&name[..len]).into_owned())
+}
+
+/// Get the next jail ID after the given one
 ///
 /// Used to iterate through all jails
-#[allow(dead_code)]
 pub fn jail_nextjid(lastjid: i32) -> Result<i32, Error> {
     let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
 
@@ -432,13 +450,12 @@ pub fn jail_clearpersist(jid: i32) -> Result<(), Error> {
     check_jail_set_result(jid, &errmsg).map(|_| ())
 }
 
-/// Iterator over all running jails (_unused: future feature)
+/// Iterator over all running jails
 pub struct RunningJails {
     lastjid: i32,
 }
 
 impl RunningJails {
-    #[allow(dead_code)]
     pub fn new() -> Self {
         Self { lastjid: 0 }
     }
