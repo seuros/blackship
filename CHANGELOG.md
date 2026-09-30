@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/seuros/blackship/compare/blackship-v0.1.9...blackship-v0.1.10) (2026-09-30)
+
+
+### Features
+
+* **scope:** durable jail lifecycle, orphan GC, QoS phases, drain, OTLP ([dab8fdc](https://github.com/seuros/blackship/commit/dab8fdc51ae157382c4357ae22cf155bfcf09e64))
+
 ## [0.1.9](https://github.com/seuros/blackship/compare/blackship-v0.1.8...blackship-v0.1.9) (2026-09-11)
 
 
