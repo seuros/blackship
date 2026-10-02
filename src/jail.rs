@@ -12,11 +12,9 @@ pub mod state;
 pub mod types;
 
 // Re-exports
-#[allow(unused_imports)]
-pub use ffi::JailDescriptor;
 pub use ffi::{
-    RunningJails, jail_attach, jail_create, jail_create_with_descriptor, jail_getid, jail_getname,
-    jail_remove, jail_update,
+    RunningJails, jail_create, jail_create_with_descriptor, jail_getid, jail_getname, jail_remove,
+    jail_update,
 };
 pub use jexec::jexec_with_output;
 pub use state::{JailConfig, JailHandle, JailInstance};

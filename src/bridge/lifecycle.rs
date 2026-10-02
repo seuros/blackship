@@ -245,7 +245,7 @@ impl Bridge {
         self.audit.event(full_name, AuditEvent::Failed);
 
         if let Some(handle) = &self.warden_handle {
-            let _ = handle.notify_failure_blocking(full_name);
+            let _ = handle.notify_failure(full_name);
         }
     }
 
@@ -1004,7 +1004,7 @@ impl Bridge {
             .record(&AuditRecord::new(&full_name, AuditEvent::Running).with("jid", jid));
 
         if let Some(handle) = &self.warden_handle
-            && let Err(e) = handle.notify_started_blocking(&full_name)
+            && let Err(e) = handle.notify_started(&full_name)
         {
             eprintln!("Warning: Failed to notify Warden of jail start: {}", e);
         }
@@ -1134,11 +1134,22 @@ impl Bridge {
     pub(super) fn stop_jail(&mut self, name: &str) -> Result<()> {
         let (service_name, full_name) = self.resolve_jail_names(name)?;
 
-        let jid = match jail_getid(&full_name) {
-            Ok(jid) => jid,
-            Err(_) => {
-                return Err(Error::JailNotRunning(full_name));
-            }
+        // A held handle is authoritative: resolving the name again would race
+        // against jid reuse.
+        let handle_jid = self
+            .instances
+            .get(&full_name)
+            .and_then(|instance| instance.handle.as_ref())
+            .map(JailHandle::jid);
+
+        let jid = match handle_jid {
+            Some(jid) => jid,
+            None => match jail_getid(&full_name) {
+                Ok(jid) => jid,
+                Err(_) => {
+                    return Err(Error::JailNotRunning(full_name));
+                }
+            },
         };
 
         self.amend_scope(&full_name, |scope| {
@@ -1180,6 +1191,17 @@ impl Bridge {
 
             drain_anchor = self.drain_connections(&full_name, jail_def);
 
+            if let Some(stop_cmd) = jail_def.resolve_stop()
+                && let Ok(exit_code) =
+                    crate::jail::jexec::jexec_run(jid, &["/bin/sh", "-c", &stop_cmd])
+                && exit_code != 0
+            {
+                eprintln!(
+                    "Warning: stop command in jail '{}' exited with {}",
+                    full_name, exit_code
+                );
+            }
+
             // Give rc-managed services an orderly shutdown before removal.
             if jail_def.init.unwrap_or(true)
                 && let Ok(exit_code) =
@@ -1200,7 +1222,15 @@ impl Bridge {
         }
 
         println!("Stopping jail '{}'...", full_name);
-        if let Err(e) = jail_remove(jid) {
+        let owned_handle = self
+            .instances
+            .get_mut(&full_name)
+            .and_then(|instance| instance.handle.take());
+        let remove_result = match owned_handle {
+            Some(JailHandle::Descriptor { fd, .. }) => fd.remove(),
+            _ => jail_remove(jid),
+        };
+        if let Err(e) = remove_result {
             if let Some(handle) = &self.warden_handle {
                 handle.clear_stop_requested(jid);
             }
@@ -1212,7 +1242,7 @@ impl Bridge {
         self.end_drain(&full_name, drain_anchor.as_deref());
 
         if let Some(handle) = &self.warden_handle
-            && let Err(e) = handle.notify_stopped_blocking(&full_name, jid)
+            && let Err(e) = handle.notify_stopped(&full_name, jid)
         {
             handle.clear_stop_requested(jid);
             eprintln!("Warning: Failed to notify Warden of jail stop: {}", e);

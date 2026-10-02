@@ -86,11 +86,7 @@ pub(crate) fn release_zfs(config: &manifest::BlackshipConfig) -> Option<crate::z
         return None;
     }
     config.config.zpool.as_ref().map(|pool| {
-        crate::zfs::ZfsManager::new(
-            pool,
-            &config.config.dataset,
-            config.config.data_dir.join("jails"),
-        )
+        crate::zfs::ZfsManager::new(pool, &config.config.dataset, config.config.jails_dir())
     })
 }
 

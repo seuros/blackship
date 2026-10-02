@@ -476,48 +476,6 @@ impl Provisioner {
     }
 }
 
-/// Clone a release to create a new jail filesystem (_unused: future feature)
-#[allow(dead_code)]
-pub fn clone_release(release_path: &Path, jail_path: &Path) -> Result<()> {
-    if !release_path.exists() {
-        return Err(Error::ReleaseNotFound(release_path.display().to_string()));
-    }
-
-    // Create jail directory
-    fs::create_dir_all(jail_path).map_err(Error::Io)?;
-
-    // Use cp -a for proper cloning with permissions
-    let status = std::process::Command::new("/bin/cp")
-        .args(["-a", "."])
-        .current_dir(release_path)
-        .arg(jail_path)
-        .status()
-        .map_err(|e| Error::ExtractionFailed(format!("Failed to clone release: {}", e)))?;
-
-    if !status.success() {
-        return Err(Error::ExtractionFailed(
-            "cp command failed during clone".to_string(),
-        ));
-    }
-
-    // cp -a may have followed a symlink out of the parent.
-    let data_parent = jail_path.parent().unwrap_or(Path::new("/"));
-    if let (Ok(canonical_jail), Ok(canonical_parent)) =
-        (jail_path.canonicalize(), data_parent.canonicalize())
-        && !canonical_jail.starts_with(&canonical_parent)
-    {
-        let _ = fs::remove_dir_all(jail_path);
-        return Err(Error::ExtractionFailed(format!(
-            "Jail path '{}' resolves to '{}' which is outside '{}'",
-            jail_path.display(),
-            canonical_jail.display(),
-            canonical_parent.display()
-        )));
-    }
-
-    Ok(())
-}
-
 /// Recursively copy a small file tree, preserving permissions and symlinks.
 ///
 /// Suitable for config/key trees. Whole-userland copies stay on `cp -a`:

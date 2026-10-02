@@ -227,6 +227,8 @@ struct CheckState {
     last_result: Option<CheckResult>,
     /// Recovery attempts made
     recovery_attempts: u32,
+    /// When recovery was last attempted, for cooldown enforcement
+    last_recovery_at: Option<Instant>,
     /// Rate limiter tokens available
     rate_limit_tokens: f64,
     /// Rate limiter last refill time (seconds since UNIX epoch)
@@ -243,6 +245,7 @@ impl CheckState {
             failures: 0,
             last_result: None,
             recovery_attempts: 0,
+            last_recovery_at: None,
             rate_limit_tokens: capacity,
             rate_limit_last_refill: now_secs,
         }
@@ -383,9 +386,6 @@ impl HealthChecker {
             return Ok(self.status);
         }
 
-        // The JID is cleared by a recovery stop and the jail may since have been
-        // restarted under a new one, so re-resolve rather than reporting
-        // "No jail ID available" forever.
         if self.jid.is_none()
             && self
                 .config
@@ -395,6 +395,15 @@ impl HealthChecker {
             && let Ok(jid) = jail_getid(&self.jail_name)
         {
             self.jid = Some(jid);
+
+            if let Some(handle) = &self.warden_handle
+                && let Err(e) = handle.register_jail(&self.jail_name, jid, None)
+            {
+                eprintln!(
+                    "Warning: Failed to re-register jail '{}' with Warden: {}",
+                    self.jail_name, e
+                );
+            }
         }
 
         let previous_status = self.status;
@@ -526,7 +535,7 @@ impl HealthChecker {
         if self.status == HealthStatus::Healthy
             && previous_status != HealthStatus::Healthy
             && let Some(handle) = &self.warden_handle
-            && let Err(e) = handle.notify_healthy_blocking(&self.jail_name)
+            && let Err(e) = handle.notify_healthy(&self.jail_name)
         {
             eprintln!("Warning: Failed to notify Warden of health recovery: {}", e);
         }
@@ -616,7 +625,20 @@ impl HealthChecker {
             return Ok(());
         }
 
+        if !config.should_attempt(state.last_recovery_at) {
+            let waited = state
+                .last_recovery_at
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0);
+            eprintln!(
+                "Health check '{}' for jail '{}' is in recovery cooldown ({}s of {}s elapsed)",
+                self.config.checks[check_idx].name, self.jail_name, waited, config.cooldown
+            );
+            return Ok(());
+        }
+
         state.recovery_attempts += 1;
+        state.last_recovery_at = Some(Instant::now());
 
         println!(
             "Triggering recovery action '{:?}' for jail '{}' (attempt {}/{})",
@@ -625,13 +647,17 @@ impl HealthChecker {
 
         // Notify Warden of health failure
         if let Some(handle) = &self.warden_handle
-            && let Err(e) = handle.notify_health_failure_blocking(&self.jail_name)
+            && let Err(e) = handle.notify_health_failure(&self.jail_name)
         {
             eprintln!("Warning: Failed to notify Warden of health failure: {}", e);
         }
 
         // Execute recovery action
         match &config.action {
+            RecoveryAction::Restart if self.warden_handle.is_some() => {
+                println!("Recovery: Warden is restarting jail '{}'", self.jail_name);
+                self.jid = None;
+            }
             RecoveryAction::Restart => {
                 // Stop the jail first
                 match jail_getid(&self.jail_name) {

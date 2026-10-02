@@ -128,7 +128,7 @@ impl Bridge {
             Some(ZfsManager::new(
                 pool,
                 &config.config.dataset,
-                config.config.data_dir.join("jails"),
+                config.config.jails_dir(),
             ))
         } else {
             None

@@ -17,8 +17,11 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::bridge::Bridge;
 use crate::error::Result;
-use crate::jail::kqueue::{JailEvent, JailEventSource};
+use crate::jail::kqueue::{JailEvent, JailEventSource, JailIdent};
 use crate::sys::OsVersion;
+
+/// How often the kqueue is drained while the Warden is idle.
+const KQUEUE_DRAIN_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Events the Warden receives
 #[derive(Debug)]
@@ -36,8 +39,11 @@ pub enum WardenEvent {
     /// A jail exhausted its startup QoS budget without a health signal
     QosTimeout { name: String },
     /// Register a jail for kqueue monitoring (sent via WardenHandle after restart)
-    #[allow(dead_code)]
-    RegisterJail { name: String, jid: i32 },
+    RegisterJail {
+        name: String,
+        jid: i32,
+        descriptor_fd: Option<i32>,
+    },
     /// Shutdown the Warden
     Shutdown,
 }
@@ -66,6 +72,43 @@ impl IntentionalStops {
     fn contains(&self, jid: i32) -> bool {
         self.lock_jids().contains(&jid)
     }
+}
+
+/// Pick the kqueue identity to monitor a jail under.
+///
+/// A descriptor outlives jid reuse, so it wins whenever one is held.
+fn monitor_ident(jid: i32, descriptor_fd: Option<i32>) -> JailIdent {
+    match descriptor_fd {
+        Some(fd) => JailIdent::Descriptor(fd),
+        None => JailIdent::Jid(jid),
+    }
+}
+
+/// Whether a jail is already monitored under a descriptor identity.
+fn has_descriptor_ident(monitored: &HashMap<JailIdent, MonitoredJail>, name: &str) -> bool {
+    monitored
+        .iter()
+        .any(|(ident, jail)| jail.name == name && matches!(ident, JailIdent::Descriptor(_)))
+}
+
+/// The identities registered for a jail, optionally narrowed to one jid.
+fn idents_for(
+    monitored: &HashMap<JailIdent, MonitoredJail>,
+    name: &str,
+    only_jid: Option<i32>,
+) -> Vec<JailIdent> {
+    monitored
+        .iter()
+        .filter(|(_, jail)| jail.name == name && only_jid.is_none_or(|wanted| jail.jid == wanted))
+        .map(|(ident, _)| *ident)
+        .collect()
+}
+
+/// The jail behind a registered kqueue identity
+#[derive(Clone)]
+struct MonitoredJail {
+    name: String,
+    jid: i32,
 }
 
 /// Restart state tracking for a single jail
@@ -130,8 +173,8 @@ pub struct Warden {
     bridge: Arc<Mutex<Bridge>>,
     /// Kqueue event source for kernel jail monitoring (FreeBSD 16+)
     kqueue: Option<JailEventSource>,
-    /// Map of JID -> jail name for kqueue event resolution
-    jid_names: HashMap<i32, String>,
+    /// Map of registered kqueue identity -> jail, for event resolution
+    monitored: HashMap<JailIdent, MonitoredJail>,
     /// Shared tracking for intentional stop requests
     intentional_stops: IntentionalStops,
 }
@@ -171,7 +214,7 @@ impl Warden {
             restart_states: HashMap::new(),
             bridge,
             kqueue,
-            jid_names: HashMap::new(),
+            monitored: HashMap::new(),
             intentional_stops,
         }
     }
@@ -182,31 +225,70 @@ impl Warden {
     }
 
     /// Register a jail directly (before the event loop starts)
-    pub fn register_jail_direct(&mut self, name: &str, jid: i32) {
-        self.register_jail_monitoring(name, jid);
+    pub fn register_jail_direct(&mut self, name: &str, jid: i32, descriptor_fd: Option<i32>) {
+        self.register_jail_monitoring(name, jid, descriptor_fd);
     }
 
-    /// Register a jail for kqueue monitoring
-    fn register_jail_monitoring(&mut self, name: &str, jid: i32) {
-        self.jid_names.insert(jid, name.to_string());
+    /// Register a jail for kqueue monitoring.
+    ///
+    /// A descriptor identity is preferred: it stays valid across jid reuse.
+    fn register_jail_monitoring(&mut self, name: &str, jid: i32, descriptor_fd: Option<i32>) {
+        let ident = monitor_ident(jid, descriptor_fd);
+
+        if descriptor_fd.is_none() && has_descriptor_ident(&self.monitored, name) {
+            return;
+        }
+
+        self.monitored.insert(
+            ident,
+            MonitoredJail {
+                name: name.to_string(),
+                jid,
+            },
+        );
 
         if let Some(ref kq) = self.kqueue {
-            if let Err(e) = kq.register_jail(jid) {
+            let registered = match ident {
+                JailIdent::Descriptor(fd) => kq.register_jaildesc(fd),
+                JailIdent::Jid(jid) => kq.register_jail(jid),
+            };
+
+            match registered {
+                Ok(()) => println!("Warden: Monitoring jail '{}' ({}) via kqueue", name, ident),
+                Err(e) => eprintln!(
+                    "Warden: Failed to register kqueue for jail '{}' ({}): {}",
+                    name, ident, e
+                ),
+            }
+        }
+    }
+
+    /// Stop monitoring every identity registered for a jail
+    fn unregister_jail_monitoring(&mut self, name: &str) {
+        self.unregister_idents(name, None)
+    }
+
+    /// Stop monitoring only the identities that belong to a specific jid.
+    fn unregister_jail_jid(&mut self, name: &str, jid: i32) {
+        self.unregister_idents(name, Some(jid))
+    }
+
+    fn unregister_idents(&mut self, name: &str, only_jid: Option<i32>) {
+        for ident in idents_for(&self.monitored, name, only_jid) {
+            self.monitored.remove(&ident);
+            if let Some(ref kq) = self.kqueue
+                && let Err(e) = kq.unregister(ident)
+            {
                 eprintln!(
-                    "Warden: Failed to register kqueue for jail '{}' (JID {}): {}",
-                    name, jid, e
-                );
-            } else {
-                println!(
-                    "Warden: Monitoring jail '{}' (JID {}) via kqueue",
-                    name, jid
+                    "Warden: Failed to unregister kqueue for jail '{}' ({}): {}",
+                    name, ident, e
                 );
             }
         }
     }
 
     /// Process kqueue events (non-blocking poll)
-    fn process_kqueue_events(&mut self) -> Vec<(String, JailEvent)> {
+    fn process_kqueue_events(&mut self) -> Vec<(MonitoredJail, JailEvent)> {
         let kq = match &self.kqueue {
             Some(kq) => kq,
             None => return Vec::new(),
@@ -222,15 +304,8 @@ impl Warden {
 
         let mut named_events = Vec::new();
         for event in events {
-            let jid = match &event {
-                JailEvent::Remove { jid } => *jid,
-                JailEvent::Child { jid } => *jid,
-                JailEvent::Set { jid } => *jid,
-                JailEvent::Attach { jid } => *jid,
-            };
-
-            if let Some(name) = self.jid_names.get(&jid) {
-                named_events.push((name.clone(), event));
+            if let Some(jail) = self.monitored.get(&event.ident()) {
+                named_events.push((jail.clone(), event));
             }
         }
 
@@ -252,20 +327,8 @@ impl Warden {
 
     /// Event loop with kqueue integration (FreeBSD 16+)
     async fn run_with_kqueue(&mut self) {
-        let kq_fd = self.kqueue.as_ref().unwrap().as_raw_fd();
-
-        // Wrap the kqueue fd for async readiness notification
-        let async_fd: tokio::io::unix::AsyncFd<i32> = match tokio::io::unix::AsyncFd::new(kq_fd) {
-            Ok(fd) => fd,
-            Err(e) => {
-                eprintln!(
-                    "Warden: Failed to create AsyncFd for kqueue: {}, falling back",
-                    e
-                );
-                self.run_polling().await;
-                return;
-            }
-        };
+        let mut drain = tokio::time::interval(KQUEUE_DRAIN_INTERVAL);
+        drain.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
@@ -280,43 +343,54 @@ impl Warden {
                     }
                 }
 
-                ready = async_fd.readable() => {
-                    if let Ok(mut guard) = ready {
+                _ = drain.tick() => {
+                    {
                         let events = self.process_kqueue_events();
-                        for (name, event) in events {
+                        for (jail, event) in events {
+                            let MonitoredJail { name, jid } = jail;
                             match event {
-                                JailEvent::Remove { jid } => {
-                                    self.jid_names.remove(&jid);
+                                JailEvent::Remove { ident } => {
+                                    self.monitored.remove(&ident);
                                     if self.intentional_stops.contains(jid) {
                                         println!(
-                                            "Warden: Kernel reports jail '{}' (JID {}) removed after requested stop",
-                                            name, jid
+                                            "Warden: Kernel reports jail '{}' ({}) removed after requested stop",
+                                            name, ident
                                         );
                                     } else {
                                         println!(
-                                            "Warden: Kernel reports jail '{}' (JID {}) removed",
-                                            name, jid
+                                            "Warden: Kernel reports jail '{}' ({}) removed",
+                                            name, ident
                                         );
                                         self.handle_failure(&name).await;
                                     }
                                 }
-                                JailEvent::Child { .. } => {
+                                JailEvent::Child { ident, coalesced } => {
+                                    let detail = if coalesced {
+                                        "multiple child jails"
+                                    } else {
+                                        "a child jail"
+                                    };
+                                    println!(
+                                        "Warden: Jail '{}' ({}) created {}",
+                                        name, ident, detail
+                                    );
                                 }
                                 JailEvent::Set { .. } => {
                                 }
-                                JailEvent::Attach { .. } => {
+                                JailEvent::Attach { ident, coalesced } => {
+                                    if coalesced {
+                                        println!(
+                                            "Warden: Jail '{}' ({}) had multiple attaches",
+                                            name, ident
+                                        );
+                                    }
                                 }
                             }
                         }
-                        guard.clear_ready();
                     }
                 }
             }
         }
-
-        // The kqueue fd is owned by self.kqueue, so AsyncFd borrows it.
-        // We need to forget the AsyncFd to prevent it from closing the fd.
-        std::mem::forget(async_fd);
     }
 
     /// Polling-based event loop (pre-FreeBSD 16 fallback)
@@ -361,11 +435,15 @@ impl Warden {
             WardenEvent::JailStopped { name, jid } => {
                 println!("Warden: Jail '{}' stopped intentionally", name);
                 self.restart_states.remove(&name);
-                self.jid_names.remove(&jid);
+                self.unregister_jail_jid(&name, jid);
                 self.intentional_stops.clear(jid);
             }
-            WardenEvent::RegisterJail { name, jid } => {
-                self.register_jail_monitoring(&name, jid);
+            WardenEvent::RegisterJail {
+                name,
+                jid,
+                descriptor_fd,
+            } => {
+                self.register_jail_monitoring(&name, jid, descriptor_fd);
             }
             WardenEvent::Shutdown => {
                 // Handled in run loop
@@ -427,9 +505,10 @@ impl Warden {
 
         tokio::time::sleep(delay).await;
 
-        let result = {
+        let (result, descriptor_fd) = {
             let mut br = self.bridge.lock().await;
-            br.restart_jail(name)
+            let result = br.restart_jail(name);
+            (result, br.jail_descriptor_fd(name))
         };
 
         match result {
@@ -439,11 +518,9 @@ impl Warden {
                     state.reset();
                 }
 
-                // Re-register with kqueue if available
-                if self.kqueue.is_some()
-                    && let Ok(jid) = crate::jail::jail_getid(name)
-                {
-                    self.register_jail_monitoring(name, jid);
+                self.unregister_jail_monitoring(name);
+                if let Ok(jid) = crate::jail::jail_getid(name) {
+                    self.register_jail_monitoring(name, jid, descriptor_fd);
                 }
             }
             Err(e) => {
@@ -488,29 +565,33 @@ impl WardenHandle {
         crate::error::Error::Io(std::io::Error::other("Warden channel closed"))
     }
 
-    fn blocking_send(&self, event: WardenEvent) -> Result<()> {
-        self.sender
-            .blocking_send(event)
-            .map_err(|_| Self::channel_closed_err())
+    /// Post an event from synchronous code without blocking.
+    fn post(&self, event: WardenEvent) -> Result<()> {
+        self.sender.try_send(event).map_err(|e| match e {
+            mpsc::error::TrySendError::Closed(_) => Self::channel_closed_err(),
+            mpsc::error::TrySendError::Full(_) => {
+                crate::error::Error::Io(std::io::Error::other("Warden event queue full"))
+            }
+        })
     }
 
-    /// Notify that a jail failed (blocking version for sync code)
-    pub fn notify_failure_blocking(&self, name: &str) -> Result<()> {
-        self.blocking_send(WardenEvent::JailFailed {
+    /// Notify that a jail failed
+    pub fn notify_failure(&self, name: &str) -> Result<()> {
+        self.post(WardenEvent::JailFailed {
             name: name.to_string(),
         })
     }
 
-    /// Notify that a jail's health check failed (blocking version)
-    pub fn notify_health_failure_blocking(&self, name: &str) -> Result<()> {
-        self.blocking_send(WardenEvent::JailHealthFailed {
+    /// Notify that a jail's health check failed
+    pub fn notify_health_failure(&self, name: &str) -> Result<()> {
+        self.post(WardenEvent::JailHealthFailed {
             name: name.to_string(),
         })
     }
 
-    /// Notify that a jail's health check passed (blocking version)
-    pub fn notify_healthy_blocking(&self, name: &str) -> Result<()> {
-        self.blocking_send(WardenEvent::JailHealthy {
+    /// Notify that a jail's health check passed
+    pub fn notify_healthy(&self, name: &str) -> Result<()> {
+        self.post(WardenEvent::JailHealthy {
             name: name.to_string(),
         })
     }
@@ -525,75 +606,30 @@ impl WardenHandle {
             .map_err(|_| Self::channel_closed_err())
     }
 
-    /// Notify that a jail started (blocking version)
-    pub fn notify_started_blocking(&self, name: &str) -> Result<()> {
-        self.blocking_send(WardenEvent::JailStarted {
+    /// Notify that a jail started
+    pub fn notify_started(&self, name: &str) -> Result<()> {
+        self.post(WardenEvent::JailStarted {
             name: name.to_string(),
         })
     }
 
-    /// Notify that a jail stopped intentionally (blocking version)
-    pub fn notify_stopped_blocking(&self, name: &str, jid: i32) -> Result<()> {
-        self.blocking_send(WardenEvent::JailStopped {
+    /// Notify that a jail stopped intentionally
+    pub fn notify_stopped(&self, name: &str, jid: i32) -> Result<()> {
+        self.post(WardenEvent::JailStopped {
             name: name.to_string(),
             jid,
         })
     }
 
-    /// Register a jail for kqueue monitoring (blocking version)
-    #[allow(dead_code)]
-    pub fn register_jail_blocking(&self, name: &str, jid: i32) -> Result<()> {
-        self.blocking_send(WardenEvent::RegisterJail {
+    /// Register a jail for kqueue monitoring
+    pub fn register_jail(&self, name: &str, jid: i32, descriptor_fd: Option<i32>) -> Result<()> {
+        self.post(WardenEvent::RegisterJail {
             name: name.to_string(),
             jid,
+            descriptor_fd,
         })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_restart_state_backoff() {
-        let state = RestartState::new("test_jail");
-        assert!(state.should_retry());
-        let delay = state.next_delay();
-        assert!(delay.is_some());
-    }
-
-    #[test]
-    fn test_restart_state_reset() {
-        let mut state = RestartState::new("test_jail");
-        state.attempts = 5;
-        state.reset();
-        assert_eq!(state.attempts, 0);
-    }
-
-    #[test]
-    fn test_jid_name_tracking() {
-        // Verify the jid_names map works correctly
-        let mut map: HashMap<i32, String> = HashMap::new();
-        map.insert(42, "test-jail".to_string());
-        map.insert(43, "test-jail".to_string());
-        assert_eq!(map.get(&42), Some(&"test-jail".to_string()));
-        assert_eq!(map.get(&43), Some(&"test-jail".to_string()));
-
-        // Remove only the stopped jail's JID
-        map.remove(&42);
-        assert!(!map.contains_key(&42));
-        assert_eq!(map.get(&43), Some(&"test-jail".to_string()));
-    }
-
-    #[test]
-    fn test_intentional_stops_track_jids() {
-        let stops = IntentionalStops::default();
-        stops.mark(42);
-
-        assert!(stops.contains(42));
-        assert!(!stops.contains(43));
-
-        stops.clear(42);
-        assert!(!stops.contains(42));
-    }
-}
+mod tests;

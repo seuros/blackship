@@ -193,7 +193,6 @@ pub struct BlackshipConfig {
 
     /// Network definitions (_unused: future feature)
     #[serde(default)]
-    #[allow(dead_code)]
     pub networks: Vec<NetworkConfig>,
 
     /// Jail definitions
@@ -328,12 +327,6 @@ impl BlackshipConfig {
         }
     }
 
-    /// Get the project name (explicit or random Black Ship name)
-    #[allow(dead_code)]
-    pub fn project_name(&self) -> String {
-        self.config.project_name()
-    }
-
     /// Merge another config into this one (Docker Compose-style deep merge)
     ///
     /// Later values override earlier ones at the field level.
@@ -454,6 +447,16 @@ pub struct GlobalConfig {
 }
 
 impl GlobalConfig {
+    /// Root directory holding every jail's filesystem
+    pub fn jails_dir(&self) -> PathBuf {
+        self.data_dir.join("jails")
+    }
+
+    /// Filesystem root for one jail, by full (project-prefixed) name
+    pub fn jail_root(&self, full_name: &str) -> PathBuf {
+        self.jails_dir().join(full_name)
+    }
+
     /// Get the effective project name
     /// Should always be set by load/load_merged, but falls back to "blackship" if not
     pub fn project_name(&self) -> String {
@@ -817,6 +820,9 @@ pub struct JailDef {
     /// Disable for process-style jails that exec a single command.
     pub init: Option<bool>,
 
+    /// Command run inside the jail before teardown. Overrides a Jailfile `STOP`.
+    pub stop: Option<String>,
+
     /// Tags for group targeting (e.g., `blackship down web`)
     #[serde(default)]
     pub tags: Vec<String>,
@@ -833,7 +839,7 @@ impl JailDef {
         } else {
             // With ZFS enabled the jails dataset is mounted at data_dir/jails,
             // so this is the jail root either way.
-            global.data_dir.join("jails").join(full_name)
+            global.jail_root(full_name)
         }
     }
 
@@ -844,6 +850,32 @@ impl JailDef {
             Some(qos) => &qos.startup,
             None => &self.resources,
         }
+    }
+
+    /// The command to run inside the jail before teardown.
+    ///
+    /// An explicit manifest `stop` wins; otherwise the referenced Jailfile's
+    /// `STOP` instruction is the default.
+    pub fn resolve_stop(&self) -> Option<String> {
+        if let Some(stop) = &self.stop {
+            return Some(stop.clone());
+        }
+        let path = self.jailfile_path()?;
+        let content = std::fs::read_to_string(path).ok()?;
+        crate::blueprint::parser::parse_jailfile(&content)
+            .ok()?
+            .stop
+    }
+
+    /// The Jailfile this jail is built from, if any exists on disk.
+    pub fn jailfile_path(&self) -> Option<PathBuf> {
+        if let Some(explicit) = &self.jailfile
+            && explicit.exists()
+        {
+            return Some(explicit.clone());
+        }
+        let candidate = self.build.as_ref()?.join("Jailfile");
+        candidate.exists().then_some(candidate)
     }
 
     /// Merge another JailDef into this one (Docker Compose-style deep merge)
@@ -894,6 +926,7 @@ impl JailDef {
             ephemeral: other.ephemeral.or(self.ephemeral),
             devfs_ruleset: other.devfs_ruleset.or(self.devfs_ruleset),
             init: other.init.or(self.init),
+            stop: other.stop.or(self.stop),
             tags: if other.tags.is_empty() {
                 self.tags
             } else {
@@ -1039,6 +1072,43 @@ pub struct JailMountConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_resolve_stop_prefers_manifest_over_jailfile() {
+        let dir = std::env::temp_dir().join(format!("blackship-stop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let jailfile = dir.join("Jailfile");
+        std::fs::write(&jailfile, "FROM 14.2-RELEASE\nSTOP from-jailfile\n").unwrap();
+
+        let from_jailfile: JailDef = toml::from_str(&format!(
+            r#"
+name = "web"
+jailfile = "{}"
+"#,
+            jailfile.display()
+        ))
+        .unwrap();
+        assert_eq!(
+            from_jailfile.resolve_stop(),
+            Some("from-jailfile".to_string())
+        );
+
+        let overridden: JailDef = toml::from_str(&format!(
+            r#"
+name = "web"
+jailfile = "{}"
+stop = "from-manifest"
+"#,
+            jailfile.display()
+        ))
+        .unwrap();
+        assert_eq!(overridden.resolve_stop(), Some("from-manifest".to_string()));
+
+        let neither: JailDef = toml::from_str("name = \"web\"\n").unwrap();
+        assert_eq!(neither.resolve_stop(), None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn test_parse_minimal_config() {

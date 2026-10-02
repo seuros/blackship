@@ -229,11 +229,7 @@ fn select_jails<'a>(
 
 /// Where a jail's built rootfs lives
 fn jail_rootfs(config: &manifest::BlackshipConfig, service_name: &str) -> std::path::PathBuf {
-    config
-        .config
-        .data_dir
-        .join("jails")
-        .join(config.jail_name(service_name))
+    config.config.jail_root(&config.jail_name(service_name))
 }
 
 /// Build every selected jail that has a build context, honoring `mode`
@@ -314,7 +310,7 @@ fn build_jail_from_file(
     })?;
     let jailfile = parse_jailfile(&content)?;
 
-    let target_path = config.config.data_dir.join("jails").join(&full_name);
+    let target_path = config.config.jail_root(&full_name);
 
     crate::blueprint::context::reject_symlink_ancestors(&config.config.data_dir, &target_path)?;
     crate::blueprint::context::reject_symlink_target(&target_path)?;

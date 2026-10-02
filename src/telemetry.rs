@@ -199,7 +199,7 @@ pub fn emit(record: &AuditRecord) {
 }
 
 /// The meter racct gauges are recorded through. `None` when telemetry is off.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn meter() -> Option<&'static Meter> {
     active().map(|telemetry| &telemetry.meter)
 }

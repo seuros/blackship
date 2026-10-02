@@ -179,22 +179,6 @@ impl OsVersion {
         self.major >= 15
     }
 
-    /// Check if the OS supports service jails
-    ///
-    /// Service jails require FreeBSD 15.0 or later.
-    #[allow(dead_code)]
-    pub fn supports_service_jails(&self) -> bool {
-        self.major >= 15
-    }
-
-    /// Check if the OS supports zfs.dataset parameter for jails
-    ///
-    /// ZFS dataset attachment requires FreeBSD 15.0 or later.
-    #[allow(dead_code)]
-    pub fn supports_zfs_dataset(&self) -> bool {
-        self.major >= 15
-    }
-
     /// Check if pkgbase is mandatory
     ///
     /// FreeBSD 16.0+ requires pkgbase; distribution sets are removed.

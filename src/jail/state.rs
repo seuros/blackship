@@ -49,12 +49,7 @@ pub enum State {
 }
 
 /// Configuration for a jail instance
-///
-/// Fields are populated during jail creation and stored for introspection.
-/// While not all fields are currently read, they provide useful metadata
-/// about the jail configuration that may be accessed via the public API.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct JailConfig {
     /// Unique name for the jail
     pub name: String,
@@ -89,7 +84,6 @@ impl JailConfig {
 
 /// Handle to a running jail - either a legacy JID or an owning descriptor
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum JailHandle {
     /// Legacy JID-based reference (FreeBSD < 16)
     Jid(i32),
@@ -100,7 +94,6 @@ pub enum JailHandle {
     },
 }
 
-#[allow(dead_code)]
 impl JailHandle {
     /// Get the JID regardless of handle type
     pub fn jid(&self) -> i32 {
@@ -109,14 +102,21 @@ impl JailHandle {
             JailHandle::Descriptor { jid, .. } => *jid,
         }
     }
+
+    /// The descriptor fd, when this handle owns one.
+    pub fn descriptor_fd(&self) -> Option<i32> {
+        match self {
+            JailHandle::Jid(_) => None,
+            JailHandle::Descriptor { fd, .. } => Some(fd.as_raw_fd()),
+        }
+    }
 }
 
 /// Runtime data for a jail instance using dynamic dispatch
 pub struct JailInstance {
     /// The state machine (dynamic mode with unit context)
     pub machine: DynamicJailMachine<()>,
-    /// Configuration (stored for introspection via public field access)
-    #[allow(dead_code)]
+    /// Configuration the jail was created with
     pub config: JailConfig,
     /// Jail ID (when running) - kept for backward compatibility
     pub jid: Option<i32>,
@@ -149,7 +149,6 @@ impl JailInstance {
     }
 
     /// Check if the jail is currently in Running state
-    #[allow(dead_code)]
     pub fn is_running(&self) -> bool {
         self.machine.current_state() == JailMachineState::Running
     }
@@ -196,87 +195,4 @@ impl JailInstance {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_initial_state() {
-        let machine = JailMachine::new(()).into_dynamic();
-        assert_eq!(machine.current_state(), JailMachineState::Stopped);
-    }
-
-    #[test]
-    fn test_start_transition() {
-        let mut machine = JailMachine::new(()).into_dynamic();
-        assert!(machine.handle(JailMachineEvent::Start).is_ok());
-        assert_eq!(machine.current_state(), JailMachineState::Starting);
-    }
-
-    #[test]
-    fn test_full_lifecycle() {
-        let mut machine = JailMachine::new(()).into_dynamic();
-
-        // Start
-        machine.handle(JailMachineEvent::Start).unwrap();
-        assert_eq!(machine.current_state(), JailMachineState::Starting);
-
-        // Started
-        machine.handle(JailMachineEvent::Started).unwrap();
-        assert_eq!(machine.current_state(), JailMachineState::Running);
-
-        // Stop
-        machine.handle(JailMachineEvent::Stop).unwrap();
-        assert_eq!(machine.current_state(), JailMachineState::Stopping);
-
-        // Stopped
-        machine.handle(JailMachineEvent::Stopped).unwrap();
-        assert_eq!(machine.current_state(), JailMachineState::Stopped);
-    }
-
-    #[test]
-    fn test_fail_and_recover() {
-        let mut machine = JailMachine::new(()).into_dynamic();
-
-        machine.handle(JailMachineEvent::Start).unwrap();
-        machine.handle(JailMachineEvent::Fail).unwrap();
-        assert_eq!(machine.current_state(), JailMachineState::Failed);
-
-        machine.handle(JailMachineEvent::Recover).unwrap();
-        assert_eq!(machine.current_state(), JailMachineState::Stopped);
-    }
-
-    #[test]
-    fn test_drain_before_stop() {
-        let mut machine = JailMachine::new(()).into_dynamic();
-        machine.handle(JailMachineEvent::Start).unwrap();
-        machine.handle(JailMachineEvent::Started).unwrap();
-
-        machine.handle(JailMachineEvent::Drain).unwrap();
-        assert_eq!(machine.current_state(), JailMachineState::Draining);
-        assert!(machine.handle(JailMachineEvent::Drain).is_err());
-
-        machine.handle(JailMachineEvent::Stop).unwrap();
-        assert_eq!(machine.current_state(), JailMachineState::Stopping);
-    }
-
-    #[test]
-    fn test_invalid_transition() {
-        let mut machine = JailMachine::new(()).into_dynamic();
-        // Can't stop from Stopped state
-        assert!(machine.handle(JailMachineEvent::Stop).is_err());
-    }
-
-    #[test]
-    fn test_jail_instance() {
-        let config = JailConfig::new("test", "/jails/test");
-        let mut instance = JailInstance::new(config);
-
-        assert_eq!(instance.state(), State::Stopped);
-
-        instance.start().unwrap();
-        assert_eq!(instance.state(), State::Starting);
-
-        instance.started().unwrap();
-        assert!(instance.is_running());
-    }
-}
+mod tests;

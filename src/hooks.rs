@@ -38,23 +38,7 @@ pub enum HookPhase {
 }
 
 impl HookPhase {
-    /// Get all phases in lifecycle order (_unused: future feature)
-    #[allow(dead_code)]
-    pub fn all() -> &'static [HookPhase] {
-        &[
-            HookPhase::PreCreate,
-            HookPhase::PostCreate,
-            HookPhase::PreStart,
-            HookPhase::PostStart,
-            HookPhase::PreStop,
-            HookPhase::PostStop,
-            HookPhase::PreEva,
-            HookPhase::PostEva,
-        ]
-    }
-
     /// Check if this phase requires a running jail
-    #[allow(dead_code)]
     pub fn requires_running_jail(&self) -> bool {
         matches!(
             self,
@@ -134,9 +118,9 @@ fn default_timeout() -> u64 {
     30
 }
 
+#[cfg(test)]
 impl Hook {
-    /// Create a new hook (_unused: future feature)
-    #[allow(dead_code)]
+    /// Create a new hook
     pub fn new(phase: HookPhase, command: String) -> Self {
         Self {
             phase,
@@ -149,38 +133,27 @@ impl Hook {
         }
     }
 
-    /// Set hook target (_unused: future feature)
-    #[allow(dead_code)]
+    /// Set hook target
     pub fn with_target(mut self, target: HookTarget) -> Self {
         self.target = target;
         self
     }
 
-    /// Set hook arguments (_unused: future feature)
-    #[allow(dead_code)]
+    /// Set hook arguments
     pub fn with_args(mut self, args: Vec<String>) -> Self {
         self.args = args;
         self
     }
 
-    /// Set timeout (_unused: future feature)
-    #[allow(dead_code)]
+    /// Set timeout
     pub fn with_timeout(mut self, timeout: u64) -> Self {
         self.timeout = timeout;
         self
     }
 
-    /// Set failure behavior (_unused: future feature)
-    #[allow(dead_code)]
+    /// Set failure behavior
     pub fn with_on_failure(mut self, on_failure: OnFailure) -> Self {
         self.on_failure = on_failure;
-        self
-    }
-
-    /// Set description (_unused: future feature)
-    #[allow(dead_code)]
-    pub fn with_description(mut self, description: String) -> Self {
-        self.description = Some(description);
         self
     }
 }
@@ -224,8 +197,8 @@ impl HookContext {
         self
     }
 
-    /// Add custom variable (_unused: future feature)
-    #[allow(dead_code)]
+    /// Add custom variable
+    #[cfg(test)]
     pub fn with_var(mut self, name: &str, value: &str) -> Self {
         self.extra.insert(name.to_string(), value.to_string());
         self
@@ -269,7 +242,6 @@ impl HookContext {
 
 /// Hook execution result
 #[derive(Debug)]
-#[allow(dead_code)] // Fields used via summary() and output() methods
 pub struct HookResult {
     /// Whether the hook succeeded
     pub success: bool,
@@ -281,7 +253,6 @@ pub struct HookResult {
     pub stderr: String,
 }
 
-#[allow(dead_code)] // Public API for hook result inspection
 impl HookResult {
     /// Get a formatted summary of the hook result
     pub fn summary(&self) -> String {
@@ -330,10 +301,21 @@ impl HookRunner {
 
     /// Execute all hooks for a given phase
     pub fn execute_phase(&self, phase: HookPhase, context: &HookContext) -> Result<()> {
-        let phase_hooks: Vec<&Hook> = self.hooks.iter().filter(|h| h.phase == phase).collect();
+        let phase_hooks = filter_by_phase(&self.hooks, phase);
 
         if phase_hooks.is_empty() {
             return Ok(());
+        }
+
+        if phase.requires_running_jail() && context.jid.is_none() {
+            return Err(Error::HookFailed {
+                phase: phase.to_string(),
+                command: phase_hooks[0].command.clone(),
+                message: format!(
+                    "Phase {} needs a running jail but no JID was supplied for '{}'",
+                    phase, context.jail_name
+                ),
+            });
         }
 
         if self.verbose {
@@ -343,11 +325,22 @@ impl HookRunner {
         for hook in phase_hooks {
             let result = self.execute_hook(hook, context)?;
 
+            let desc = hook.description.as_deref().unwrap_or(&hook.command);
+            if self.verbose {
+                println!("  {} -> {}", desc, result.summary());
+                let output = result.output();
+                if !output.trim().is_empty() {
+                    println!("{}", output.trim_end());
+                }
+            }
+
             if !result.success {
-                let desc = hook.description.as_deref().unwrap_or(&hook.command);
                 let msg = format!(
-                    "Hook '{}' failed at phase {}: {}",
-                    desc, phase, result.stderr
+                    "Hook '{}' {} at phase {}: {}",
+                    desc,
+                    result.summary(),
+                    phase,
+                    result.output().trim_end()
                 );
 
                 match hook.on_failure {
@@ -355,7 +348,11 @@ impl HookRunner {
                         return Err(Error::HookFailed {
                             phase: phase.to_string(),
                             command: hook.command.clone(),
-                            message: result.stderr,
+                            message: format!(
+                                "{}: {}",
+                                result.summary(),
+                                result.output().trim_end()
+                            ),
                         });
                     }
                     OnFailure::Continue => {
@@ -464,7 +461,6 @@ impl HookRunner {
 /// let pre_start_hooks = filter_by_phase(&jail.hooks, HookPhase::PreStart);
 /// println!("Found {} pre_start hooks", pre_start_hooks.len());
 /// ```
-#[allow(dead_code)] // Public API utility function
 pub fn filter_by_phase(hooks: &[Hook], phase: HookPhase) -> Vec<&Hook> {
     hooks.iter().filter(|h| h.phase == phase).collect()
 }
@@ -505,6 +501,43 @@ mod tests {
         assert_eq!(hook.target, HookTarget::Host);
         assert_eq!(hook.timeout, 60);
         assert_eq!(hook.on_failure, OnFailure::Continue);
+    }
+
+    #[test]
+    fn test_filter_by_phase_selects_only_that_phase() {
+        let hooks = vec![
+            Hook::new(HookPhase::PreStart, "/bin/a".to_string()),
+            Hook::new(HookPhase::PostStart, "/bin/b".to_string()),
+            Hook::new(HookPhase::PreStart, "/bin/c".to_string()),
+        ];
+
+        let pre: Vec<&str> = filter_by_phase(&hooks, HookPhase::PreStart)
+            .iter()
+            .map(|h| h.command.as_str())
+            .collect();
+        assert_eq!(pre, ["/bin/a", "/bin/c"]);
+        assert_eq!(filter_by_phase(&hooks, HookPhase::PreStop).len(), 0);
+    }
+
+    #[test]
+    fn test_execute_phase_rejects_missing_jid() {
+        let runner = HookRunner::new(vec![Hook::new(
+            HookPhase::PostStart,
+            "/bin/false".to_string(),
+        )]);
+        let ctx = HookContext::new("myjail", Path::new("/jails/myjail"));
+
+        let err = runner
+            .execute_phase(HookPhase::PostStart, &ctx)
+            .expect_err("post_start without a JID must fail fast");
+        assert!(matches!(err, Error::HookFailed { .. }));
+
+        // A phase that does not need a jail still runs with the same context.
+        let runner = HookRunner::new(vec![Hook::new(
+            HookPhase::PostStop,
+            "/usr/bin/true".to_string(),
+        )]);
+        assert!(runner.execute_phase(HookPhase::PostStop, &ctx).is_ok());
     }
 
     #[test]

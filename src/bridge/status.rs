@@ -102,6 +102,14 @@ impl Bridge {
         Ok(())
     }
 
+    /// The owning jail descriptor fd held for a jail, when there is one.
+    pub fn jail_descriptor_fd(&self, full_name: &str) -> Option<i32> {
+        self.instances
+            .get(full_name)
+            .and_then(|instance| instance.handle.as_ref())
+            .and_then(crate::jail::JailHandle::descriptor_fd)
+    }
+
     /// Print jail status
     pub fn ps(&self, json: bool) -> Result<()> {
         if json {
@@ -109,29 +117,54 @@ impl Bridge {
 
             for jail_def in &self.config.jails {
                 let full_name = self.config.jail_name(&jail_def.name);
-                let (state, jid) = if let Some(instance) = self.instances.get(&full_name) {
-                    let state = format!("{:?}", instance.state());
-                    let jid = instance.jid;
-                    (state, jid)
-                } else {
-                    match jail_getid(&full_name) {
-                        Ok(jid) => ("Running".to_string(), Some(jid)),
-                        Err(_) => ("Stopped".to_string(), None),
-                    }
+                let instance = self.instances.get(&full_name);
+
+                let (state, jid, running) = match instance {
+                    Some(instance) => (
+                        format!("{:?}", instance.state()),
+                        instance.jid,
+                        instance.is_running(),
+                    ),
+                    None => match jail_getid(&full_name) {
+                        Ok(jid) => ("Running".to_string(), Some(jid), true),
+                        Err(_) => ("Stopped".to_string(), None, false),
+                    },
                 };
 
-                let ip = jail_def
-                    .network
-                    .as_ref()
-                    .and_then(|n| n.ip)
-                    .map(|ip| ip.to_string());
+                let (name, path, hostname, ips) = match instance {
+                    Some(instance) => (
+                        instance.config.name.clone(),
+                        instance.config.path.clone(),
+                        instance.config.hostname.clone(),
+                        instance
+                            .config
+                            .ips
+                            .iter()
+                            .map(|ip| ip.to_string())
+                            .collect::<Vec<_>>(),
+                    ),
+                    None => (
+                        full_name.clone(),
+                        jail_def.effective_path(&self.config.config, &full_name),
+                        jail_def.hostname.clone(),
+                        jail_def
+                            .network
+                            .as_ref()
+                            .and_then(|n| n.ip)
+                            .map(|ip| vec![ip.to_string()])
+                            .unwrap_or_default(),
+                    ),
+                };
 
                 jails_data.push(serde_json::json!({
-                    "name": full_name,
+                    "name": name,
                     "state": state,
                     "jid": jid,
-                    "ip": ip,
-                    "path": jail_def.effective_path(&self.config.config, &full_name).to_string_lossy()
+                    "running": running,
+                    "hostname": hostname,
+                    "ip": ips.first(),
+                    "ips": ips,
+                    "path": path.to_string_lossy()
                 }));
             }
 

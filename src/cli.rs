@@ -144,6 +144,10 @@ pub enum Commands {
         #[usage(short = 'e', long = "env", var)]
         env: Vec<KeyVal>,
 
+        /// Start from an empty environment, keeping only --env values
+        #[usage(long = "clear-env")]
+        clear_env: bool,
+
         /// Command to execute (use -- to separate from options)
         #[usage(value_name = "COMMAND", double_dash = "required", required = true)]
         command: Vec<String>,

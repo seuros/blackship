@@ -42,7 +42,7 @@ impl Bridge {
             return Ok(ShiftOutcome::NotConfigured);
         };
 
-        let Some(mut scope) = self.scope_store.get(&full_name)? else {
+        let Some(scope) = self.scope_store.get(&full_name)? else {
             return Err(Error::State(format!(
                 "No scope record for '{}': the jail is not running under blackship",
                 full_name
@@ -59,14 +59,25 @@ impl Bridge {
         crate::rctl::apply_phase(&full_name, from, to)?;
 
         let previous = scope.qos_phase;
-        scope.qos_phase = target;
-        scope.rctl_subject = Some(format!("jail:{}", full_name));
-        self.persist_scope(&mut scope);
+        let subject = format!("jail:{}", full_name);
+        let scope = match self.scope_store.update(&full_name, |record| {
+            record.qos_phase = target;
+            record.rctl_subject = Some(subject);
+        }) {
+            Ok(updated) => updated,
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to persist scope record for '{}': {}",
+                    full_name, e
+                );
+                scope
+            }
+        };
 
         self.audit.record(
             &AuditRecord::new(&full_name, AuditEvent::QosShift)
-                .with("from", phase_label(previous))
-                .with("to", phase_label(target)),
+                .with("from", previous.as_str())
+                .with("to", target.as_str()),
         );
 
         if let Some(cpu_list) = to.cpuset.as_ref()
@@ -98,14 +109,6 @@ impl Bridge {
             Ok(Some(scope)) => qos.profile(scope.qos_phase),
             _ => &qos.startup,
         }
-    }
-}
-
-pub fn phase_label(phase: QosPhase) -> &'static str {
-    match phase {
-        QosPhase::Startup => "startup",
-        QosPhase::Steady => "steady",
-        QosPhase::None => "none",
     }
 }
 

@@ -41,7 +41,7 @@ pub fn handle_build(
 
     let config = manifest::load(config_path)?;
     let full_name = config.jail_name(&service_name);
-    let target_path = config.config.data_dir.join("jails").join(&full_name);
+    let target_path = config.config.jail_root(&full_name);
 
     // With ZFS enabled the jail root is a dataset mounted at target_path,
     // so builds and `up` share one root.
@@ -355,6 +355,17 @@ pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()>
                 if let Some(desc) = &jailfile.metadata.description {
                     println!("Description: {}", desc);
                 }
+                if let Some(author) = &jailfile.metadata.author {
+                    println!("Author: {}", author);
+                }
+                if !jailfile.metadata.labels.is_empty() {
+                    println!("Labels:");
+                    let mut labels: Vec<_> = jailfile.metadata.labels.iter().collect();
+                    labels.sort();
+                    for (key, value) in labels {
+                        println!("  {} = {}", key, value);
+                    }
+                }
 
                 if let Some(from) = &jailfile.from {
                     println!("\nBase release: {}", from);
@@ -387,6 +398,7 @@ pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()>
                         }
                         Instruction::Env(k, v) => println!("  ENV {}={}", k, v),
                         Instruction::Workdir(p) => println!("  WORKDIR {}", p),
+                        Instruction::Comment(text) => println!("  # {}", text),
                         _ => println!("  {}", instr.name()),
                     }
                 }
@@ -396,6 +408,9 @@ pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()>
                 }
                 if let Some(ep) = &jailfile.entrypoint {
                     println!("ENTRYPOINT: {}", ep);
+                }
+                if let Some(stop) = &jailfile.stop {
+                    println!("STOP: {}", stop);
                 }
             } else {
                 println!("Template or file '{}' not found.", template);

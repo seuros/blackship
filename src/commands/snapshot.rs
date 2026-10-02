@@ -20,7 +20,7 @@ pub(crate) fn require_zfs(config: &BlackshipConfig) -> Result<zfs::ZfsManager> {
     Ok(zfs::ZfsManager::new(
         pool,
         &config.config.dataset,
-        config.config.data_dir.join("jails"),
+        config.config.jails_dir(),
     ))
 }
 
@@ -46,7 +46,7 @@ pub(crate) fn stage_config_in_dataset(
     let Some(jail_def) = config.get_jail(service_name) else {
         return;
     };
-    let root = config.config.data_dir.join("jails").join(full_name);
+    let root = config.config.jail_root(full_name);
     if !root.join("bin").exists() {
         return;
     }
@@ -276,7 +276,7 @@ pub fn handle_import(
     let target_name = name.as_deref().unwrap_or(metadata.name.as_str());
     manifest::validate_name("jail", target_name)?;
     let full_name = config.jail_name(target_name);
-    let target_path = config.config.data_dir.join("jails").join(&full_name);
+    let target_path = config.config.jail_root(&full_name);
 
     if target_path.exists() && !force {
         return Err(error::Error::JailOperation(format!(

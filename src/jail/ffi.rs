@@ -150,9 +150,7 @@ bitflags! {
     }
 }
 
-// Syscall numbers for FreeBSD 16 jail descriptor operations
-#[allow(dead_code)]
-const SYS_JAIL_ATTACH_JD: libc::c_int = 597;
+// Syscall number for FreeBSD 16 jail descriptor removal
 const SYS_JAIL_REMOVE_JD: libc::c_int = 598;
 
 /// Create a jail with the given path and parameters
@@ -299,19 +297,6 @@ pub fn jail_remove(jid: i32) -> Result<(), Error> {
     }
 }
 
-/// Attach the current process to a jail
-///
-/// After calling this, the process runs inside the jail context.
-/// This is typically used after fork() to run a command inside a jail.
-pub fn jail_attach(jid: i32) -> Result<(), Error> {
-    let ret = unsafe { libc::jail_attach(jid) };
-    match ret {
-        0 => Ok(()),
-        -1 => Err(Error::JailAttachFailed(jid)),
-        _ => Err(Error::JailAttachFailed(jid)),
-    }
-}
-
 /// Create a jail and return an owning descriptor (FreeBSD 16+)
 ///
 /// Returns (jid, descriptor); dropping the descriptor makes the kernel remove
@@ -363,7 +348,6 @@ pub fn jail_create_with_descriptor(
 }
 
 /// Remove a jail via its owning descriptor (FreeBSD 16+)
-#[allow(dead_code)]
 pub fn jail_remove_jd(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Error> {
     use std::os::unix::io::AsRawFd;
     let ret = unsafe { libc::syscall(SYS_JAIL_REMOVE_JD, fd.as_raw_fd()) };
@@ -373,27 +357,14 @@ pub fn jail_remove_jd(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Attach to a jail via its descriptor (FreeBSD 16+)
-#[allow(dead_code)]
-pub fn jail_attach_jd(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Error> {
-    use std::os::unix::io::AsRawFd;
-    let ret = unsafe { libc::syscall(SYS_JAIL_ATTACH_JD, fd.as_raw_fd()) };
-    if ret != 0 {
-        return Err(Error::JailAttachFailed(-1));
-    }
-    Ok(())
-}
-
 /// Owning jail descriptor (FreeBSD 16+)
 ///
 /// Wraps an owning file descriptor. When dropped, the kernel
 /// automatically removes the associated jail.
-#[allow(dead_code)]
 pub struct JailDescriptor {
     fd: std::os::fd::OwnedFd,
 }
 
-#[allow(dead_code)]
 impl JailDescriptor {
     /// Get the raw fd for use with kqueue or other operations
     pub fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
@@ -422,32 +393,6 @@ impl std::fmt::Debug for JailDescriptor {
             .field("fd", &self.fd.as_raw_fd())
             .finish()
     }
-}
-
-/// Clear the persist flag on a jail (_unused: future feature)
-///
-/// This allows the kernel to clean up the jail when no processes remain
-#[allow(dead_code)]
-pub fn jail_clearpersist(jid: i32) -> Result<(), Error> {
-    let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
-    let mut jiov: Vec<libc::iovec> = vec![
-        iovec!(b"jid\0" => (&jid as *const _, mem::size_of::<i32>())),
-        iovec!(b"errmsg\0" => mut errmsg),
-        iovec!(b"nopersist\0" => ()),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
-    let jid = unsafe {
-        libc::jail_set(
-            jiov[..].as_mut_ptr(),
-            jiov.len() as u32,
-            JailFlags::UPDATE.bits(),
-        )
-    };
-
-    check_jail_set_result(jid, &errmsg).map(|_| ())
 }
 
 /// Iterator over all running jails

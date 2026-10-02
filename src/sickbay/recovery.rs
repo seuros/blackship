@@ -39,13 +39,11 @@ pub struct RecoveryConfig {
 
 impl RecoveryConfig {
     /// Get cooldown as Duration
-    #[allow(dead_code)] // Public API for recovery timing
     pub fn cooldown_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.cooldown)
     }
 
     /// Check if recovery should be attempted based on cooldown
-    #[allow(dead_code)] // Public API for recovery decisions
     pub fn should_attempt(&self, last_attempt: Option<std::time::Instant>) -> bool {
         match last_attempt {
             Some(t) => t.elapsed() >= self.cooldown_duration(),
@@ -72,10 +70,9 @@ impl Default for RecoveryConfig {
     }
 }
 
-// Builder methods for RecoveryConfig - public API for programmatic use
+#[cfg(test)]
 impl RecoveryConfig {
     /// Create a new recovery config with restart action
-    #[allow(dead_code)] // Public API for programmatic config
     pub fn restart() -> Self {
         Self {
             action: RecoveryAction::Restart,
@@ -84,7 +81,6 @@ impl RecoveryConfig {
     }
 
     /// Create a new recovery config with stop action
-    #[allow(dead_code)] // Public API for programmatic config
     pub fn stop() -> Self {
         Self {
             action: RecoveryAction::Stop,
@@ -93,7 +89,6 @@ impl RecoveryConfig {
     }
 
     /// Create a new recovery config with custom command
-    #[allow(dead_code)] // Public API for programmatic config
     pub fn command(cmd: &str) -> Self {
         Self {
             action: RecoveryAction::Command(cmd.to_string()),
@@ -102,14 +97,12 @@ impl RecoveryConfig {
     }
 
     /// Set max attempts
-    #[allow(dead_code)] // Public API for programmatic config
     pub fn with_max_attempts(mut self, attempts: u32) -> Self {
         self.max_attempts = attempts;
         self
     }
 
     /// Set cooldown period
-    #[allow(dead_code)] // Public API for programmatic config
     pub fn with_cooldown(mut self, cooldown: u64) -> Self {
         self.cooldown = cooldown;
         self
@@ -141,6 +134,21 @@ mod tests {
             cmd.action,
             RecoveryAction::Command("/usr/local/bin/fix.sh".to_string())
         );
+    }
+
+    #[test]
+    fn test_should_attempt_across_cooldown_boundary() {
+        let config = RecoveryConfig::restart().with_cooldown(60);
+
+        assert!(config.should_attempt(None));
+
+        let now = std::time::Instant::now();
+        assert!(!config.should_attempt(Some(now)));
+        assert!(!config.should_attempt(Some(now - std::time::Duration::from_secs(59))));
+        assert!(config.should_attempt(Some(now - std::time::Duration::from_secs(60))));
+
+        let immediate = RecoveryConfig::restart().with_cooldown(0);
+        assert!(immediate.should_attempt(Some(now)));
     }
 
     #[test]

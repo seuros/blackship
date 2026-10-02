@@ -43,9 +43,6 @@ fn zfs_run(args: &[&str], fail_msg: impl FnOnce() -> String) -> Result<()> {
 
 /// ZFS dataset manager
 pub struct ZfsManager {
-    /// ZFS pool name (_unused: future feature)
-    #[allow(dead_code)]
-    pool: String,
     /// Base dataset name (e.g., "blackship")
     base_dataset: String,
     /// Where the jails dataset is mounted (data_dir/jails), so ZFS and
@@ -64,7 +61,6 @@ impl ZfsManager {
         let base = base.into();
         Self {
             base_dataset: format!("{}/{}", pool, base),
-            pool,
             jails_mountpoint: jails_mountpoint.into(),
         }
     }
@@ -510,12 +506,6 @@ impl ZfsManager {
             )
         })?;
         Ok(self.jail_path(new_jail))
-    }
-
-    /// Get the dataset name for a jail (public accessor) (_unused: future feature)
-    #[allow(dead_code)]
-    pub fn get_jail_dataset(&self, name: &str) -> String {
-        self.jail_dataset(name)
     }
 }
 

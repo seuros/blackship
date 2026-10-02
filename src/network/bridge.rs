@@ -61,12 +61,6 @@ impl Bridge {
         }
     }
 
-    /// Get bridge name (_unused: future feature)
-    #[allow(dead_code)]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     /// Check if a bridge exists
     pub fn exists(name: &str) -> Result<bool> {
         // Use native ioctl to check if interface exists

@@ -41,6 +41,7 @@ impl AppContext {
                 user,
                 workdir,
                 env,
+                clear_env,
                 command,
             } => {
                 let jail = self.resolve_runtime_jail(&jail);
@@ -48,7 +49,7 @@ impl AppContext {
                     user,
                     workdir,
                     env: crate::cli::into_pairs(env),
-                    ..Default::default()
+                    clear_env,
                 };
                 let status = console::exec_in_jail(&jail, &command, &opts)?;
                 crate::telemetry::shutdown();

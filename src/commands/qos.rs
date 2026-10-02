@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::bridge::{Bridge, ShiftOutcome, phase_label};
+use crate::bridge::{Bridge, ShiftOutcome};
 use crate::error::{Error, Result};
 use crate::manifest;
 use crate::scope::QosPhase;
@@ -26,7 +26,7 @@ pub fn handle_qos(
 
     if show || !(steady || startup) {
         let phase = bridge.qos_phase(&jail)?;
-        println!("{}: {}", jail, phase_label(phase));
+        println!("{}: {}", jail, phase.as_str());
         return Ok(());
     }
 
@@ -38,10 +38,10 @@ pub fn handle_qos(
 
     match bridge.shift_qos(&jail, target)? {
         ShiftOutcome::Shifted => {
-            println!("{}: shifted to {} profile", jail, phase_label(target));
+            println!("{}: shifted to {} profile", jail, target.as_str());
         }
         ShiftOutcome::AlreadyInPhase => {
-            println!("{}: already in {} profile", jail, phase_label(target));
+            println!("{}: already in {} profile", jail, target.as_str());
         }
         ShiftOutcome::NotConfigured => {
             println!(

@@ -362,6 +362,12 @@ impl Reaper {
         if residual.is_empty() {
             self.audit.record(&record);
             self.scope_store.delete(&scope.name)?;
+            if force && let Err(e) = self.audit.delete(&scope.name) {
+                eprintln!(
+                    "Warning: failed to remove audit log for '{}': {}",
+                    scope.name, e
+                );
+            }
             Ok(())
         } else {
             record = record.with("residual", residual.join(","));

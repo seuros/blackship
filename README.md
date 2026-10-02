@@ -208,6 +208,7 @@ depends_on = ["database"]             # Dependencies
 tags = ["web", "prod"]                # Tags for group targeting (blackship down prod)
 devfs_ruleset = 4                     # devfs ruleset (default 4; 0 disables devfs)
 init = true                           # Run /etc/rc at start, /etc/rc.shutdown at stop (default)
+stop = "service nginx stop"           # Run inside the jail before teardown (overrides Jailfile STOP)
 
 [jails.resources]
 memory = "1g"                         # rctl memoryuse:deny
@@ -289,7 +290,7 @@ skipped. `--dry-run` prints the diff without touching anything.
 | Command | Description |
 |---------|-------------|
 | `blackship console <jail> [-u user]` | Open interactive shell |
-| `blackship exec <jail> [-u user] [-w dir] [-e K=V] -- <cmd>` | Execute command in jail |
+| `blackship exec <jail> [-u user] [-w dir] [-e K=V] [--clear-env] -- <cmd>` | Execute command in jail (`--clear-env` starts from an empty environment, keeping only `-e` values) |
 | `blackship run --name <n> --release <r> [--network <net>] [-d] -- <cmd>` | Run ephemeral jail (auto-cleanup unless -d) |
 
 ### File Operations
@@ -438,7 +439,13 @@ EXPOSE 443/tcp
 
 # Default command
 CMD /usr/local/sbin/nginx -g 'daemon off;'
+
+# Run inside the jail before teardown
+STOP /usr/local/sbin/nginx -s quit
 ```
+
+`STOP` runs before `/etc/rc.shutdown` when the jail is stopped. A `stop =` key on
+the jail in `blackship.toml` overrides it.
 
 ### TOML Format (Alternative)
 
@@ -468,6 +475,9 @@ port = 80
 protocol = "tcp"
 
 cmd = "/usr/local/sbin/nginx -g 'daemon off;'"
+
+[stop]
+cmd = "/usr/local/sbin/nginx -s quit"
 ```
 
 ### Build Commands

@@ -85,11 +85,6 @@ impl AuditLog {
         Self { root }
     }
 
-    #[allow(dead_code)]
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     /// Append a record to the jail's log and export it.
     pub fn record(&self, record: &AuditRecord) {
         if let Err(e) = self.append(record) {
@@ -142,7 +137,7 @@ impl AuditLog {
         Ok(records)
     }
 
-    #[allow(dead_code)]
+    /// Remove a jail's audit log, including a rotated one.
     pub fn delete(&self, jail: &str) -> Result<()> {
         validate_name(jail)?;
         for path in [self.log_path(jail), self.rotated_path(jail)] {

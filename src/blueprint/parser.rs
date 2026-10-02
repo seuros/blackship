@@ -18,7 +18,6 @@ use nom::{
 };
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::Path;
 
 /// Parse a Jailfile (auto-detects format)
 pub fn parse_jailfile(content: &str) -> Result<Jailfile> {
@@ -84,6 +83,9 @@ pub fn parse_line_format(content: &str) -> Result<Jailfile> {
                 Instruction::Entrypoint(cmd) => {
                     jailfile.entrypoint = Some(cmd.clone());
                 }
+                Instruction::Stop(cmd) => {
+                    jailfile.stop = Some(cmd.clone());
+                }
                 Instruction::User(user) => {
                     jailfile.user = Some(user.clone());
                 }
@@ -102,9 +104,12 @@ pub fn parse_line_format(content: &str) -> Result<Jailfile> {
 
 /// Parse a single line instruction
 fn parse_line(line: &str) -> Result<Option<Instruction>> {
-    // Skip empty or comment lines
-    if line.is_empty() || line.starts_with('#') {
+    if line.is_empty() {
         return Ok(None);
+    }
+
+    if let Some(text) = line.strip_prefix('#') {
+        return Ok(Some(Instruction::Comment(text.trim().to_string())));
     }
 
     let result = alt((
@@ -121,6 +126,7 @@ fn parse_line(line: &str) -> Result<Option<Instruction>> {
         map(parse_entrypoint, |c| {
             Some(Instruction::Entrypoint(c.to_string()))
         }),
+        map(parse_stop, |c| Some(Instruction::Stop(c.to_string()))),
         map(parse_user, |u| Some(Instruction::User(u.to_string()))),
         map(parse_label, |(k, v)| {
             Some(Instruction::Label(k.to_string(), v.to_string()))
@@ -220,6 +226,10 @@ fn parse_entrypoint(input: &str) -> nom::IResult<&str, &str> {
     parse_keyword_rest("ENTRYPOINT", input)
 }
 
+fn parse_stop(input: &str) -> nom::IResult<&str, &str> {
+    parse_keyword_rest("STOP", input)
+}
+
 fn parse_user(input: &str) -> nom::IResult<&str, &str> {
     parse_keyword_rest("USER", input)
 }
@@ -258,7 +268,6 @@ fn parse_toml_format(content: &str) -> Result<Jailfile> {
         #[serde(default)]
         start: Option<TomlStart>,
         #[serde(default)]
-        #[allow(dead_code)]
         stop: Option<TomlStop>,
     }
 
@@ -320,7 +329,6 @@ fn parse_toml_format(content: &str) -> Result<Jailfile> {
 
     #[derive(Debug, Deserialize)]
     struct TomlStop {
-        #[allow(dead_code)]
         cmd: Option<String>,
     }
 
@@ -406,17 +414,14 @@ fn parse_toml_format(content: &str) -> Result<Jailfile> {
         }
     }
 
-    Ok(jailfile)
-}
+    if let Some(stop) = parsed.stop
+        && let Some(cmd) = stop.cmd
+    {
+        jailfile.stop = Some(cmd.clone());
+        jailfile.instructions.push(Instruction::Stop(cmd));
+    }
 
-/// Parse a Jailfile from a file path (_unused: future feature)
-#[allow(dead_code)]
-pub fn parse_jailfile_path(path: &Path) -> Result<Jailfile> {
-    let content = std::fs::read_to_string(path).map_err(|e| Error::ConfigRead {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    parse_jailfile(&content)
+    Ok(jailfile)
 }
 
 #[cfg(test)]
@@ -523,5 +528,46 @@ cmd = "/usr/sbin/service nginx start"
         assert_eq!(jf.args.len(), 1);
         assert_eq!(jf.workdir, Some("/usr/local".to_string()));
         assert_eq!(jf.cmd, Some("/usr/sbin/service nginx start".to_string()));
+    }
+
+    #[test]
+    fn test_parse_stop_nom_format() {
+        let jf = parse_jailfile("FROM 14.2-RELEASE\nSTOP service nginx stop\n").unwrap();
+        assert_eq!(jf.stop, Some("service nginx stop".to_string()));
+        assert!(
+            jf.instructions
+                .iter()
+                .any(|i| matches!(i, Instruction::Stop(c) if c == "service nginx stop"))
+        );
+    }
+
+    #[test]
+    fn test_parse_stop_toml_format() {
+        let jf = parse_jailfile(
+            r#"
+[jail]
+from = "14.2-RELEASE"
+
+[stop]
+cmd = "service nginx stop"
+"#,
+        )
+        .unwrap();
+        assert_eq!(jf.stop, Some("service nginx stop".to_string()));
+        assert!(
+            jf.instructions
+                .iter()
+                .any(|i| matches!(i, Instruction::Stop(c) if c == "service nginx stop"))
+        );
+    }
+
+    #[test]
+    fn test_comment_lines_are_retained() {
+        let jf = parse_jailfile("# build the web jail\nFROM 14.2-RELEASE\n").unwrap();
+        assert!(
+            jf.instructions
+                .iter()
+                .any(|i| matches!(i, Instruction::Comment(t) if t == "build the web jail"))
+        );
     }
 }

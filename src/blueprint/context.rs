@@ -152,12 +152,6 @@ impl BuildContext {
         self.workdir = PathBuf::from(path);
     }
 
-    /// Get the working directory (_unused: future feature)
-    #[allow(dead_code)]
-    pub fn workdir(&self) -> &Path {
-        &self.workdir
-    }
-
     /// Get the context directory
     pub fn context_dir(&self) -> &Path {
         &self.context_dir
@@ -318,6 +312,14 @@ impl BuildContext {
         if self.verbose {
             println!("[build] {}", message);
         }
+    }
+}
+
+#[cfg(test)]
+impl BuildContext {
+    /// Get the working directory
+    pub fn workdir(&self) -> &Path {
+        &self.workdir
     }
 }
 

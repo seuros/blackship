@@ -340,9 +340,7 @@ impl TemplateExecutor {
                 }
             }
 
-            Instruction::Comment(_) => {
-                // Comments are ignored during execution
-            }
+            Instruction::Stop(_) | Instruction::Comment(_) => {}
         }
 
         Ok(())
@@ -602,15 +600,16 @@ impl TemplateExecutor {
 
         Ok(())
     }
+}
 
-    /// Get the build context (_unused: future feature)
-    #[allow(dead_code)]
+#[cfg(test)]
+impl TemplateExecutor {
+    /// Get the build context
     pub fn context(&self) -> &BuildContext {
         &self.context
     }
 
-    /// Get mutable build context (_unused: future feature)
-    #[allow(dead_code)]
+    /// Get mutable build context
     pub fn context_mut(&mut self) -> &mut BuildContext {
         &mut self.context
     }

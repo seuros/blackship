@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod machine {
     use state_machines::state_machine;
@@ -83,7 +83,6 @@ pub enum QosPhase {
 }
 
 impl QosPhase {
-    #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -247,11 +246,6 @@ impl ScopeStore {
         Self { root }
     }
 
-    #[allow(dead_code)]
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     pub fn save(&self, record: &ScopeRecord) -> Result<()> {
         validate_name(&record.name)?;
         fs::create_dir_all(&self.root)
@@ -302,7 +296,6 @@ impl ScopeStore {
     }
 
     /// Read-modify-write a record, creating it when absent.
-    #[allow(dead_code)]
     pub fn update<F>(&self, name: &str, mutate: F) -> Result<ScopeRecord>
     where
         F: FnOnce(&mut ScopeRecord),

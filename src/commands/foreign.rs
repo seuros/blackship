@@ -89,7 +89,7 @@ pub fn handle_foreign_import(
     };
 
     manifest::validate_name("jail", &jail_name)?;
-    let target = config.config.data_dir.join("jails").join(&jail_name);
+    let target = config.config.jail_root(&jail_name);
     if target.join("bin").exists() {
         return Err(Error::JailOperation(format!(
             "Jail root '{}' already exists",

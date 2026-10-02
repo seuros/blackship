@@ -24,9 +24,7 @@ fn is_valid_env_key(key: &str) -> bool {
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
-use crate::jail::{jail_attach, jail_getid};
-use std::ffi::CString;
-use std::os::unix::process::ExitStatusExt;
+use crate::jail::jail_getid;
 use std::process::{Command, ExitStatus, Stdio};
 
 /// Options for executing commands in a jail
@@ -38,8 +36,7 @@ pub struct ExecOptions {
     pub workdir: Option<String>,
     /// Environment variables to set
     pub env: Vec<(String, String)>,
-    /// Clear environment before setting new vars
-    #[allow(dead_code)]
+    /// Clear environment before setting new vars (`env -i` semantics)
     pub clear_env: bool,
 }
 
@@ -70,13 +67,14 @@ pub fn exec_in_jail(jail: &str, command: &[String], opts: &ExecOptions) -> Resul
 
     // Build the actual command to run
     // If we have a workdir or env, wrap in shell
-    if opts.workdir.is_some() || !opts.env.is_empty() {
+    if opts.workdir.is_some() || !opts.env.is_empty() || opts.clear_env {
         cmd.arg("/bin/sh");
         cmd.arg("-c");
 
         let mut script = String::new();
+        let mut assignments = Vec::new();
 
-        // Add environment exports (with validation)
+        // Validate every key, whether it is exported or handed to env -i
         for (key, value) in &opts.env {
             if !is_valid_env_key(key) {
                 return Err(Error::JailExecFailed(format!(
@@ -85,7 +83,11 @@ pub fn exec_in_jail(jail: &str, command: &[String], opts: &ExecOptions) -> Resul
                 )));
             }
             let escaped = shell_quote(value);
-            script.push_str(&format!("export {}={}; ", key, escaped));
+            if opts.clear_env {
+                assignments.push(format!("{}={}", key, escaped));
+            } else {
+                script.push_str(&format!("export {}={}; ", key, escaped));
+            }
         }
 
         // Add working directory change (properly escaped)
@@ -94,13 +96,22 @@ pub fn exec_in_jail(jail: &str, command: &[String], opts: &ExecOptions) -> Resul
             script.push_str(&format!("cd {} || exit 1; ", escaped_workdir));
         }
 
+        script.push_str("exec ");
+        if opts.clear_env {
+            script.push_str("/usr/bin/env -i ");
+            if !assignments.is_empty() {
+                script.push_str(&assignments.join(" "));
+                script.push(' ');
+            }
+        }
+
         // Add the actual command
         if command.is_empty() {
-            script.push_str("exec /bin/sh");
+            script.push_str("/bin/sh");
         } else {
             // Always quote each argument for safety
             let quoted: Vec<String> = command.iter().map(|arg| shell_quote(arg)).collect();
-            script.push_str(&format!("exec {}", quoted.join(" ")));
+            script.push_str(&quoted.join(" "));
         }
 
         cmd.arg(script);
@@ -139,128 +150,6 @@ pub fn console(jail: &str, user: &str) -> Result<ExitStatus> {
 
     // Use login shell
     exec_in_jail(jail, &["-".to_string()], &opts)
-}
-
-/// Execute a command inside a jail using fork + jail_attach
-///
-/// This is the lower-level approach that directly uses the jail_attach syscall.
-/// It provides more control but is more complex.
-#[allow(dead_code)]
-pub fn exec_in_jail_direct(
-    jail: &str,
-    command: &[String],
-    opts: &ExecOptions,
-) -> Result<ExitStatus> {
-    let jid = jail_getid(jail)?;
-
-    if command.is_empty() {
-        return Err(Error::JailExecFailed("No command specified".to_string()));
-    }
-
-    // Fork and exec in child
-    match unsafe { libc::fork() } {
-        -1 => Err(Error::JailExecFailed("Fork failed".to_string())),
-        0 => {
-            // Child process
-            // Close inherited fds above stderr so host descriptors don't leak into the jail.
-            unsafe {
-                libc::closefrom(3);
-            }
-
-            // Attach to jail
-            if let Err(e) = jail_attach(jid) {
-                eprintln!("Failed to attach to jail: {}", e);
-                std::process::exit(1);
-            }
-
-            // Change user if not root
-            if opts.user != "root"
-                && let Err(e) = set_user(&opts.user)
-            {
-                eprintln!("Failed to set user: {}", e);
-                std::process::exit(1);
-            }
-
-            // Change working directory
-            if let Some(ref workdir) = opts.workdir
-                && let Err(e) = std::env::set_current_dir(workdir)
-            {
-                eprintln!("Failed to change directory: {}", e);
-                std::process::exit(1);
-            }
-
-            // Build command
-            let program = CString::new(command[0].as_str()).unwrap();
-            let args: Vec<CString> = command
-                .iter()
-                .map(|s| CString::new(s.as_str()).unwrap())
-                .collect();
-            let args_ptr: Vec<*const libc::c_char> = args
-                .iter()
-                .map(|s| s.as_ptr())
-                .chain(std::iter::once(std::ptr::null()))
-                .collect();
-
-            // Exec - this doesn't return on success
-            unsafe {
-                libc::execvp(program.as_ptr(), args_ptr.as_ptr());
-            }
-
-            // If we get here, exec failed
-            eprintln!("Failed to exec: {}", std::io::Error::last_os_error());
-            std::process::exit(1);
-        }
-        pid => {
-            // Parent process - wait for child
-            let mut status: libc::c_int = 0;
-            unsafe {
-                libc::waitpid(pid, &mut status, 0);
-            }
-
-            // Convert to ExitStatus
-            let _exit_code = if libc::WIFEXITED(status) {
-                libc::WEXITSTATUS(status)
-            } else {
-                1
-            };
-
-            Ok(std::process::ExitStatus::from_raw(status))
-        }
-    }
-}
-
-/// Set the current user (drop privileges)
-fn set_user(username: &str) -> Result<()> {
-    let username_c = CString::new(username)
-        .map_err(|_| Error::JailExecFailed("Invalid username".to_string()))?;
-
-    unsafe {
-        let pwd = libc::getpwnam(username_c.as_ptr());
-        if pwd.is_null() {
-            return Err(Error::JailExecFailed(format!(
-                "User '{}' not found",
-                username
-            )));
-        }
-
-        let uid = (*pwd).pw_uid;
-        let gid = (*pwd).pw_gid;
-
-        // Set groups, then gid, then uid (order matters for dropping privileges)
-        if libc::initgroups(username_c.as_ptr(), gid as libc::gid_t) != 0 {
-            return Err(Error::JailExecFailed("Failed to set groups".to_string()));
-        }
-
-        if libc::setgid(gid) != 0 {
-            return Err(Error::JailExecFailed("Failed to set GID".to_string()));
-        }
-
-        if libc::setuid(uid) != 0 {
-            return Err(Error::JailExecFailed("Failed to set UID".to_string()));
-        }
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

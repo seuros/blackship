@@ -15,7 +15,6 @@ use std::time::Duration;
 
 // Filter constants from sys/event.h
 const EVFILT_JAIL: i16 = -14;
-#[allow(dead_code)]
 const EVFILT_JAILDESC: i16 = -15;
 
 // Note flags for jail events
@@ -27,25 +26,54 @@ pub const NOTE_JAIL_SET: u32 = 0x40000000;
 pub const NOTE_JAIL_ATTACH: u32 = 0x20000000;
 /// Jail was removed
 pub const NOTE_JAIL_REMOVE: u32 = 0x10000000;
-/// Multiple events coalesced
-#[allow(dead_code)]
+/// More than one child or attach event since the last read
 pub const NOTE_JAIL_MULTI: u32 = 0x08000000;
 
 /// All jail events
 pub const NOTE_JAIL_ALL: u32 =
     NOTE_JAIL_CHILD | NOTE_JAIL_SET | NOTE_JAIL_ATTACH | NOTE_JAIL_REMOVE;
 
+/// The kqueue identity a jail event arrived under.
+///
+/// `EVFILT_JAIL` reports a jid, `EVFILT_JAILDESC` reports the descriptor fd.
+/// A descriptor identity survives jid reuse; a jid does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum JailIdent {
+    Jid(i32),
+    Descriptor(i32),
+}
+
+impl std::fmt::Display for JailIdent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Jid(jid) => write!(f, "JID {}", jid),
+            Self::Descriptor(fd) => write!(f, "jail descriptor {}", fd),
+        }
+    }
+}
+
 /// A jail lifecycle event from kqueue
 #[derive(Debug, Clone)]
 pub enum JailEvent {
     /// A child jail was created
-    Child { jid: i32 },
+    Child { ident: JailIdent, coalesced: bool },
     /// A jail was modified
-    Set { jid: i32 },
+    Set { ident: JailIdent },
     /// A process attached to the jail
-    Attach { jid: i32 },
+    Attach { ident: JailIdent, coalesced: bool },
     /// The jail was removed
-    Remove { jid: i32 },
+    Remove { ident: JailIdent },
+}
+
+impl JailEvent {
+    pub fn ident(&self) -> JailIdent {
+        match self {
+            Self::Child { ident, .. }
+            | Self::Set { ident }
+            | Self::Attach { ident, .. }
+            | Self::Remove { ident } => *ident,
+        }
+    }
 }
 
 /// Event source using kqueue for jail monitoring
@@ -70,10 +98,11 @@ impl JailEventSource {
         self.register(jid as usize, EVFILT_JAIL, NOTE_JAIL_ALL)
     }
 
-    /// Get the raw kqueue fd for use with tokio AsyncFd
-    pub fn as_raw_fd(&self) -> i32 {
-        use std::os::unix::io::AsRawFd;
-        self.kq.as_raw_fd()
+    /// Register a jail for monitoring by owning descriptor.
+    ///
+    /// The caller must keep the descriptor open for as long as it wants events.
+    pub fn register_jaildesc(&self, fd: i32) -> Result<()> {
+        self.register(fd as usize, EVFILT_JAILDESC, NOTE_JAIL_ALL)
     }
 
     fn kevent_change(&self, changelist: &[libc::kevent; 1]) -> Result<()> {
@@ -139,76 +168,62 @@ impl JailEventSource {
 
         let mut result = Vec::new();
         for ev in &events[..n as usize] {
-            let jid = ev.ident as i32;
+            let ident = if ev.filter == EVFILT_JAILDESC {
+                JailIdent::Descriptor(ev.ident as i32)
+            } else {
+                JailIdent::Jid(ev.ident as i32)
+            };
+            let coalesced = ev.fflags & NOTE_JAIL_MULTI != 0;
 
             if ev.fflags & NOTE_JAIL_REMOVE != 0 {
-                result.push(JailEvent::Remove { jid });
+                result.push(JailEvent::Remove { ident });
             }
             if ev.fflags & NOTE_JAIL_CHILD != 0 {
-                result.push(JailEvent::Child { jid });
+                result.push(JailEvent::Child { ident, coalesced });
             }
             if ev.fflags & NOTE_JAIL_SET != 0 {
-                result.push(JailEvent::Set { jid });
+                result.push(JailEvent::Set { ident });
             }
             if ev.fflags & NOTE_JAIL_ATTACH != 0 {
-                result.push(JailEvent::Attach { jid });
+                result.push(JailEvent::Attach { ident, coalesced });
             }
         }
 
         Ok(result)
     }
 
-    /// Unregister a jail from monitoring
-    #[allow(dead_code)]
-    pub fn unregister_jail(&self, jid: i32) -> Result<()> {
-        self.kevent_change(&[libc::kevent {
-            ident: jid as usize,
-            filter: EVFILT_JAIL,
+    /// Stop monitoring a jail. An identity the kernel has already dropped --
+    /// a removed jail or a closed descriptor -- is treated as success, since
+    /// the desired end state is the same.
+    pub fn unregister(&self, ident: JailIdent) -> Result<()> {
+        let (raw, filter) = match ident {
+            JailIdent::Jid(jid) => (jid as usize, EVFILT_JAIL),
+            JailIdent::Descriptor(fd) => (fd as usize, EVFILT_JAILDESC),
+        };
+
+        let result = self.kevent_change(&[libc::kevent {
+            ident: raw,
+            filter,
             flags: libc::EV_DELETE,
             fflags: 0,
             data: 0,
             udata: std::ptr::null_mut(),
             ext: [0; 4],
-        }])
+        }]);
+
+        match result {
+            Err(Error::Io(e))
+                if matches!(
+                    e.raw_os_error(),
+                    Some(libc::ENOENT) | Some(libc::EINVAL) | Some(libc::EBADF)
+                ) =>
+            {
+                Ok(())
+            }
+            other => other,
+        }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_kqueue_creation() {
-        // kqueue creation should work on any FreeBSD
-        let source = JailEventSource::new();
-        assert!(
-            source.is_ok(),
-            "Failed to create kqueue: {:?}",
-            source.err()
-        );
-    }
-
-    #[test]
-    fn test_poll_no_events() {
-        let source = JailEventSource::new().unwrap();
-        // Poll with zero timeout — should return empty immediately
-        let events = source.poll(Some(Duration::ZERO)).unwrap();
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn test_register_nonexistent_jail() {
-        let source = JailEventSource::new().unwrap();
-        // Registering a non-existent JID should fail
-        let result = source.register_jail(999999);
-        // On FreeBSD 16+ this returns ESRCH, on older it returns EINVAL
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_jail_event_debug() {
-        let event = JailEvent::Remove { jid: 42 };
-        let debug = format!("{:?}", event);
-        assert!(debug.contains("42"));
-    }
-}
+mod tests;

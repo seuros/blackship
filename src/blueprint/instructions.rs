@@ -14,9 +14,9 @@ pub struct BuildArg {
     pub default: Option<String>,
 }
 
+#[cfg(test)]
 impl BuildArg {
-    /// Create a new build arg (_unused: future feature)
-    #[allow(dead_code)]
+    /// Create a new build arg
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
@@ -24,8 +24,7 @@ impl BuildArg {
         }
     }
 
-    /// Set default value (_unused: future feature)
-    #[allow(dead_code)]
+    /// Set default value
     pub fn with_default(mut self, default: &str) -> Self {
         self.default = Some(default.to_string());
         self
@@ -47,24 +46,6 @@ fn default_protocol() -> String {
 }
 
 impl ExposePort {
-    /// Create a TCP port exposure (_unused: future feature)
-    #[allow(dead_code)]
-    pub fn tcp(port: u16) -> Self {
-        Self {
-            port,
-            protocol: "tcp".to_string(),
-        }
-    }
-
-    /// Create a UDP port exposure (_unused: future feature)
-    #[allow(dead_code)]
-    pub fn udp(port: u16) -> Self {
-        Self {
-            port,
-            protocol: "udp".to_string(),
-        }
-    }
-
     /// Parse from string like "80/tcp" or "53/udp"
     pub fn parse(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split('/').collect();
@@ -104,20 +85,6 @@ impl CopySpec {
             owner: None,
         }
     }
-
-    /// Set file mode (_unused: future feature)
-    #[allow(dead_code)]
-    pub fn with_mode(mut self, mode: u32) -> Self {
-        self.mode = Some(mode);
-        self
-    }
-
-    /// Set owner (_unused: future feature)
-    #[allow(dead_code)]
-    pub fn with_owner(mut self, owner: &str) -> Self {
-        self.owner = Some(owner.to_string());
-        self
-    }
 }
 
 /// A single build instruction
@@ -141,14 +108,15 @@ pub enum Instruction {
     Cmd(String),
     /// ENTRYPOINT <command> - Entry point command
     Entrypoint(String),
+    /// STOP <command> - Command to run before the jail is stopped
+    Stop(String),
     /// USER <user> - Set default user
     User(String),
     /// LABEL <key>=<value> - Add metadata
     Label(String, String),
     /// VOLUME <path> - Declare a volume
     Volume(String),
-    /// COMMENT - A comment line (_unused: future feature)
-    #[allow(dead_code)]
+    /// COMMENT - A comment line
     Comment(String),
 }
 
@@ -165,6 +133,7 @@ impl Instruction {
             Instruction::Expose(_) => "EXPOSE",
             Instruction::Cmd(_) => "CMD",
             Instruction::Entrypoint(_) => "ENTRYPOINT",
+            Instruction::Stop(_) => "STOP",
             Instruction::User(_) => "USER",
             Instruction::Label(_, _) => "LABEL",
             Instruction::Volume(_) => "VOLUME",
@@ -182,12 +151,10 @@ pub struct JailfileMetadata {
     pub version: Option<String>,
     /// Description
     pub description: Option<String>,
-    /// Author (_unused: future feature)
-    #[allow(dead_code)]
+    /// Author
     pub author: Option<String>,
-    /// Labels (_unused: future feature)
+    /// Labels
     #[serde(default)]
-    #[allow(dead_code)]
     pub labels: HashMap<String, String>,
 }
 
@@ -206,6 +173,8 @@ pub struct Jailfile {
     pub cmd: Option<String>,
     /// Entry point
     pub entrypoint: Option<String>,
+    /// Command to run before the jail is stopped
+    pub stop: Option<String>,
     /// Working directory
     pub workdir: Option<String>,
     /// Default user
@@ -234,6 +203,7 @@ impl Jailfile {
             instructions: Vec::new(),
             cmd: None,
             entrypoint: None,
+            stop: None,
             workdir: None,
             user: None,
             expose: Vec::new(),
@@ -241,9 +211,11 @@ impl Jailfile {
             env: HashMap::new(),
         }
     }
+}
 
+#[cfg(test)]
+impl Jailfile {
     /// Create a Jailfile with a base release
-    #[allow(dead_code)] // Public API for programmatic Jailfile creation
     pub fn from_release(release: &str) -> Self {
         let mut jf = Self::new();
         jf.from = Some(release.to_string());
@@ -252,7 +224,6 @@ impl Jailfile {
     }
 
     /// Add a build argument
-    #[allow(dead_code)] // Public API for programmatic Jailfile creation
     pub fn arg(mut self, name: &str, default: Option<&str>) -> Self {
         let arg = BuildArg {
             name: name.to_string(),
@@ -264,7 +235,6 @@ impl Jailfile {
     }
 
     /// Add an environment variable
-    #[allow(dead_code)] // Public API for programmatic Jailfile creation
     pub fn env(mut self, name: &str, value: &str) -> Self {
         self.env.insert(name.to_string(), value.to_string());
         self.instructions
@@ -273,7 +243,6 @@ impl Jailfile {
     }
 
     /// Add a RUN instruction
-    #[allow(dead_code)] // Public API for programmatic Jailfile creation
     pub fn run(mut self, command: &str) -> Self {
         self.instructions
             .push(Instruction::Run(command.to_string()));
@@ -281,7 +250,6 @@ impl Jailfile {
     }
 
     /// Add a COPY instruction
-    #[allow(dead_code)] // Public API for programmatic Jailfile creation
     pub fn copy(mut self, src: &str, dest: &str) -> Self {
         let spec = CopySpec::new(src, dest);
         self.instructions.push(Instruction::Copy(spec));
@@ -289,7 +257,6 @@ impl Jailfile {
     }
 
     /// Set working directory
-    #[allow(dead_code)] // Public API for programmatic Jailfile creation
     pub fn workdir(mut self, path: &str) -> Self {
         self.workdir = Some(path.to_string());
         self.instructions
@@ -298,7 +265,6 @@ impl Jailfile {
     }
 
     /// Expose a port
-    #[allow(dead_code)] // Public API for programmatic Jailfile creation
     pub fn expose(mut self, port: u16, protocol: &str) -> Self {
         let exp = ExposePort {
             port,
@@ -310,7 +276,6 @@ impl Jailfile {
     }
 
     /// Set the CMD
-    #[allow(dead_code)] // Public API for programmatic Jailfile creation
     pub fn cmd(mut self, command: &str) -> Self {
         self.cmd = Some(command.to_string());
         self.instructions
@@ -318,31 +283,7 @@ impl Jailfile {
         self
     }
 
-    /// Set the entrypoint
-    #[allow(dead_code)] // Public API for programmatic Jailfile creation
-    pub fn entrypoint(mut self, command: &str) -> Self {
-        self.entrypoint = Some(command.to_string());
-        self.instructions
-            .push(Instruction::Entrypoint(command.to_string()));
-        self
-    }
-
-    /// Set the user
-    #[allow(dead_code)] // Public API for programmatic Jailfile creation
-    pub fn user(mut self, user: &str) -> Self {
-        self.user = Some(user.to_string());
-        self.instructions.push(Instruction::User(user.to_string()));
-        self
-    }
-
-    /// Get the base release
-    #[allow(dead_code)] // Public API for Jailfile inspection
-    pub fn base_release(&self) -> Option<&str> {
-        self.from.as_deref()
-    }
-
     /// Get all RUN commands
-    #[allow(dead_code)] // Public API for Jailfile inspection
     pub fn run_commands(&self) -> Vec<&str> {
         self.instructions
             .iter()
@@ -354,7 +295,6 @@ impl Jailfile {
     }
 
     /// Get all COPY specs
-    #[allow(dead_code)] // Public API for Jailfile inspection
     pub fn copy_specs(&self) -> Vec<&CopySpec> {
         self.instructions
             .iter()

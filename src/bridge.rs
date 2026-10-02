@@ -19,4 +19,4 @@ mod tests;
 mod usage;
 
 pub use self::core::Bridge;
-pub use self::qos::{ShiftOutcome, phase_label, startup_deadline_secs};
+pub use self::qos::{ShiftOutcome, startup_deadline_secs};

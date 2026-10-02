@@ -53,7 +53,8 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
         for jail_def in &jails_for_health {
             let full_name = full_jail_name(&jail_def.name);
             if let Ok(jid) = jail::jail_getid(&full_name) {
-                warden.register_jail_direct(&full_name, jid);
+                let descriptor_fd = bridge.lock().await.jail_descriptor_fd(&full_name);
+                warden.register_jail_direct(&full_name, jid, descriptor_fd);
             }
         }
 
