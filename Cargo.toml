@@ -9,6 +9,7 @@ repository = "https://github.com/seuros/blackship"
 readme = "README.md"
 keywords = ["freebsd", "jail", "manager", "state-machine"]
 categories = ["command-line-utilities", "os::freebsd-apis"]
+exclude = ["**/tests.rs"]
 
 [features]
 default = []
