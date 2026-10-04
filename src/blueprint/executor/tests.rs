@@ -22,7 +22,7 @@ fn test_dry_run_mode() {
     let mut executor = TemplateExecutor::new(ctx).dry_run(true);
 
     // Create a simple jailfile with RUN
-    let jailfile = Jailfile::from_release("14.2-RELEASE").run("echo test");
+    let jailfile = Jailfile::from_release("15.1-RELEASE").run("echo test");
 
     // Dry run should not fail even with non-existent paths
     let result = executor.execute(&jailfile);
@@ -39,7 +39,7 @@ fn test_variable_substitution_in_instructions() {
     let mut executor = TemplateExecutor::new(ctx).dry_run(true);
     executor.context_mut().set_arg("VERSION", "1.0");
 
-    let jailfile = Jailfile::from_release("14.2-RELEASE")
+    let jailfile = Jailfile::from_release("15.1-RELEASE")
         .arg("VERSION", Some("1.0"))
         .env("APP_VERSION", "${VERSION}")
         .env("APP_NAME", "${JAIL_NAME}");

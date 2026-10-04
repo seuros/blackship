@@ -50,8 +50,8 @@ fn test_parse_release_with_patch() {
 
 #[test]
 fn test_parse_stable() {
-    let ver = OsVersion::parse("14.2-STABLE").unwrap();
-    assert_eq!(ver.major, 14);
+    let ver = OsVersion::parse("15.2-STABLE").unwrap();
+    assert_eq!(ver.major, 15);
     assert_eq!(ver.minor, 2);
     assert_eq!(ver.release_type, ReleaseType::Stable);
 }

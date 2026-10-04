@@ -53,7 +53,7 @@ impl Arch {
 /// A bootstrapped release
 #[derive(Debug)]
 pub struct Release {
-    /// Release name (e.g., "14.2-RELEASE")
+    /// Release name (e.g., "15.1-RELEASE")
     pub name: String,
     /// Path to the extracted release
     pub path: PathBuf,

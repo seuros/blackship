@@ -2,8 +2,8 @@ use super::*;
 
 #[test]
 fn test_parse_line_from() {
-    let result = parse_line("FROM 14.2-RELEASE").unwrap();
-    assert!(matches!(result, Some(Instruction::From(r)) if r == "14.2-RELEASE"));
+    let result = parse_line("FROM 15.1-RELEASE").unwrap();
+    assert!(matches!(result, Some(Instruction::From(r)) if r == "15.1-RELEASE"));
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn test_parse_line_expose() {
 #[test]
 fn test_parse_full_jailfile() {
     let content = r#"
-FROM 14.2-RELEASE
+FROM 15.1-RELEASE
 ARG NGINX_VERSION=1.25
 RUN pkg install -y nginx
 COPY nginx.conf /usr/local/etc/nginx/
@@ -57,7 +57,7 @@ CMD /usr/sbin/service nginx start
 "#;
 
     let jf = parse_line_format(content).unwrap();
-    assert_eq!(jf.from, Some("14.2-RELEASE".to_string()));
+    assert_eq!(jf.from, Some("15.1-RELEASE".to_string()));
     assert_eq!(jf.args.len(), 1);
     assert_eq!(jf.run_commands().len(), 1);
     assert_eq!(jf.expose.len(), 1);
@@ -72,7 +72,7 @@ name = "nginx-jail"
 version = "1.0"
 
 [build]
-from = "14.2-RELEASE"
+from = "15.1-RELEASE"
 workdir = "/usr/local"
 
 [[build.args]]
@@ -96,7 +96,7 @@ cmd = "/usr/sbin/service nginx start"
 
     let jf = parse_toml_format(content).unwrap();
     assert_eq!(jf.metadata.name, Some("nginx-jail".to_string()));
-    assert_eq!(jf.from, Some("14.2-RELEASE".to_string()));
+    assert_eq!(jf.from, Some("15.1-RELEASE".to_string()));
     assert_eq!(jf.args.len(), 1);
     assert_eq!(jf.workdir, Some("/usr/local".to_string()));
     assert_eq!(jf.cmd, Some("/usr/sbin/service nginx start".to_string()));
@@ -104,7 +104,7 @@ cmd = "/usr/sbin/service nginx start"
 
 #[test]
 fn test_parse_stop_nom_format() {
-    let jf = parse_jailfile("FROM 14.2-RELEASE\nSTOP service nginx stop\n").unwrap();
+    let jf = parse_jailfile("FROM 15.1-RELEASE\nSTOP service nginx stop\n").unwrap();
     assert_eq!(jf.stop, Some("service nginx stop".to_string()));
     assert!(
         jf.instructions
@@ -118,7 +118,7 @@ fn test_parse_stop_toml_format() {
     let jf = parse_jailfile(
         r#"
 [jail]
-from = "14.2-RELEASE"
+from = "15.1-RELEASE"
 
 [stop]
 cmd = "service nginx stop"
@@ -135,7 +135,7 @@ cmd = "service nginx stop"
 
 #[test]
 fn test_comment_lines_are_retained() {
-    let jf = parse_jailfile("# build the web jail\nFROM 14.2-RELEASE\n").unwrap();
+    let jf = parse_jailfile("# build the web jail\nFROM 15.1-RELEASE\n").unwrap();
     assert!(
         jf.instructions
             .iter()

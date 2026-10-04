@@ -84,7 +84,7 @@ impl OsVersion {
     /// - `16.0-CURRENT`
     /// - `15.1-RELEASE`
     /// - `15.1-RELEASE-p1`
-    /// - `14.2-STABLE`
+    /// - `15.2-STABLE`
     /// - `15.1-BETA1`
     /// - `15.1-RC2`
     pub fn detect_kernel() -> Result<Self> {

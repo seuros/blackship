@@ -35,9 +35,9 @@ fn test_archive_url() {
         retry_config: RetryConfig::default(),
     };
 
-    let url = provisioner.archive_url("14.2-RELEASE", "base");
+    let url = provisioner.archive_url("15.1-RELEASE", "base");
     assert_eq!(
         url,
-        "https://download.freebsd.org/releases/amd64/14.2-RELEASE/base.txz"
+        "https://download.freebsd.org/releases/amd64/15.1-RELEASE/base.txz"
     );
 }

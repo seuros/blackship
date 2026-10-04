@@ -24,7 +24,7 @@ fn test_expose_port_parse() {
 
 #[test]
 fn test_jailfile_builder() {
-    let jf = Jailfile::from_release("14.2-RELEASE")
+    let jf = Jailfile::from_release("15.1-RELEASE")
         .arg("VERSION", Some("1.0"))
         .env("PATH", "/usr/local/bin:/usr/bin")
         .run("pkg install -y nginx")
@@ -33,7 +33,7 @@ fn test_jailfile_builder() {
         .expose(80, "tcp")
         .cmd("/usr/sbin/service nginx start");
 
-    assert_eq!(jf.from, Some("14.2-RELEASE".to_string()));
+    assert_eq!(jf.from, Some("15.1-RELEASE".to_string()));
     assert_eq!(jf.args.len(), 1);
     assert_eq!(jf.run_commands().len(), 1);
     assert_eq!(jf.copy_specs().len(), 1);

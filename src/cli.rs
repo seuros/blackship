@@ -215,7 +215,7 @@ pub enum Commands {
 
     /// Bootstrap a FreeBSD release for jail creation
     Bootstrap {
-        /// Release to bootstrap (e.g., 14.2-RELEASE)
+        /// Release to bootstrap (e.g., 15.1-RELEASE)
         release: String,
 
         /// Force re-download even if release exists

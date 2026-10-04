@@ -5,7 +5,7 @@ fn test_resolve_stop_prefers_manifest_over_jailfile() {
     let dir = std::env::temp_dir().join(format!("blackship-stop-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let jailfile = dir.join("Jailfile");
-    std::fs::write(&jailfile, "FROM 14.2-RELEASE\nSTOP from-jailfile\n").unwrap();
+    std::fs::write(&jailfile, "FROM 15.1-RELEASE\nSTOP from-jailfile\n").unwrap();
 
     let from_jailfile: JailDef = toml::from_str(&format!(
         r#"
