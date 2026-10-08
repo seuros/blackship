@@ -399,6 +399,9 @@ pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()>
                         Instruction::Env(k, v) => println!("  ENV {}={}", k, v),
                         Instruction::Workdir(p) => println!("  WORKDIR {}", p),
                         Instruction::Comment(text) => println!("  # {}", text),
+                        Instruction::Label(key, value) => {
+                            println!("  LABEL {}={}", key, value)
+                        }
                         _ => println!("  {}", instr.name()),
                     }
                 }
