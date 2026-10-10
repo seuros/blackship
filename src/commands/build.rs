@@ -53,19 +53,31 @@ pub fn handle_build(
     crate::blueprint::context::reject_symlink_ancestors(&config.config.data_dir, &target_path)?;
     crate::blueprint::context::reject_symlink_target(&target_path)?;
 
+    if dry_run {
+        println!("=== DRY RUN - No changes will be made ===\n");
+    }
+
     if let Some(release) = &jailfile.from {
         manifest::validate_name("release", release)?;
-        let bs = provision::Provisioner::from_config(&config.config)?;
         let release_path = config.config.releases_dir.join(release);
 
         if !release_path.exists() {
-            println!("Base release '{release}' not found. Bootstrapping...");
-            if let Some(zfs) = &zfs {
-                zfs.create_release_dataset(release, &release_path)?;
-            }
-            bs.bootstrap(release, false)?;
-            if let Some(zfs) = &zfs {
-                zfs.snapshot_release_pristine(release)?;
+            if dry_run {
+                let shown =
+                    std::path::absolute(&release_path).unwrap_or_else(|_| release_path.clone());
+                println!(
+                    "Would bootstrap base release '{release}' into {} (downloads the base archives)",
+                    shown.display()
+                );
+            } else {
+                println!("Base release '{release}' not found. Bootstrapping...");
+                if let Some(zfs) = &zfs {
+                    zfs.create_release_dataset(release, &release_path)?;
+                }
+                provision::Provisioner::from_config(&config.config)?.bootstrap(release, false)?;
+                if let Some(zfs) = &zfs {
+                    zfs.snapshot_release_pristine(release)?;
+                }
             }
         }
 
@@ -124,10 +136,6 @@ pub fn handle_build(
     let mut executor = TemplateExecutor::new(ctx)
         .dry_run(dry_run)
         .layer_cache(layer_cache);
-
-    if dry_run {
-        println!("=== DRY RUN - No changes will be made ===\n");
-    }
 
     println!("Building jail '{}' from {}", full_name, file.display());
     executor.execute(&jailfile)?;
