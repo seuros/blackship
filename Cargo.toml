@@ -2,6 +2,7 @@
 name = "blackship"
 version = "0.1.9"
 edition = "2024"
+rust-version = "1.99"
 authors = ["Abdelkader Boudih <oss@seuros.com>"]
 license = "BSD-3-Clause"
 description = "A FreeBSD jail manager with state machine control"
@@ -52,7 +53,7 @@ ipnet = "2.12"
 nom = "8.0"
 
 # State machine and resilience (seuros crates)
-state-machines = "0.20"
+state-machines = { version = "0.30", features = ["dynamic", "runtime-send", "serde"] }
 breaker-machines = "0.16.1"
 chrono-machines = "0.6"
 throttle-machines = "0.2"
@@ -60,7 +61,15 @@ rand = "0.10"
 
 # Async runtime for Warden
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal", "net"] }
-jiff = "0.2.32"
+jiff = "0.2"
 
 # Telemetry
 rama = { version = "0.4", features = ["opentelemetry", "grpc", "http-full", "rustls"] }
+
+[dev-dependencies]
+state-machines = { version = "0.30", features = [
+    "dynamic",
+    "runtime-send",
+    "serde",
+    "inspect",
+] }

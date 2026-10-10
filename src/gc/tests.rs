@@ -1,5 +1,5 @@
 use super::*;
-use crate::scope::ScopePhase;
+use crate::scope::ScopeMachineState;
 
 fn vnet(owner: &str, host: &str, jail: &str) -> VnetStateRecord {
     VnetStateRecord {
@@ -32,7 +32,7 @@ fn survey(
 fn running_scope(name: &str) -> ScopeRecord {
     let mut scope = ScopeRecord::new(name);
     scope.jid = Some(11);
-    scope.phase = ScopePhase::Running;
+    scope.phase = ScopeMachineState::Running;
     scope.rctl_subject = Some(format!("jail:{}", name));
     scope.has_vnet_record = true;
     scope

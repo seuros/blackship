@@ -208,7 +208,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "state-machines",
+ "state-machines 0.30.0",
  "tar",
  "thiserror",
  "throttle-machines",
@@ -248,7 +248,7 @@ dependencies = [
  "chrono-machines",
  "hashbrown 0.17.1",
  "spin 0.12.3",
- "state-machines",
+ "state-machines 0.20.1",
 ]
 
 [[package]]
@@ -3095,8 +3095,19 @@ version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4085a22c58f0cb2e44848846197b7aa1e270ac080554e2c27fe318ba8f5d3ad2"
 dependencies = [
- "state-machines-core",
- "state-machines-macro",
+ "state-machines-core 0.9.0",
+ "state-machines-macro 0.21.0",
+]
+
+[[package]]
+name = "state-machines"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2bc4296143483a9608a37ba4cf9955b42b8e2154dc58917df4f9cbe8120ebb4"
+dependencies = [
+ "serde",
+ "state-machines-core 0.11.0",
+ "state-machines-macro 0.30.0",
 ]
 
 [[package]]
@@ -3110,10 +3121,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "state-machines-core"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54b3da777f8a61919bdb3c6e9e445f2995f851b967e5d73b5949290dccfdcddd"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "state-machines-macro"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2cda45f33b02ad3a74b0b38cf704586230e3fcbf0178e0cf4824ded7b088961b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "state-machines-macro"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edf80d0c48518c7fb7fbb1dd4dda13a8dc189c1f15ac435545b351d5f2c276b1"
 dependencies = [
  "proc-macro2",
  "quote",

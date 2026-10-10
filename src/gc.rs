@@ -113,7 +113,7 @@ pub fn classify(survey: &Survey) -> Vec<Orphan> {
         orphans.push(Orphan {
             jail: scope.name.clone(),
             kind: OrphanKind::DeadScope(Box::new(scope.clone())),
-            reason: format!("jail is not running, scope phase {}", scope.phase.as_str()),
+            reason: format!("jail is not running, scope phase {}", scope.phase.name()),
             resources,
             requires_force: false,
         });

@@ -10,12 +10,19 @@ use std::fs;
 use std::net::IpAddr;
 use std::path::PathBuf;
 
+/// The scope machine carries no data; the record around it holds everything.
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct ScopeCtx {}
+
 mod machine {
+    use super::ScopeCtx;
     use state_machines::state_machine;
 
     state_machine! {
         name: ScopeMachine,
         dynamic: true,
+        snapshot: true,
+        context: ScopeCtx,
         initial: Provisioning,
         states: [Provisioning, Running, Draining, Terminating, Failed],
         events {
@@ -27,49 +34,33 @@ mod machine {
     }
 }
 
-pub use machine::{DynamicScopeMachine, ScopeMachineEvent, ScopeMachineState};
+pub use machine::{
+    DynamicScopeMachine, ScopeMachineEvent, ScopeMachineSnapshot, ScopeMachineState,
+};
 
-/// Serde mirror of `ScopeMachineState`, persisted in the scope record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ScopePhase {
-    #[default]
-    Provisioning,
-    Running,
-    Draining,
-    Terminating,
-    Failed,
-}
+/// Persist the phase as the machine's own versioned snapshot envelope, so a
+/// record written by a future state graph is rejected instead of misread.
+mod phase_snapshot {
+    use super::{DynamicScopeMachine, ScopeCtx, ScopeMachineSnapshot, ScopeMachineState};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-impl ScopePhase {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Provisioning => "provisioning",
-            Self::Running => "running",
-            Self::Draining => "draining",
-            Self::Terminating => "terminating",
-            Self::Failed => "failed",
-        }
+    pub fn serialize<S>(phase: &ScopeMachineState, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        DynamicScopeMachine::new_init_state(ScopeCtx::default(), *phase)
+            .into_snapshot()
+            .serialize(serializer)
     }
 
-    fn state(self) -> ScopeMachineState {
-        match self {
-            Self::Provisioning => ScopeMachineState::Provisioning,
-            Self::Running => ScopeMachineState::Running,
-            Self::Draining => ScopeMachineState::Draining,
-            Self::Terminating => ScopeMachineState::Terminating,
-            Self::Failed => ScopeMachineState::Failed,
-        }
-    }
-
-    fn from_state(state: ScopeMachineState) -> Self {
-        match state {
-            ScopeMachineState::Provisioning => Self::Provisioning,
-            ScopeMachineState::Running => Self::Running,
-            ScopeMachineState::Draining => Self::Draining,
-            ScopeMachineState::Terminating => Self::Terminating,
-            ScopeMachineState::Failed => Self::Failed,
-        }
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ScopeMachineState, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let snapshot = ScopeMachineSnapshot::deserialize(deserializer)?;
+        DynamicScopeMachine::from_snapshot(snapshot)
+            .map(|machine| machine.current_state())
+            .map_err(|(_, e)| serde::de::Error::custom(format!("invalid scope phase: {:?}", e)))
     }
 }
 
@@ -133,8 +124,8 @@ pub struct ScopeRecord {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jid: Option<i32>,
-    #[serde(default)]
-    pub phase: ScopePhase,
+    #[serde(default, with = "phase_snapshot")]
+    pub phase: ScopeMachineState,
     pub created_at: i64,
     pub updated_at: i64,
 
@@ -177,7 +168,7 @@ impl ScopeRecord {
         Self {
             name: name.into(),
             jid: None,
-            phase: ScopePhase::Provisioning,
+            phase: ScopeMachineState::Provisioning,
             created_at: now,
             updated_at: now,
             ephemeral: false,
@@ -202,16 +193,16 @@ impl ScopeRecord {
 
     /// Drive the phase through `ScopeMachine`, rejecting illegal transitions.
     pub fn advance(&mut self, event: ScopeMachineEvent) -> Result<()> {
-        let mut machine = DynamicScopeMachine::new_init_state((), self.phase.state());
+        let mut machine = DynamicScopeMachine::new_init_state(ScopeCtx::default(), self.phase);
         machine.handle(event).map_err(|e| {
             Error::State(format!(
                 "Invalid scope transition for '{}' in phase {}: {:?}",
                 self.name,
-                self.phase.as_str(),
+                self.phase.name(),
                 e
             ))
         })?;
-        self.phase = ScopePhase::from_state(machine.current_state());
+        self.phase = machine.current_state();
         self.touch();
         Ok(())
     }

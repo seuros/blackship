@@ -80,3 +80,13 @@ fn test_jail_instance() {
     instance.started().unwrap();
     assert!(instance.is_running());
 }
+
+#[test]
+fn test_schema_validates_without_errors() {
+    let diagnostics = JailMachine::<(), Stopped>::schema().validate();
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.level == state_machines::DiagnosticLevel::Error)
+        .collect();
+    assert!(errors.is_empty(), "schema errors: {:?}", errors);
+}

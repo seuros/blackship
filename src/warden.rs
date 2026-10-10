@@ -8,11 +8,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use breaker_machines::{CircuitBreaker, CircuitBuilder};
 use chrono_machines::{BackoffStrategy, ExponentialBackoff};
 use rand::rng;
+use state_machines::runtime::{Clock, Runner};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::bridge::Bridge;
@@ -20,8 +21,18 @@ use crate::error::Result;
 use crate::jail::kqueue::{JailEvent, JailEventSource, JailIdent};
 use crate::sys::OsVersion;
 
-/// How often the kqueue is drained while the Warden is idle.
+mod supervisor;
+
+use supervisor::{DynamicSupervisor, SupervisorCtx, SupervisorEvent, SupervisorState};
+
+/// How often the kqueue is drained and supervision timers are advanced.
 const KQUEUE_DRAIN_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Dispatch budget for one supervision drain.
+const SUPERVISION_STEPS: usize = 32;
+
+/// Mailbox capacity of a single supervision runner.
+const SUPERVISION_MAILBOX: usize = 8;
 
 /// Events the Warden receives
 #[derive(Debug)]
@@ -161,14 +172,125 @@ impl RestartState {
     }
 }
 
+/// Monotonic millisecond ticks for the supervision runners.
+struct MillisClock {
+    origin: Instant,
+}
+
+impl MillisClock {
+    fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+        }
+    }
+}
+
+impl Clock for MillisClock {
+    fn now(&self) -> u64 {
+        u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+
+/// Supervision of a single jail: the runtime machine plus the retry policy
+/// that picks its backoff delays.
+struct Supervision {
+    runner: Runner<DynamicSupervisor>,
+    policy: RestartState,
+}
+
+impl Supervision {
+    fn new(
+        name: &str,
+        bridge: Arc<Mutex<Bridge>>,
+        tx: mpsc::Sender<WardenEvent>,
+        clock: &MillisClock,
+    ) -> Self {
+        let machine = DynamicSupervisor::new(SupervisorCtx::new(name, bridge, tx));
+        let mut runner = Runner::new(machine, SUPERVISION_MAILBOX);
+
+        if let Err(e) = runner.start(clock) {
+            eprintln!(
+                "Warden: Failed to start supervision of jail '{}': {:?}",
+                name, e
+            );
+        }
+
+        Self {
+            runner,
+            policy: RestartState::new(name),
+        }
+    }
+
+    fn state(&self) -> SupervisorState {
+        self.runner.machine().current_state()
+    }
+
+    /// Arm the retry timer for a `Backoff` visit that has none, or give up.
+    fn arm_backoff(&mut self, name: &str, clock: &MillisClock) {
+        if self.state() != SupervisorState::Backoff || self.runner.next_deadline().is_some() {
+            return;
+        }
+
+        let delay = if self.policy.should_retry() {
+            self.policy.next_delay()
+        } else {
+            None
+        };
+
+        let Some(delay) = delay else {
+            eprintln!(
+                "Warden: Not restarting jail '{}' (circuit breaker open or max attempts reached)",
+                name
+            );
+            self.enqueue(name, SupervisorEvent::Exhausted);
+            return;
+        };
+
+        self.policy.record_failure();
+        println!(
+            "Warden: Restarting jail '{}' in {:?} (attempt {})",
+            name, delay, self.policy.attempts
+        );
+
+        let ticks = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+        if let Err(e) = self
+            .runner
+            .schedule_after(clock, ticks, SupervisorEvent::Retry)
+        {
+            eprintln!(
+                "Warden: Failed to schedule restart of jail '{}': {:?}",
+                name, e
+            );
+        }
+    }
+
+    /// Clear the retry budget once the jail is back in service.
+    fn settle(&mut self) {
+        if self.state() == SupervisorState::Healthy && self.policy.attempts > 0 {
+            self.policy.reset();
+        }
+    }
+
+    fn enqueue(&self, name: &str, event: SupervisorEvent) {
+        if let Err(e) = self.runner.enqueue(event) {
+            eprintln!(
+                "Warden: Supervision mailbox rejected event for '{}': {:?}",
+                name, e
+            );
+        }
+    }
+}
+
 /// The Warden supervises all jails with one-for-one restart strategy
 pub struct Warden {
     /// Channel to receive events
     rx: mpsc::Receiver<WardenEvent>,
     /// Sender for notifying the Warden (cloneable)
     tx: mpsc::Sender<WardenEvent>,
-    /// Restart state per jail
-    restart_states: HashMap<String, RestartState>,
+    /// Supervision runner per jail
+    supervisors: HashMap<String, Supervision>,
+    /// Logical clock driving the supervision timers
+    clock: MillisClock,
     /// Reference to bridge for restart operations
     bridge: Arc<Mutex<Bridge>>,
     /// Kqueue event source for kernel jail monitoring (FreeBSD 16+)
@@ -211,7 +333,8 @@ impl Warden {
         Self {
             rx,
             tx,
-            restart_states: HashMap::new(),
+            supervisors: HashMap::new(),
+            clock: MillisClock::new(),
             bridge,
             kqueue,
             monitored: HashMap::new(),
@@ -239,6 +362,12 @@ impl Warden {
             return;
         }
 
+        for stale in idents_for(&self.monitored, name, None) {
+            if stale != ident {
+                self.unregister_ident(name, stale);
+            }
+        }
+
         self.monitored.insert(
             ident,
             MonitoredJail {
@@ -263,11 +392,6 @@ impl Warden {
         }
     }
 
-    /// Stop monitoring every identity registered for a jail
-    fn unregister_jail_monitoring(&mut self, name: &str) {
-        self.unregister_idents(name, None)
-    }
-
     /// Stop monitoring only the identities that belong to a specific jid.
     fn unregister_jail_jid(&mut self, name: &str, jid: i32) {
         self.unregister_idents(name, Some(jid))
@@ -275,15 +399,19 @@ impl Warden {
 
     fn unregister_idents(&mut self, name: &str, only_jid: Option<i32>) {
         for ident in idents_for(&self.monitored, name, only_jid) {
-            self.monitored.remove(&ident);
-            if let Some(ref kq) = self.kqueue
-                && let Err(e) = kq.unregister(ident)
-            {
-                eprintln!(
-                    "Warden: Failed to unregister kqueue for jail '{}' ({}): {}",
-                    name, ident, e
-                );
-            }
+            self.unregister_ident(name, ident);
+        }
+    }
+
+    fn unregister_ident(&mut self, name: &str, ident: JailIdent) {
+        self.monitored.remove(&ident);
+        if let Some(ref kq) = self.kqueue
+            && let Err(e) = kq.unregister(ident)
+        {
+            eprintln!(
+                "Warden: Failed to unregister kqueue for jail '{}' ({}): {}",
+                name, ident, e
+            );
         }
     }
 
@@ -316,19 +444,8 @@ impl Warden {
     pub async fn run(&mut self) {
         println!("Warden: Starting jail supervisor");
 
-        if self.kqueue.is_some() {
-            self.run_with_kqueue().await;
-        } else {
-            self.run_polling().await;
-        }
-
-        println!("Warden: Supervisor stopped");
-    }
-
-    /// Event loop with kqueue integration (FreeBSD 16+)
-    async fn run_with_kqueue(&mut self) {
-        let mut drain = tokio::time::interval(KQUEUE_DRAIN_INTERVAL);
-        drain.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut ticker = tokio::time::interval(KQUEUE_DRAIN_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
@@ -343,66 +460,66 @@ impl Warden {
                     }
                 }
 
-                _ = drain.tick() => {
-                    {
-                        let events = self.process_kqueue_events();
-                        for (jail, event) in events {
-                            let MonitoredJail { name, jid } = jail;
-                            match event {
-                                JailEvent::Remove { ident } => {
-                                    self.monitored.remove(&ident);
-                                    if self.intentional_stops.contains(jid) {
-                                        println!(
-                                            "Warden: Kernel reports jail '{}' ({}) removed after requested stop",
-                                            name, ident
-                                        );
-                                    } else {
-                                        println!(
-                                            "Warden: Kernel reports jail '{}' ({}) removed",
-                                            name, ident
-                                        );
-                                        self.handle_failure(&name).await;
-                                    }
-                                }
-                                JailEvent::Child { ident, coalesced } => {
-                                    let detail = if coalesced {
-                                        "multiple child jails"
-                                    } else {
-                                        "a child jail"
-                                    };
-                                    println!(
-                                        "Warden: Jail '{}' ({}) created {}",
-                                        name, ident, detail
-                                    );
-                                }
-                                JailEvent::Set { .. } => {
-                                }
-                                JailEvent::Attach { ident, coalesced } => {
-                                    if coalesced {
-                                        println!(
-                                            "Warden: Jail '{}' ({}) had multiple attaches",
-                                            name, ident
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                _ = ticker.tick() => self.drain_kqueue(),
+            }
+
+            self.pump().await;
+        }
+
+        println!("Warden: Supervisor stopped");
+    }
+
+    /// Resolve pending kernel jail events (no-op without kqueue)
+    fn drain_kqueue(&mut self) {
+        for (jail, event) in self.process_kqueue_events() {
+            let MonitoredJail { name, jid } = jail;
+            match event {
+                JailEvent::Remove { ident } => {
+                    self.monitored.remove(&ident);
+                    if self.intentional_stops.contains(jid) {
+                        println!(
+                            "Warden: Kernel reports jail '{}' ({}) removed after requested stop",
+                            name, ident
+                        );
+                    } else {
+                        println!("Warden: Kernel reports jail '{}' ({}) removed", name, ident);
+                        self.handle_failure(&name);
+                    }
+                }
+                JailEvent::Child { ident, coalesced } => {
+                    let detail = if coalesced {
+                        "multiple child jails"
+                    } else {
+                        "a child jail"
+                    };
+                    println!("Warden: Jail '{}' ({}) created {}", name, ident, detail);
+                }
+                JailEvent::Set { .. } => {}
+                JailEvent::Attach { ident, coalesced } => {
+                    if coalesced {
+                        println!("Warden: Jail '{}' ({}) had multiple attaches", name, ident);
                     }
                 }
             }
         }
     }
 
-    /// Polling-based event loop (pre-FreeBSD 16 fallback)
-    async fn run_polling(&mut self) {
-        while let Some(event) = self.rx.recv().await {
-            match event {
-                WardenEvent::Shutdown => {
-                    println!("Warden: Shutting down");
-                    break;
-                }
-                event => self.handle_event(event).await,
+    /// Advance every supervision runner: timers, dispatch, restart activities.
+    async fn pump(&mut self) {
+        for (name, supervision) in &mut self.supervisors {
+            if supervision.runner.tick(&self.clock).is_err() {
+                eprintln!(
+                    "Warden: Monotonic clock went backwards supervising jail '{}'",
+                    name
+                );
             }
+
+            if let Err(e) = supervision.runner.drain(SUPERVISION_STEPS).await {
+                eprintln!("Warden: Supervision of jail '{}' failed: {:?}", name, e);
+            }
+
+            supervision.settle();
+            supervision.arm_backoff(name, &self.clock);
         }
     }
 
@@ -411,14 +528,14 @@ impl Warden {
         match event {
             WardenEvent::JailFailed { name } => {
                 println!("Warden: Jail '{}' failed, initiating restart", name);
-                self.handle_failure(&name).await;
+                self.handle_failure(&name);
             }
             WardenEvent::JailHealthFailed { name } => {
                 println!(
                     "Warden: Jail '{}' health check failed, initiating restart",
                     name
                 );
-                self.handle_failure(&name).await;
+                self.handle_failure(&name);
             }
             WardenEvent::JailHealthy { name } => {
                 self.shift_to_steady(&name, "healthy").await;
@@ -428,13 +545,15 @@ impl Warden {
             }
             WardenEvent::JailStarted { name } => {
                 println!("Warden: Jail '{}' started successfully", name);
-                if let Some(state) = self.restart_states.get_mut(&name) {
-                    state.reset();
+                if let Some(supervision) = self.supervisors.get_mut(&name)
+                    && supervision.state() == SupervisorState::Backoff
+                {
+                    supervision.enqueue(&name, SupervisorEvent::Recovered);
                 }
             }
             WardenEvent::JailStopped { name, jid } => {
                 println!("Warden: Jail '{}' stopped intentionally", name);
-                self.restart_states.remove(&name);
+                self.supervisors.remove(&name);
                 self.unregister_jail_jid(&name, jid);
                 self.intentional_stops.clear(jid);
             }
@@ -473,59 +592,28 @@ impl Warden {
         }
     }
 
-    /// Handle a jail failure by attempting restart with backoff
-    async fn handle_failure(&mut self, name: &str) {
-        let state = self
-            .restart_states
+    /// Hand a jail failure to its supervision machine
+    fn handle_failure(&mut self, name: &str) {
+        let bridge = Arc::clone(&self.bridge);
+        let tx = self.tx.clone();
+        let clock = &self.clock;
+
+        let supervision = self
+            .supervisors
             .entry(name.to_string())
-            .or_insert_with(|| RestartState::new(name));
+            .or_insert_with(|| Supervision::new(name, bridge, tx, clock));
 
-        if !state.should_retry() {
-            eprintln!(
-                "Warden: Not restarting jail '{}' (circuit breaker open or max attempts reached)",
+        match supervision.state() {
+            SupervisorState::Healthy => supervision.enqueue(name, SupervisorEvent::Failed),
+            SupervisorState::Dead => eprintln!(
+                "Warden: Not restarting jail '{}' (supervision exhausted)",
                 name
-            );
-            return;
-        }
-
-        let delay = match state.next_delay() {
-            Some(d) => d,
-            None => {
-                eprintln!("Warden: Max retries reached for jail '{}'", name);
-                return;
-            }
-        };
-
-        state.record_failure();
-
-        println!(
-            "Warden: Restarting jail '{}' in {:?} (attempt {})",
-            name, delay, state.attempts
-        );
-
-        tokio::time::sleep(delay).await;
-
-        let (result, descriptor_fd) = {
-            let mut br = self.bridge.lock().await;
-            let result = br.restart_jail(name);
-            (result, br.jail_descriptor_fd(name))
-        };
-
-        match result {
-            Ok(_) => {
-                println!("Warden: Jail '{}' restarted successfully", name);
-                if let Some(state) = self.restart_states.get_mut(name) {
-                    state.reset();
-                }
-
-                self.unregister_jail_monitoring(name);
-                if let Ok(jid) = crate::jail::jail_getid(name) {
-                    self.register_jail_monitoring(name, jid, descriptor_fd);
-                }
-            }
-            Err(e) => {
-                eprintln!("Warden: Failed to restart jail '{}': {}", name, e);
-            }
+            ),
+            state => println!(
+                "Warden: Jail '{}' is already recovering ({})",
+                name,
+                state.name()
+            ),
         }
     }
 

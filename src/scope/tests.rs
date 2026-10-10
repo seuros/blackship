@@ -15,7 +15,7 @@ fn round_trips_through_toml() {
 
     let mut record = ScopeRecord::new("demo-web");
     record.jid = Some(42);
-    record.phase = ScopePhase::Running;
+    record.phase = ScopeMachineState::Running;
     record.ephemeral = true;
     record.zfs_dataset = Some("zroot/blackship/jails/demo-web".into());
     record.zfs_origin = Some("zroot/blackship/releases/15.0@pristine".into());
@@ -31,7 +31,7 @@ fn round_trips_through_toml() {
 
     assert_eq!(loaded.name, "demo-web");
     assert_eq!(loaded.jid, Some(42));
-    assert_eq!(loaded.phase, ScopePhase::Running);
+    assert_eq!(loaded.phase, ScopeMachineState::Running);
     assert_eq!(loaded.qos_phase, QosPhase::Startup);
     assert_eq!(loaded.cascade, CascadePolicy::Isolate);
     assert_eq!(
@@ -67,7 +67,7 @@ fn update_creates_then_mutates() {
     let store = ScopeStore::new(root.clone());
 
     let created = store.update("demo", |_| {}).unwrap();
-    assert_eq!(created.phase, ScopePhase::Provisioning);
+    assert_eq!(created.phase, ScopeMachineState::Provisioning);
 
     store
         .update("demo", |r| {
@@ -77,7 +77,7 @@ fn update_creates_then_mutates() {
         .unwrap();
 
     let loaded = store.get("demo").unwrap().unwrap();
-    assert_eq!(loaded.phase, ScopePhase::Running);
+    assert_eq!(loaded.phase, ScopeMachineState::Running);
     assert_eq!(loaded.jid, Some(7));
     assert_eq!(loaded.created_at, created.created_at);
 
@@ -112,24 +112,24 @@ fn peak_metrics_keep_maximum() {
 fn advance_follows_the_lifecycle() {
     let mut record = ScopeRecord::new("demo");
     record.advance(ScopeMachineEvent::Provisioned).unwrap();
-    assert_eq!(record.phase, ScopePhase::Running);
+    assert_eq!(record.phase, ScopeMachineState::Running);
     record.advance(ScopeMachineEvent::Drain).unwrap();
-    assert_eq!(record.phase, ScopePhase::Draining);
+    assert_eq!(record.phase, ScopeMachineState::Draining);
     record.advance(ScopeMachineEvent::Terminate).unwrap();
-    assert_eq!(record.phase, ScopePhase::Terminating);
+    assert_eq!(record.phase, ScopeMachineState::Terminating);
     record.advance(ScopeMachineEvent::Fail).unwrap();
-    assert_eq!(record.phase, ScopePhase::Failed);
+    assert_eq!(record.phase, ScopeMachineState::Failed);
 }
 
 #[test]
 fn advance_rejects_illegal_transitions() {
     let mut record = ScopeRecord::new("demo");
     assert!(record.advance(ScopeMachineEvent::Drain).is_err());
-    assert_eq!(record.phase, ScopePhase::Provisioning);
+    assert_eq!(record.phase, ScopeMachineState::Provisioning);
 
     record.advance(ScopeMachineEvent::Terminate).unwrap();
     assert!(record.advance(ScopeMachineEvent::Provisioned).is_err());
-    assert_eq!(record.phase, ScopePhase::Terminating);
+    assert_eq!(record.phase, ScopeMachineState::Terminating);
 }
 
 #[test]
@@ -144,7 +144,27 @@ fn advance_restores_the_machine_from_disk() {
     let mut loaded = store.get("demo").unwrap().unwrap();
     assert!(loaded.advance(ScopeMachineEvent::Provisioned).is_err());
     loaded.advance(ScopeMachineEvent::Drain).unwrap();
-    assert_eq!(loaded.phase, ScopePhase::Draining);
+    assert_eq!(loaded.phase, ScopeMachineState::Draining);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn rejects_a_phase_snapshot_from_another_machine() {
+    let root = temp_root();
+    let store = ScopeStore::new(root.clone());
+
+    let mut record = ScopeRecord::new("demo");
+    record.advance(ScopeMachineEvent::Provisioned).unwrap();
+    store.save(&record).unwrap();
+
+    let path = root.join("demo.toml");
+    let tampered = fs::read_to_string(&path)
+        .unwrap()
+        .replace("ScopeMachine", "SomeOtherMachine");
+    fs::write(&path, tampered).unwrap();
+
+    assert!(store.get("demo").is_err());
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -155,4 +175,14 @@ fn holds_resources_tracks_claims() {
     assert!(!record.holds_resources());
     record.has_vnet_record = true;
     assert!(record.holds_resources());
+}
+
+#[test]
+fn scope_machine_schema_validates_without_errors() {
+    let diagnostics = machine::ScopeMachine::<machine::Provisioning>::schema().validate();
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.level == state_machines::DiagnosticLevel::Error)
+        .collect();
+    assert!(errors.is_empty(), "schema errors: {:?}", errors);
 }
