@@ -9,6 +9,11 @@ use crate::error::{Error, Result};
 use std::ffi::{CStr, CString};
 use std::fmt;
 
+/// Decode owned bytes, reusing the buffer's allocation when it is valid UTF-8.
+pub fn string_from_utf8_lossy(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
 // kldload(2) is not exposed by the libc crate.
 unsafe extern "C" {
     fn kldload(file: *const libc::c_char) -> libc::c_int;
@@ -19,15 +24,14 @@ unsafe extern "C" {
 pub fn load_modules(modules: &[&str]) -> Result<()> {
     for module in modules {
         let name = CString::new(*module)
-            .map_err(|e| Error::Network(format!("Invalid module name {}: {}", module, e)))?;
+            .map_err(|e| Error::Network(format!("Invalid module name {module}: {e}")))?;
 
         if unsafe { kldload(name.as_ptr()) } < 0 {
             let err = std::io::Error::last_os_error();
             let errno = err.raw_os_error().unwrap_or(0);
             if errno != libc::EEXIST && errno != libc::ENOENT {
                 return Err(Error::Network(format!(
-                    "Failed to load module {}: {}",
-                    module, err
+                    "Failed to load module {module}: {err}"
                 )));
             }
         }
@@ -54,7 +58,7 @@ impl fmt::Display for ReleaseType {
             ReleaseType::Current => write!(f, "CURRENT"),
             ReleaseType::Stable => write!(f, "STABLE"),
             ReleaseType::Release => write!(f, "RELEASE"),
-            ReleaseType::Rc(n) => write!(f, "RC{}", n),
+            ReleaseType::Rc(n) => write!(f, "RC{n}"),
         }
     }
 }
@@ -96,7 +100,7 @@ impl OsVersion {
         if result != 0 {
             return Err(Error::CommandFailed {
                 command: "uname(2) syscall".to_string(),
-                message: format!("uname syscall failed with code {}", result),
+                message: format!("uname syscall failed with code {result}"),
             });
         }
 
@@ -104,7 +108,7 @@ impl OsVersion {
         let release_cstr = unsafe { CStr::from_ptr(utsname.release.as_ptr()) };
         let version_str = release_cstr
             .to_str()
-            .map_err(|e| Error::InvalidVersion(format!("Invalid UTF-8 in uname.release: {}", e)))?
+            .map_err(|e| Error::InvalidVersion(format!("Invalid UTF-8 in uname.release: {e}")))?
             .to_string();
 
         Self::parse(&version_str)
@@ -117,8 +121,7 @@ impl OsVersion {
 
         if parts.len() < 2 {
             return Err(Error::InvalidVersion(format!(
-                "Invalid version format: {}",
-                s
+                "Invalid version format: {s}"
             )));
         }
 
@@ -205,7 +208,7 @@ impl fmt::Display for OsVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}-{}", self.major, self.minor, self.release_type)?;
         if let Some(patch) = self.patch {
-            write!(f, "-p{}", patch)?;
+            write!(f, "-p{patch}")?;
         }
         Ok(())
     }
@@ -220,7 +223,7 @@ pub const IFACE_GROUP: &str = "blackship";
 /// Write an integer sysctl via sysctlbyname(3).
 pub fn set_sysctl_int(name: &str, value: i32) -> Result<()> {
     let c_name = CString::new(name)
-        .map_err(|e| Error::Network(format!("Invalid sysctl name {}: {}", name, e)))?;
+        .map_err(|e| Error::Network(format!("Invalid sysctl name {name}: {e}")))?;
     let rc = unsafe {
         libc::sysctlbyname(
             c_name.as_ptr(),
@@ -246,11 +249,10 @@ pub fn tag_interface(iface: &str) -> Result<()> {
     let status = std::process::Command::new("/sbin/ifconfig")
         .args([iface, "group", IFACE_GROUP])
         .status()
-        .map_err(|e| Error::Network(format!("Failed to run ifconfig: {}", e)))?;
+        .map_err(|e| Error::Network(format!("Failed to run ifconfig: {e}")))?;
     if !status.success() {
         return Err(Error::Network(format!(
-            "Failed to add {} to group {}",
-            iface, IFACE_GROUP
+            "Failed to add {iface} to group {IFACE_GROUP}"
         )));
     }
     Ok(())
@@ -286,8 +288,9 @@ pub fn list_tagged_interfaces() -> Vec<String> {
         .map(|o| {
             String::from_utf8_lossy(&o.stdout)
                 .lines()
-                .map(|line| line.trim().to_string())
+                .map(str::trim)
                 .filter(|line| !line.is_empty())
+                .map(str::to_string)
                 .collect()
         })
         .unwrap_or_default()
@@ -303,7 +306,7 @@ pub fn mount_table() -> Result<String> {
             "Failed to inspect mounted filesystems".to_string(),
         ));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(string_from_utf8_lossy(output.stdout))
 }
 
 /// Mountpoints at or below `jail_root`, deepest first so unmounting in order
@@ -313,7 +316,7 @@ pub fn mounted_paths_under(
     mount_output: &str,
 ) -> Vec<std::path::PathBuf> {
     let root = jail_root.to_string_lossy();
-    let prefix = format!("{}/", root);
+    let prefix = format!("{root}/");
     let mut mountpoints: Vec<std::path::PathBuf> = mount_output
         .lines()
         .filter_map(|line| {
@@ -345,7 +348,7 @@ pub fn mount_devfs(dev_path: &std::path::Path) -> Result<()> {
     let fstype_val = CString::new("devfs").unwrap();
     let fspath_key = CString::new("fspath").unwrap();
     let fspath_val =
-        CString::new(path_str).map_err(|e| Error::JailOperation(format!("Invalid path: {}", e)))?;
+        CString::new(path_str).map_err(|e| Error::JailOperation(format!("Invalid path: {e}")))?;
 
     let mut iov = [&fstype_key, &fstype_val, &fspath_key, &fspath_val].map(|s| libc::iovec {
         iov_base: s.as_ptr() as *mut libc::c_void,
@@ -370,7 +373,7 @@ pub fn apply_devfs_ruleset(dev_path: &std::path::Path, ruleset: u32) -> Result<(
         .arg(dev_path)
         .args(["rule", "-s", &ruleset.to_string(), "applyset"])
         .status()
-        .map_err(|e| Error::JailOperation(format!("Failed to run devfs: {}", e)))?;
+        .map_err(|e| Error::JailOperation(format!("Failed to run devfs: {e}")))?;
     if !status.success() {
         return Err(Error::JailOperation(format!(
             "Failed to apply devfs ruleset {} at {}",

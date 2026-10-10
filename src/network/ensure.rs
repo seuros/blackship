@@ -25,8 +25,7 @@ pub fn ensure_network(record: &mut NetworkRecord) -> Result<bool> {
         "netgraph" => ensure_netgraph(record, &gateway_with_prefix),
         "epair" => ensure_epair(record, &gateway_with_prefix),
         other => Err(Error::Network(format!(
-            "Unknown network backend '{}' (expected epair or netgraph)",
-            other
+            "Unknown network backend '{other}' (expected epair or netgraph)"
         ))),
     }
 }

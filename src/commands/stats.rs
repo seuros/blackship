@@ -34,7 +34,7 @@ pub(crate) fn run_json(program: &str, args: &[&str]) -> Result<serde_json::Value
     }
     serde_json::from_slice(&output.stdout).map_err(|e| Error::CommandFailed {
         command: program.to_string(),
-        message: format!("invalid libxo JSON: {}", e),
+        message: format!("invalid libxo JSON: {e}"),
     })
 }
 

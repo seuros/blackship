@@ -246,8 +246,7 @@ impl NgSocket {
             let actual = type_cstr.to_str().unwrap_or("");
             if actual != expected {
                 return Err(Error::Network(format!(
-                    "Node '{}' is type '{}', expected '{}'",
-                    path, actual, expected
+                    "Node '{path}' is type '{actual}', expected '{expected}'"
                 )));
             }
         }
@@ -335,7 +334,7 @@ impl NgSocket {
         }
         let cstr = unsafe { CStr::from_ptr(data.as_ptr() as *const c_char) };
         cstr.to_str()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .map_err(|e| Error::Network(format!("Invalid ifname: {e}")))
     }
 }

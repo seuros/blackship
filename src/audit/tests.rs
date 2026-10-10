@@ -5,7 +5,7 @@ fn temp_root() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("blackship-audit-{}", unique))
+    std::env::temp_dir().join(format!("blackship-audit-{unique}"))
 }
 
 #[test]

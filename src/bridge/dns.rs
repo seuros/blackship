@@ -55,7 +55,7 @@ impl Bridge {
 
         if dns_config.is_inherit() {
             let content = std::fs::read("/etc/resolv.conf").map_err(|e| {
-                Error::JailOperation(format!("Failed to read /etc/resolv.conf: {}", e))
+                Error::JailOperation(format!("Failed to read /etc/resolv.conf: {e}"))
             })?;
             write_nofollow(&resolv_path, &content)?;
         } else if let Some(content) = dns_config.to_resolv_conf() {

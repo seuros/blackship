@@ -9,8 +9,7 @@ use crate::{bridge, error, jail, manifest, sickbay, warden};
 
 pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
     let config = manifest::load(config_path)?;
-    let project_name = config.config.project_name();
-    let project_prefix = format!("{}-", project_name);
+    let project_prefix = format!("{}-", config.config.project_name());
     let jails_for_health = config.jails.clone();
     let rate_limit = config.config.rate_limit.clone();
     let monitor_ping_url = config.config.monitor_ping_url.clone();
@@ -37,7 +36,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
         {
             let mut br = bridge.lock().await;
             if let Err(e) = br.up(None) {
-                eprintln!("Warning: Failed to start some jails: {}", e);
+                eprintln!("Warning: Failed to start some jails: {e}");
             }
         }
 
@@ -45,7 +44,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
             if name.starts_with(&project_prefix) {
                 name.to_string()
             } else {
-                format!("{}-{}", project_name, name)
+                format!("{project_prefix}{name}")
             }
         };
 
@@ -80,8 +79,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
                 tokio::time::sleep(tokio::time::Duration::from_secs(deadline)).await;
                 if let Err(e) = handle.notify_qos_timeout(&full_name).await {
                     eprintln!(
-                        "Warning: Failed to signal QoS startup timeout for '{}': {}",
-                        full_name, e
+                        "Warning: Failed to signal QoS startup timeout for '{full_name}': {e}"
                     );
                 }
             });
@@ -134,7 +132,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
                     println!("Health monitor stopped for jail '{}'", checker.jail_name());
                 });
 
-                println!("Spawned health monitor for jail '{}'", full_name);
+                println!("Spawned health monitor for jail '{full_name}'");
             }
         }
 
@@ -153,7 +151,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
                     }
                 }
             });
-            println!("Racct usage sampling every {}s.", usage_sample_secs);
+            println!("Racct usage sampling every {usage_sample_secs}s.");
         }
 
         // Dead-man ping: prove the supervisor itself is alive.
@@ -161,7 +159,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
             std::thread::spawn(move || {
                 loop {
                     if let Err(e) = ureq::get(&url).call() {
-                        eprintln!("Warning: monitor ping to {} failed: {}", url, e);
+                        eprintln!("Warning: monitor ping to {url} failed: {e}");
                     }
                     std::thread::sleep(std::time::Duration::from_secs(300));
                 }

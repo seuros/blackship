@@ -19,14 +19,15 @@ pub fn handle_expose(
     let config = manifest::load(config_path)?;
     let mut bridge = bridge::Bridge::open(config, verbose)?;
 
-    let bind_addr: Option<IpAddr> =
-        if let Some(ip_str) = bind_ip {
-            Some(ip_str.parse().map_err(|e| {
-                error::Error::Network(format!("Invalid bind IP '{}': {}", ip_str, e))
-            })?)
-        } else {
-            None
-        };
+    let bind_addr: Option<IpAddr> = if let Some(ip_str) = bind_ip {
+        Some(
+            ip_str
+                .parse()
+                .map_err(|e| error::Error::Network(format!("Invalid bind IP '{ip_str}': {e}")))?,
+        )
+    } else {
+        None
+    };
 
     let forward = bridge.expose_port(&jail, port, internal, &proto, bind_addr)?;
 
@@ -97,7 +98,7 @@ pub fn handle_unexpose(config_path: &Path, verbose: bool, jail: String) -> Resul
         .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
     let mut bridge = bridge::Bridge::open(config, verbose)?;
     bridge.remove_port_forwards(&full_name)?;
-    println!("Removed all port forwards for jail '{}'", full_name);
+    println!("Removed all port forwards for jail '{full_name}'");
 
     Ok(())
 }

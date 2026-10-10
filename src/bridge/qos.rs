@@ -44,8 +44,7 @@ impl Bridge {
 
         let Some(scope) = self.scope_store.get(&full_name)? else {
             return Err(Error::State(format!(
-                "No scope record for '{}': the jail is not running under blackship",
-                full_name
+                "No scope record for '{full_name}': the jail is not running under blackship"
             )));
         };
 
@@ -59,17 +58,14 @@ impl Bridge {
         crate::rctl::apply_phase(&full_name, from, to)?;
 
         let previous = scope.qos_phase;
-        let subject = format!("jail:{}", full_name);
+        let subject = format!("jail:{full_name}");
         let scope = match self.scope_store.update(&full_name, |record| {
             record.qos_phase = target;
             record.rctl_subject = Some(subject);
         }) {
             Ok(updated) => updated,
             Err(e) => {
-                eprintln!(
-                    "Warning: failed to persist scope record for '{}': {}",
-                    full_name, e
-                );
+                eprintln!("Warning: failed to persist scope record for '{full_name}': {e}");
                 scope
             }
         };
@@ -86,8 +82,7 @@ impl Bridge {
             && let Err(e) = crate::rctl::apply_cpuset(jid, cpu_list)
         {
             eprintln!(
-                "Warning: failed to re-pin jail '{}' to CPUs {} during QoS shift: {}",
-                full_name, cpu_list, e
+                "Warning: failed to re-pin jail '{full_name}' to CPUs {cpu_list} during QoS shift: {e}"
             );
         }
 

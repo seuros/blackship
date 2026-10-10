@@ -46,8 +46,8 @@ pub enum JailIdent {
 impl std::fmt::Display for JailIdent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Jid(jid) => write!(f, "JID {}", jid),
-            Self::Descriptor(fd) => write!(f, "jail descriptor {}", fd),
+            Self::Jid(jid) => write!(f, "JID {jid}"),
+            Self::Descriptor(fd) => write!(f, "jail descriptor {fd}"),
         }
     }
 }

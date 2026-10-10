@@ -98,14 +98,14 @@ pub fn run_ephemeral_jail(
     }
 
     // Try ZFS clone first
-    let zfs_dataset = format!("{}/{}/releases/{}", zpool, dataset, release);
-    let new_dataset = format!("{}/{}/containers/{}", zpool, dataset, name);
+    let zfs_dataset = format!("{zpool}/{dataset}/releases/{release}");
+    let new_dataset = format!("{zpool}/{dataset}/containers/{name}");
 
     let clone_result = Command::new("/sbin/zfs")
         .args([
             "clone",
             "-p",
-            &format!("{}@pristine", zfs_dataset),
+            &format!("{zfs_dataset}@pristine"),
             &new_dataset,
         ])
         .status();
@@ -128,7 +128,8 @@ pub fn run_ephemeral_jail(
                     .output()
                 && output.status.success()
             {
-                let mp = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let decoded = String::from_utf8_lossy(&output.stdout);
+                let mp = decoded.trim();
                 if !mp.is_empty() && mp != "-" {
                     jail_root = PathBuf::from(mp);
                 }
@@ -162,7 +163,7 @@ pub fn run_ephemeral_jail(
             })?;
 
             // Use "/." suffix to copy contents of release into jail_root, not the directory itself
-            let release_cp_src = format!("{}/.", release_path_str);
+            let release_cp_src = format!("{release_path_str}/.");
             let status = Command::new("/bin/cp")
                 .args(["-a", &release_cp_src, jail_root_str])
                 .status()?;
@@ -189,8 +190,7 @@ pub fn run_ephemeral_jail(
                 .ok_or_else(|| error::Error::NetworkNotFound(network_name.to_string()))?;
             let bridge_name = runtime_network.bridge.clone().ok_or_else(|| {
                 error::Error::Network(format!(
-                    "Network '{}' exists but has no host bridge. Create it with 'blackship network create {} ...'",
-                    network_name, network_name
+                    "Network '{network_name}' exists but has no host bridge. Create it with 'blackship network create {network_name} ...'"
                 ))
             })?;
             let ip =
@@ -294,8 +294,7 @@ pub fn run_ephemeral_jail(
                 }
                 _ => {
                     eprintln!(
-                        "Warning: 'jail -r {}' failed; skipping cleanup (jail may still be running)",
-                        name
+                        "Warning: 'jail -r {name}' failed; skipping cleanup (jail may still be running)"
                     );
                 }
             }
@@ -303,15 +302,12 @@ pub fn run_ephemeral_jail(
         }
     }
 
-    println!("Jail '{}' started from release '{}'", name, release);
+    println!("Jail '{name}' started from release '{release}'");
 
     if detach {
         // In detach mode, just return - jail keeps running
-        println!(
-            "Running in detached mode. Use 'blackship exec {}' to run commands.",
-            name
-        );
-        println!("Use 'blackship rm {}' to stop and remove.", name);
+        println!("Running in detached mode. Use 'blackship exec {name}' to run commands.");
+        println!("Use 'blackship rm {name}' to stop and remove.");
         return Ok(());
     }
 
@@ -320,12 +316,12 @@ pub fn run_ephemeral_jail(
     let exec_status = console::exec_in_jail(name, &jail_command, &opts);
 
     // Always cleanup ephemeral jails in non-detached mode
-    println!("Cleaning up ephemeral jail '{}'...", name);
+    println!("Cleaning up ephemeral jail '{name}'...");
     // Stop the jail
     let _ = Command::new("/usr/sbin/jail").args(["-r", name]).status();
     let _ = network_cleanup(config, name);
     if let Err(err) = cleanup_jail_root(&jail_root, Some(&new_dataset), using_zfs) {
-        eprintln!("Warning: Failed to clean up jail root '{}': {}", name, err);
+        eprintln!("Warning: Failed to clean up jail root '{name}': {err}");
     }
 
     match exec_status {
@@ -365,12 +361,11 @@ pub fn copy_files(
         crate::blueprint::context::reject_symlink_ancestors(&cp_data_dir, &jail_root)?;
         let joined = jail_root.join(src_path.trim_start_matches('/'));
         let resolved = joined.canonicalize().map_err(|_| {
-            error::Error::CopyFailed(format!("Source path '{}' not found in jail", src_path))
+            error::Error::CopyFailed(format!("Source path '{src_path}' not found in jail"))
         })?;
         if !resolved.starts_with(&jail_root) {
             return Err(error::Error::InvalidArgument(format!(
-                "Source path '{}' escapes jail root",
-                src_path
+                "Source path '{src_path}' escapes jail root"
             )));
         }
         resolved
@@ -409,45 +404,39 @@ pub fn copy_files(
             let joined = jail_root.join(dst_path.trim_start_matches('/'));
             let parent = joined.parent().ok_or_else(|| {
                 error::Error::CopyFailed(format!(
-                    "Destination path '{}' has no parent directory",
-                    dst_path
+                    "Destination path '{dst_path}' has no parent directory"
                 ))
             })?;
             let resolved_parent = parent.canonicalize().map_err(|_| {
                 error::Error::CopyFailed(format!(
-                    "Destination directory for '{}' not found in jail",
-                    dst_path
+                    "Destination directory for '{dst_path}' not found in jail"
                 ))
             })?;
             if !resolved_parent.starts_with(&jail_root) {
                 return Err(error::Error::InvalidArgument(format!(
-                    "Destination path '{}' escapes jail root",
-                    dst_path
+                    "Destination path '{dst_path}' escapes jail root"
                 )));
             }
             let final_path = if let Some(file_name) = joined.file_name() {
                 resolved_parent.join(file_name)
             } else {
-                resolved_parent.clone()
+                resolved_parent
             };
             if let Ok(meta) = std::fs::symlink_metadata(&final_path) {
                 if meta.file_type().is_symlink() {
                     return Err(error::Error::InvalidArgument(format!(
-                        "Destination '{}' is a symlink, which is not allowed as a copy destination",
-                        dst_path
+                        "Destination '{dst_path}' is a symlink, which is not allowed as a copy destination"
                     )));
                 }
                 let resolved_final = final_path.canonicalize().map_err(|_| {
                     error::Error::CopyFailed(format!(
-                        "Cannot resolve destination '{}' in jail",
-                        dst_path
+                        "Cannot resolve destination '{dst_path}' in jail"
                     ))
                 })?;
                 let canonical_root = jail_root.canonicalize().unwrap_or(jail_root);
                 if !resolved_final.starts_with(&canonical_root) {
                     return Err(error::Error::InvalidArgument(format!(
-                        "Destination '{}' resolves outside jail root (symlink escape)",
-                        dst_path
+                        "Destination '{dst_path}' resolves outside jail root (symlink escape)"
                     )));
                 }
             }
@@ -458,8 +447,7 @@ pub fn copy_files(
 
         if !src_full.exists() {
             return Err(error::Error::CopyFailed(format!(
-                "Source '{}' not found",
-                source
+                "Source '{source}' not found"
             )));
         }
 
@@ -508,7 +496,7 @@ pub fn copy_files(
             )));
         }
 
-        println!("Copied {} -> {}", source, dest);
+        println!("Copied {source} -> {dest}");
         Ok(())
     })();
 
@@ -540,6 +528,7 @@ pub fn remove_jails(
 
     let mut warnings: Vec<String> = Vec::new();
     let mut retained: Vec<String> = Vec::new();
+    let rm_data_dir = data_dir_of(config);
 
     for jail in jails {
         // Resolve short names and prefixes through the config.
@@ -550,7 +539,7 @@ pub fn remove_jails(
         let jail = &resolved;
         validate_name("jail", jail)?;
 
-        println!("Removing jail '{}'...", jail);
+        println!("Removing jail '{jail}'...");
 
         // Check if jail is running
         let jls_output = Command::new("/usr/sbin/jls").args(["-j", jail]).output();
@@ -559,10 +548,7 @@ pub fn remove_jails(
 
         if is_running {
             if !force {
-                eprintln!(
-                    "Error: Jail '{}' is running. Use --force to stop and remove.",
-                    jail
-                );
+                eprintln!("Error: Jail '{jail}' is running. Use --force to stop and remove.");
                 continue;
             }
             // Stop the jail
@@ -577,7 +563,7 @@ pub fn remove_jails(
         let jail_root = get_jail_root(jail, config);
         if let Err(e) = network_cleanup(config, jail) {
             if force {
-                eprintln!("  Warning: Failed to clean up network state: {}", e);
+                eprintln!("  Warning: Failed to clean up network state: {e}");
             } else {
                 return Err(e);
             }
@@ -587,7 +573,7 @@ pub fn remove_jails(
             && let Err(e) = unmount_jail_filesystems(root)
         {
             if force {
-                eprintln!("  Warning: Failed to unmount jail filesystems: {}", e);
+                eprintln!("  Warning: Failed to unmount jail filesystems: {e}");
             } else {
                 return Err(e);
             }
@@ -601,7 +587,7 @@ pub fn remove_jails(
             // Managed jails live under jails/, ephemeral ones under containers/.
             let mut destroyed = false;
             for parent in ["jails", "containers"] {
-                let zfs_dataset = format!("{}/{}/{}/{}", zpool, dataset, parent, jail);
+                let zfs_dataset = format!("{zpool}/{dataset}/{parent}/{jail}");
                 let exists = Command::new("/sbin/zfs")
                     .args(["list", "-H", "-o", "name", &zfs_dataset])
                     .output()
@@ -614,15 +600,15 @@ pub fn remove_jails(
                     .args(["destroy", "-r", &zfs_dataset])
                     .status();
                 if zfs_result.map(|s| s.success()).unwrap_or(false) {
-                    println!("  Removed ZFS dataset: {}", zfs_dataset);
+                    println!("  Removed ZFS dataset: {zfs_dataset}");
                     destroyed = true;
                 } else {
-                    warnings.push(format!("dataset '{}' could not be destroyed", zfs_dataset));
+                    warnings.push(format!("dataset '{zfs_dataset}' could not be destroyed"));
                     retained.push(zfs_dataset);
                 }
             }
             if destroyed {
-                println!("Jail '{}' removed.", jail);
+                println!("Jail '{jail}' removed.");
                 continue;
             }
         }
@@ -631,7 +617,6 @@ pub fn remove_jails(
         if let Ok(root) = jail_root
             && root.exists()
         {
-            let rm_data_dir = data_dir_of(config);
             crate::blueprint::context::reject_symlink_ancestors(&rm_data_dir, &root)?;
             if let Err(e) = crate::sys::remove_tree_with_flags(&root) {
                 eprintln!("Error removing {}: {}", root.display(), e);
@@ -640,20 +625,20 @@ pub fn remove_jails(
             println!("  Removed jail root: {}", root.display());
         }
 
-        println!("Jail '{}' removed.", jail);
+        println!("Jail '{jail}' removed.");
     }
 
     // Partial failures are reported, not silently swallowed.
     if !warnings.is_empty() {
         eprintln!("Completed with {} warning(s):", warnings.len());
         for warning in &warnings {
-            eprintln!("  - {}", warning);
+            eprintln!("  - {warning}");
         }
     }
     if !retained.is_empty() {
         eprintln!("Retained datasets (remove manually when ready):");
         for dataset in &retained {
-            eprintln!("  - {}", dataset);
+            eprintln!("  - {dataset}");
         }
     }
 
@@ -778,8 +763,7 @@ fn cleanup_jail_root(jail_root: &Path, zfs_dataset: Option<&str>, using_zfs: boo
             .status()?;
         if !status.success() {
             return Err(error::Error::JailOperation(format!(
-                "Failed to destroy ZFS dataset '{}'",
-                dataset
+                "Failed to destroy ZFS dataset '{dataset}'"
             )));
         }
         // zfs destroy unmounts but leaves the mountpoint dir stub behind
@@ -803,7 +787,7 @@ fn unmount_jail_filesystems(jail_root: &Path) -> Result<()> {
 
 fn unmount_path(path: &Path) -> Result<()> {
     let path_str = path.to_string_lossy().into_owned();
-    let c_path = CString::new(path_str.clone())?;
+    let c_path = CString::new(path_str)?;
 
     let result = unsafe { libc::unmount(c_path.as_ptr(), 0) };
     if result == 0 {

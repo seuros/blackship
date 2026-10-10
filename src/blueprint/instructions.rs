@@ -52,7 +52,7 @@ impl ExposePort {
         let port = parts.first()?.parse().ok()?;
         let protocol = parts
             .get(1)
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .unwrap_or_else(default_protocol);
         // Only allow known protocols to prevent injection if wired into PF later
         if protocol != "tcp" && protocol != "udp" && protocol != "sctp" {

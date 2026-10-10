@@ -117,7 +117,7 @@ fn attach_and_exec(jid: i32, command: &[&str]) -> ! {
     let cmd_cstring = match CString::new(command[0]) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Invalid command string: {}", e);
+            eprintln!("Invalid command string: {e}");
             std::process::exit(1);
         }
     };
@@ -126,7 +126,7 @@ fn attach_and_exec(jid: i32, command: &[&str]) -> ! {
         match CString::new(*arg) {
             Ok(s) => args.push(s),
             Err(e) => {
-                eprintln!("Invalid argument string: {}", e);
+                eprintln!("Invalid argument string: {e}");
                 std::process::exit(1);
             }
         }
@@ -146,16 +146,16 @@ fn wait_child(child: nix::unistd::Pid, jid: i32, command: &[&str]) -> Result<i32
     match waitpid(child, None) {
         Ok(WaitStatus::Exited(_, exit_code)) => Ok(exit_code),
         Ok(WaitStatus::Signaled(_, signal, _)) => Err(Error::CommandFailed {
-            command: format!("jexec {} {:?}", jid, command),
-            message: format!("Process killed by signal {}", signal),
+            command: format!("jexec {jid} {command:?}"),
+            message: format!("Process killed by signal {signal}"),
         }),
         Ok(status) => Err(Error::CommandFailed {
-            command: format!("jexec {} {:?}", jid, command),
-            message: format!("Unexpected wait status: {:?}", status),
+            command: format!("jexec {jid} {command:?}"),
+            message: format!("Unexpected wait status: {status:?}"),
         }),
         Err(e) => Err(Error::CommandFailed {
-            command: format!("jexec {} {:?}", jid, command),
-            message: format!("waitpid failed: {}", e),
+            command: format!("jexec {jid} {command:?}"),
+            message: format!("waitpid failed: {e}"),
         }),
     }
 }
@@ -175,7 +175,7 @@ fn check_nonempty_command(command: &[&str]) -> Result<()> {
 fn jexec_fork_error(e: nix::errno::Errno) -> Error {
     Error::CommandFailed {
         command: "jexec".to_string(),
-        message: format!("Fork failed: {}", e),
+        message: format!("Fork failed: {e}"),
     }
 }
 
@@ -183,7 +183,7 @@ fn jexec_fork_error(e: nix::errno::Errno) -> Error {
 fn jexec_pipe(label: &str) -> Result<(OwnedFd, OwnedFd)> {
     pipe().map_err(|e| Error::CommandFailed {
         command: "jexec".to_string(),
-        message: format!("Failed to create {} pipe: {}", label, e),
+        message: format!("Failed to create {label} pipe: {e}"),
     })
 }
 
@@ -306,8 +306,8 @@ pub fn jexec_with_timeout(
 
                         return Ok((
                             exit_code,
-                            String::from_utf8_lossy(&stdout).into_owned(),
-                            String::from_utf8_lossy(&stderr).into_owned(),
+                            crate::sys::string_from_utf8_lossy(stdout),
+                            crate::sys::string_from_utf8_lossy(stderr),
                         ));
                     }
                     Ok(WaitStatus::Signaled(_, signal, _)) => {
@@ -317,8 +317,8 @@ pub fn jexec_with_timeout(
                         let _ = stdout_thread.join();
                         let _ = stderr_thread.join();
                         return Err(Error::CommandFailed {
-                            command: format!("jexec {} {:?}", jid, command),
-                            message: format!("Process killed by signal {}", signal),
+                            command: format!("jexec {jid} {command:?}"),
+                            message: format!("Process killed by signal {signal}"),
                         });
                     }
                     Ok(status) => {
@@ -328,8 +328,8 @@ pub fn jexec_with_timeout(
                         let _ = stdout_thread.join();
                         let _ = stderr_thread.join();
                         return Err(Error::CommandFailed {
-                            command: format!("jexec {} {:?}", jid, command),
-                            message: format!("Unexpected wait status: {:?}", status),
+                            command: format!("jexec {jid} {command:?}"),
+                            message: format!("Unexpected wait status: {status:?}"),
                         });
                     }
                     Err(e) => {
@@ -339,8 +339,8 @@ pub fn jexec_with_timeout(
                         let _ = stdout_thread.join();
                         let _ = stderr_thread.join();
                         return Err(Error::CommandFailed {
-                            command: format!("jexec {} {:?}", jid, command),
-                            message: format!("waitpid failed: {}", e),
+                            command: format!("jexec {jid} {command:?}"),
+                            message: format!("waitpid failed: {e}"),
                         });
                     }
                 }
@@ -380,17 +380,17 @@ pub fn chroot_exec(
     // Create pipes for stdout and stderr
     let (stdout_read, stdout_write) = pipe().map_err(|e| Error::CommandFailed {
         command: "chroot".to_string(),
-        message: format!("Failed to create stdout pipe: {}", e),
+        message: format!("Failed to create stdout pipe: {e}"),
     })?;
 
     let (stderr_read, stderr_write) = pipe().map_err(|e| Error::CommandFailed {
         command: "chroot".to_string(),
-        message: format!("Failed to create stderr pipe: {}", e),
+        message: format!("Failed to create stderr pipe: {e}"),
     })?;
 
     let root_cstring = CString::new(root_path).map_err(|e| Error::CommandFailed {
         command: "chroot".to_string(),
-        message: format!("Invalid path: {}", e),
+        message: format!("Invalid path: {e}"),
     })?;
 
     // Subreaper: orphaned descendants (even setsid'd ones) reparent to us, so
@@ -474,16 +474,16 @@ pub fn chroot_exec(
             match wait_result {
                 Ok(WaitStatus::Exited(_, exit_code)) => Ok((exit_code, stdout, stderr)),
                 Ok(WaitStatus::Signaled(_, signal, _)) => Err(Error::CommandFailed {
-                    command: format!("chroot {}", root_path),
-                    message: format!("Process killed by signal {}", signal),
+                    command: format!("chroot {root_path}"),
+                    message: format!("Process killed by signal {signal}"),
                 }),
                 Ok(status) => Err(Error::CommandFailed {
-                    command: format!("chroot {}", root_path),
-                    message: format!("Unexpected wait status: {:?}", status),
+                    command: format!("chroot {root_path}"),
+                    message: format!("Unexpected wait status: {status:?}"),
                 }),
                 Err(e) => Err(Error::CommandFailed {
-                    command: format!("chroot {}", root_path),
-                    message: format!("waitpid failed: {}", e),
+                    command: format!("chroot {root_path}"),
+                    message: format!("waitpid failed: {e}"),
                 }),
             }
         }
@@ -537,7 +537,7 @@ pub fn chroot_exec(
             let arg_cmd = match CString::new(command) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("Invalid command string: {}", e);
+                    eprintln!("Invalid command string: {e}");
                     std::process::exit(1);
                 }
             };
@@ -560,7 +560,7 @@ pub fn chroot_exec(
             reap_release();
             Err(Error::CommandFailed {
                 command: "chroot".to_string(),
-                message: format!("Fork failed: {}", e),
+                message: format!("Fork failed: {e}"),
             })
         }
     }

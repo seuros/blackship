@@ -48,7 +48,7 @@ impl Bridge {
         let mut details: Vec<(String, String)> = peak
             .resources
             .iter()
-            .map(|(resource, value)| (format!("peak.{}", resource), value.to_string()))
+            .map(|(resource, value)| (format!("peak.{resource}"), value.to_string()))
             .collect();
         if let Some(samples) = peak.samples {
             details.push(("peak.samples".to_string(), samples.to_string()));

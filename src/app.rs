@@ -334,7 +334,7 @@ impl AppContext {
                             println!("Network '{}' ready on bridge '{}'.", name, record.bridge);
                         }
                         Err(e) => {
-                            eprintln!("Warning: failed to reapply network '{}': {}", name, e);
+                            eprintln!("Warning: failed to reapply network '{name}': {e}");
                         }
                     }
                 }
@@ -402,7 +402,7 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
     })?;
 
     let executable = std::env::current_exe()
-        .map_err(|e| Error::User(format!("Failed to locate current executable: {}", e)))?;
+        .map_err(|e| Error::User(format!("Failed to locate current executable: {e}")))?;
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     let err = ProcessCommand::new(escalator)
@@ -411,8 +411,7 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
         .exec();
 
     Err(Error::User(format!(
-        "Failed to re-exec through '{}': {}",
-        escalator, err
+        "Failed to re-exec through '{escalator}': {err}"
     )))
 }
 

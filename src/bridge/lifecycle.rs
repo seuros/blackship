@@ -54,10 +54,7 @@ pub(super) fn build_jail_params(
 
     for (key, value) in &jail_def.params {
         if is_reserved_param(key) {
-            eprintln!(
-                "Warning: ignoring reserved jail parameter '{}' in manifest",
-                key
-            );
+            eprintln!("Warning: ignoring reserved jail parameter '{key}' in manifest");
             continue;
         }
         let param_value = ParamValue::try_from(value)?;
@@ -117,10 +114,7 @@ impl Bridge {
                 self.persist_scope(&mut scope);
             }
             Ok(None) => {}
-            Err(e) => eprintln!(
-                "Warning: failed to read scope record for '{}': {}",
-                full_name, e
-            ),
+            Err(e) => eprintln!("Warning: failed to read scope record for '{full_name}': {e}"),
         }
     }
 
@@ -145,8 +139,7 @@ impl Bridge {
                 }
                 Err(e) => {
                     eprintln!(
-                        "Warning: VNET cleanup failed for '{}': {} -- keeping state record for manual cleanup",
-                        full_name, e
+                        "Warning: VNET cleanup failed for '{full_name}': {e} -- keeping state record for manual cleanup"
                     );
                     self.audit.record(
                         &AuditRecord::new(full_name, AuditEvent::RollbackStep)
@@ -174,10 +167,7 @@ impl Bridge {
                 Some(zfs) => match zfs.destroy_jail_dataset(full_name) {
                     Ok(()) => "released",
                     Err(e) => {
-                        eprintln!(
-                            "Warning: failed to destroy dataset for '{}': {}",
-                            full_name, e
-                        );
+                        eprintln!("Warning: failed to destroy dataset for '{full_name}': {e}");
                         "leaked"
                     }
                 },
@@ -215,10 +205,7 @@ impl Bridge {
             }
             Ok(Some(_)) => self.mark_scope_failed(full_name),
             Ok(None) => {}
-            Err(e) => eprintln!(
-                "Warning: failed to read scope record for '{}': {}",
-                full_name, e
-            ),
+            Err(e) => eprintln!("Warning: failed to read scope record for '{full_name}': {e}"),
         }
     }
 
@@ -237,10 +224,7 @@ impl Bridge {
                 scope.advance_or_warn(ScopeMachineEvent::Fail);
                 self.persist_scope(&mut scope);
             }
-            Err(e) => eprintln!(
-                "Warning: failed to read scope record for '{}': {}",
-                full_name, e
-            ),
+            Err(e) => eprintln!("Warning: failed to read scope record for '{full_name}': {e}"),
         }
         self.audit.event(full_name, AuditEvent::Failed);
 
@@ -283,10 +267,7 @@ impl Bridge {
         };
 
         if !crate::bulkhead::pf_enabled() {
-            eprintln!(
-                "Warning: cannot isolate jail '{}': PF is not enabled",
-                full_name
-            );
+            eprintln!("Warning: cannot isolate jail '{full_name}': PF is not enabled");
             return;
         }
 
@@ -296,10 +277,7 @@ impl Bridge {
         let ips = self.drainable_ips(&full_name, jail_def);
         match crate::bulkhead::load_drain_anchor(&full_name, &ips) {
             Ok(anchor) => {
-                println!(
-                    "Isolated jail '{}': new connections blocked via {}",
-                    full_name, anchor
-                );
+                println!("Isolated jail '{full_name}': new connections blocked via {anchor}");
                 if let Ok(Some(mut scope)) = self.scope_store.get(&full_name) {
                     scope.drain_anchor = Some(anchor.clone());
                     self.persist_scope(&mut scope);
@@ -310,7 +288,7 @@ impl Bridge {
                         .with("cascade", "isolate"),
                 );
             }
-            Err(e) => eprintln!("Warning: failed to isolate jail '{}': {}", full_name, e),
+            Err(e) => eprintln!("Warning: failed to isolate jail '{full_name}': {e}"),
         }
     }
 
@@ -326,7 +304,7 @@ impl Bridge {
     /// Used by the Warden for automatic restart on failure
     pub fn restart_jail(&mut self, name: &str) -> Result<()> {
         let (service_name, full_name) = self.resolve_jail_names(name)?;
-        println!("Restarting jail '{}'...", full_name);
+        println!("Restarting jail '{full_name}'...");
 
         if let Some(instance) = self.instances.get_mut(&full_name)
             && instance.state() == JailState::Failed
@@ -340,7 +318,7 @@ impl Bridge {
 
         self.start_jail(&service_name)?;
 
-        println!("Jail '{}' restarted successfully", full_name);
+        println!("Jail '{full_name}' restarted successfully");
         Ok(())
     }
 
@@ -413,10 +391,7 @@ impl Bridge {
                     .filter(|release| zfs.release_is_cloneable(release))
                 {
                     created_zfs_dataset = true;
-                    println!(
-                        "Provisioning jail '{}' by cloning release '{}'...",
-                        full_name, release
-                    );
+                    println!("Provisioning jail '{full_name}' by cloning release '{release}'...");
                     zfs.clone_jail_from_release(release, &full_name)?
                 } else {
                     created_zfs_dataset = true;
@@ -471,16 +446,12 @@ impl Bridge {
                 crate::manifest::validate_name("release", release)?;
                 let release_path = self.config.config.releases_dir.join(release);
                 if release_path.exists() {
-                    println!(
-                        "Provisioning jail '{}' from release '{}'...",
-                        full_name, release
-                    );
+                    println!("Provisioning jail '{full_name}' from release '{release}'...");
 
                     if let Err(e) = std::fs::create_dir_all(&path) {
                         self.rollback_start(&full_name, None, &None, created_zfs_dataset);
                         return Err(Error::JailOperation(format!(
-                            "Failed to create jail directory: {}",
-                            e
+                            "Failed to create jail directory: {e}"
                         )));
                     }
 
@@ -493,7 +464,8 @@ impl Bridge {
                     match status {
                         Ok(s) if s.success() => {
                             // cp -a may have followed a symlink out of the parent.
-                            let data_parent = path.parent().unwrap_or(std::path::Path::new("/"));
+                            let data_parent =
+                                path.parent().unwrap_or_else(|| std::path::Path::new("/"));
                             if let (Ok(canonical_path), Ok(canonical_parent)) =
                                 (path.canonicalize(), data_parent.canonicalize())
                                 && !canonical_path.starts_with(&canonical_parent)
@@ -507,25 +479,20 @@ impl Bridge {
                                     canonical_parent.display()
                                 )));
                             }
-                            println!(
-                                "Jail '{}' provisioned from release '{}'",
-                                full_name, release
-                            );
+                            println!("Jail '{full_name}' provisioned from release '{release}'");
                         }
                         Ok(s) => {
                             let _ = std::fs::remove_dir_all(&path);
                             self.rollback_start(&full_name, None, &None, created_zfs_dataset);
                             return Err(Error::JailOperation(format!(
-                                "Failed to copy release: cp exited with status {}",
-                                s
+                                "Failed to copy release: cp exited with status {s}"
                             )));
                         }
                         Err(e) => {
                             let _ = std::fs::remove_dir_all(&path);
                             self.rollback_start(&full_name, None, &None, created_zfs_dataset);
                             return Err(Error::JailOperation(format!(
-                                "Failed to execute cp command: {}",
-                                e
+                                "Failed to execute cp command: {e}"
                             )));
                         }
                     }
@@ -561,10 +528,8 @@ impl Bridge {
             if let Some(static_ip) = network.ip {
                 for net_name in &network.networks {
                     if !self.runtime_networks.contains_key(net_name) {
-                        let msg = format!(
-                            "Jail '{}' references unknown network '{}'",
-                            full_name, net_name
-                        );
+                        let msg =
+                            format!("Jail '{full_name}' references unknown network '{net_name}'");
                         self.rollback_start(&full_name, None, &None, created_zfs_dataset);
                         return Err(Error::Network(msg));
                     }
@@ -588,10 +553,7 @@ impl Bridge {
                                 .with("network", first_network),
                         );
                         if self.verbose {
-                            println!(
-                                "  Auto-allocated IP {} from network '{}'",
-                                ip, first_network
-                            );
+                            println!("  Auto-allocated IP {ip} from network '{first_network}'");
                         }
                         Some(ip)
                     }
@@ -636,8 +598,7 @@ impl Bridge {
                         .cloned()
                         .ok_or_else(|| {
                             Error::Network(format!(
-                                "Jail '{}' references unknown network '{}'",
-                                full_name, network_name
+                                "Jail '{full_name}' references unknown network '{network_name}'"
                             ))
                         })
                 })
@@ -653,8 +614,7 @@ impl Bridge {
                 })
                 .ok_or_else(|| {
                     Error::Network(format!(
-                        "VNET jail '{}' requires a bridge configuration",
-                        full_name
+                        "VNET jail '{full_name}' requires a bridge configuration"
                     ))
                 })?;
 
@@ -663,15 +623,14 @@ impl Bridge {
             } else {
                 let ip = network.ip.or(effective_ip).ok_or_else(|| {
                     Error::Network(format!(
-                        "VNET jail '{}' requires an IP address or attached network",
-                        full_name
+                        "VNET jail '{full_name}' requires an IP address or attached network"
                     ))
                 })?;
                 let prefix_len = primary_runtime_network
                     .as_ref()
                     .map(|runtime| runtime.subnet.prefix_len())
                     .unwrap_or(24);
-                format!("{}/{}", ip, prefix_len)
+                format!("{ip}/{prefix_len}")
             };
 
             let gateway = network
@@ -683,8 +642,7 @@ impl Bridge {
                 })
                 .ok_or_else(|| {
                     Error::Network(format!(
-                        "VNET jail '{}' requires a gateway or attached network",
-                        full_name
+                        "VNET jail '{full_name}' requires a gateway or attached network"
                     ))
                 })?;
 
@@ -778,7 +736,7 @@ impl Bridge {
             }
         }
 
-        println!("Starting jail '{}'...", full_name);
+        println!("Starting jail '{full_name}'...");
         // Owning descriptors are only useful while a long-lived supervisor
         // process keeps them open. For one-shot CLI commands like `up`, using
         // an owning descriptor would remove the jail as soon as blackship exits.
@@ -788,7 +746,7 @@ impl Bridge {
             match jail_create_with_descriptor(&path, params) {
                 Ok((jid, desc)) => (jid, Some(JailHandle::Descriptor { fd: desc, jid })),
                 Err(e) => {
-                    eprintln!("Failed to create jail '{}': {}", full_name, e);
+                    eprintln!("Failed to create jail '{full_name}': {e}");
                     crate::sys::unmount_jail_devfs(&path);
                     self.rollback_start(&full_name, vnet_setup, &allocated_ip, created_zfs_dataset);
                     self.mark_jail_failed(&full_name, &path);
@@ -799,7 +757,7 @@ impl Bridge {
             match jail_create(&path, params) {
                 Ok(jid) => (jid, Some(JailHandle::Jid(jid))),
                 Err(e) => {
-                    eprintln!("Failed to create jail '{}': {}", full_name, e);
+                    eprintln!("Failed to create jail '{full_name}': {e}");
                     crate::sys::unmount_jail_devfs(&path);
                     self.rollback_start(&full_name, vnet_setup, &allocated_ip, created_zfs_dataset);
                     self.mark_jail_failed(&full_name, &path);
@@ -831,15 +789,11 @@ impl Bridge {
         if !startup_profile.is_empty()
             && let Err(e) = crate::rctl::apply_limits(&full_name, startup_profile)
         {
-            eprintln!(
-                "Failed to apply resource limits for '{}': {}, stopping jail",
-                full_name, e
-            );
+            eprintln!("Failed to apply resource limits for '{full_name}': {e}, stopping jail");
             // Remove the jail before releasing ZFS/IP -- never while it is alive.
             if let Err(remove_err) = jail_remove(jid) {
                 eprintln!(
-                    "Warning: Failed to remove jail '{}' (JID {}) during RCTL rollback: {}",
-                    full_name, jid, remove_err
+                    "Warning: Failed to remove jail '{full_name}' (JID {jid}) during RCTL rollback: {remove_err}"
                 );
                 self.mark_jail_failed(&full_name, &path);
                 return Err(e);
@@ -851,7 +805,7 @@ impl Bridge {
         }
 
         if !startup_profile.is_empty() {
-            scope.rctl_subject = Some(format!("jail:{}", full_name));
+            scope.rctl_subject = Some(format!("jail:{full_name}"));
             if jail_def.qos.is_some() {
                 scope.qos_phase = crate::scope::QosPhase::Startup;
             }
@@ -871,25 +825,18 @@ impl Bridge {
         }
 
         // Pin the jail to its CPU set, spreading across other jails' pins.
-        let other_pins: Vec<String> = self
+        let other_pins = self
             .config
             .jails
             .iter()
             .filter(|other| other.name != service_name)
-            .filter_map(|other| other.startup_resources().cpuset.clone())
-            .collect();
-        if let Some(cpu_list) =
-            crate::rctl::resolve_cpu_list(startup_profile, other_pins.into_iter())
-        {
+            .filter_map(|other| other.startup_resources().cpuset.as_deref());
+        if let Some(cpu_list) = crate::rctl::resolve_cpu_list(startup_profile, other_pins) {
             if let Err(e) = crate::rctl::apply_cpuset(jid, &cpu_list) {
-                eprintln!(
-                    "Failed to pin jail '{}' to CPUs: {}, stopping jail",
-                    full_name, e
-                );
+                eprintln!("Failed to pin jail '{full_name}' to CPUs: {e}, stopping jail");
                 if let Err(remove_err) = jail_remove(jid) {
                     eprintln!(
-                        "Warning: Failed to remove jail '{}' (JID {}) during cpuset rollback: {}",
-                        full_name, jid, remove_err
+                        "Warning: Failed to remove jail '{full_name}' (JID {jid}) during cpuset rollback: {remove_err}"
                     );
                     self.mark_jail_failed(&full_name, &path);
                     return Err(e);
@@ -899,7 +846,7 @@ impl Bridge {
                 self.mark_jail_failed(&full_name, &path);
                 return Err(e);
             }
-            println!("  Pinned to CPUs: {}", cpu_list);
+            println!("  Pinned to CPUs: {cpu_list}");
             scope.cpuset = Some(cpu_list.clone());
             self.persist_scope(&mut scope);
             self.audit.record(
@@ -912,15 +859,11 @@ impl Bridge {
         // For VNET jails: attach the VnetSetup to the jail
         if let Some(setup) = vnet_setup {
             if let Err(e) = setup.attach_to_jail(jid) {
-                eprintln!(
-                    "Error: Failed to attach VNET to jail '{}': {}",
-                    full_name, e
-                );
+                eprintln!("Error: Failed to attach VNET to jail '{full_name}': {e}");
                 // If jail_remove fails the jail is still alive: do not release IP/ZFS.
                 if let Err(remove_err) = jail_remove(jid) {
                     eprintln!(
-                        "Warning: Failed to remove jail '{}' (JID {}) during VNET rollback: {}",
-                        full_name, jid, remove_err
+                        "Warning: Failed to remove jail '{full_name}' (JID {jid}) during VNET rollback: {remove_err}"
                     );
                     self.mark_jail_failed(&full_name, &path);
                     return Err(e);
@@ -953,17 +896,11 @@ impl Bridge {
         if jail_def.init.unwrap_or(true) {
             match crate::jail::jexec::jexec_run(jid, &["/bin/sh", "/etc/rc"]) {
                 Ok(exit_code) if exit_code != 0 => {
-                    eprintln!(
-                        "Warning: /etc/rc in jail '{}' exited with {}",
-                        full_name, exit_code
-                    );
+                    eprintln!("Warning: /etc/rc in jail '{full_name}' exited with {exit_code}");
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    eprintln!(
-                        "Warning: failed to run /etc/rc in jail '{}': {}",
-                        full_name, e
-                    );
+                    eprintln!("Warning: failed to run /etc/rc in jail '{full_name}': {e}");
                 }
             }
         }
@@ -972,10 +909,7 @@ impl Bridge {
         let hook_context = hook_context.with_jid(jid);
 
         if let Err(e) = hook_runner.execute_phase(HookPhase::PostStart, &hook_context) {
-            eprintln!(
-                "Warning: post_start hook failed for jail '{}': {}",
-                full_name, e
-            );
+            eprintln!("Warning: post_start hook failed for jail '{full_name}': {e}");
             eprintln!("Jail is running but may not be fully configured.");
         }
 
@@ -1006,7 +940,7 @@ impl Bridge {
         if let Some(handle) = &self.warden_handle
             && let Err(e) = handle.notify_started(&full_name)
         {
-            eprintln!("Warning: Failed to notify Warden of jail start: {}", e);
+            eprintln!("Warning: Failed to notify Warden of jail start: {e}");
         }
 
         Ok(())
@@ -1047,19 +981,13 @@ impl Bridge {
         }
 
         if !crate::bulkhead::pf_enabled() {
-            eprintln!(
-                "Warning: PF is not enabled; skipping connection drain for '{}'",
-                full_name
-            );
+            eprintln!("Warning: PF is not enabled; skipping connection drain for '{full_name}'");
             return None;
         }
 
         let ips = self.drainable_ips(full_name, jail_def);
         if ips.is_empty() {
-            eprintln!(
-                "Warning: no recorded address for '{}'; skipping connection drain",
-                full_name
-            );
+            eprintln!("Warning: no recorded address for '{full_name}'; skipping connection drain");
             return None;
         }
 
@@ -1067,8 +995,7 @@ impl Bridge {
             Ok(anchor) => anchor,
             Err(e) => {
                 eprintln!(
-                    "Warning: failed to load drain rules for '{}': {} -- stopping without drain",
-                    full_name, e
+                    "Warning: failed to load drain rules for '{full_name}': {e} -- stopping without drain"
                 );
                 return None;
             }
@@ -1109,7 +1036,7 @@ impl Bridge {
                 full_name, remaining, drain.timeout_secs
             );
         } else if self.verbose {
-            println!("  All TCP states for '{}' closed", full_name);
+            println!("  All TCP states for '{full_name}' closed");
         }
 
         self.audit.record(
@@ -1153,7 +1080,7 @@ impl Bridge {
         };
 
         self.amend_scope(&full_name, |scope| {
-            scope.advance_or_warn(ScopeMachineEvent::Terminate)
+            scope.advance_or_warn(ScopeMachineEvent::Terminate);
         });
         self.audit
             .record(&AuditRecord::new(&full_name, AuditEvent::Terminating).with("jid", jid));
@@ -1196,10 +1123,7 @@ impl Bridge {
                     crate::jail::jexec::jexec_run(jid, &["/bin/sh", "-c", &stop_cmd])
                 && exit_code != 0
             {
-                eprintln!(
-                    "Warning: stop command in jail '{}' exited with {}",
-                    full_name, exit_code
-                );
+                eprintln!("Warning: stop command in jail '{full_name}' exited with {exit_code}");
             }
 
             // Give rc-managed services an orderly shutdown before removal.
@@ -1209,8 +1133,7 @@ impl Bridge {
                 && exit_code != 0
             {
                 eprintln!(
-                    "Warning: /etc/rc.shutdown in jail '{}' exited with {}",
-                    full_name, exit_code
+                    "Warning: /etc/rc.shutdown in jail '{full_name}' exited with {exit_code}"
                 );
             }
 
@@ -1221,7 +1144,7 @@ impl Bridge {
             handle.mark_stop_requested(jid);
         }
 
-        println!("Stopping jail '{}'...", full_name);
+        println!("Stopping jail '{full_name}'...");
         let owned_handle = self
             .instances
             .get_mut(&full_name)
@@ -1237,7 +1160,7 @@ impl Bridge {
             self.end_drain(&full_name, drain_anchor.as_deref());
             return Err(e);
         }
-        println!("Jail '{}' stopped", full_name);
+        println!("Jail '{full_name}' stopped");
 
         self.end_drain(&full_name, drain_anchor.as_deref());
 
@@ -1245,7 +1168,7 @@ impl Bridge {
             && let Err(e) = handle.notify_stopped(&full_name, jid)
         {
             handle.clear_stop_requested(jid);
-            eprintln!("Warning: Failed to notify Warden of jail stop: {}", e);
+            eprintln!("Warning: Failed to notify Warden of jail stop: {e}");
         }
 
         let mut stop_result = Ok(());
@@ -1276,8 +1199,7 @@ impl Bridge {
                 }
                 Err(e) => {
                     eprintln!(
-                        "Warning: Failed to cleanup VNET setup for jail '{}': {} -- keeping state record for manual cleanup",
-                        full_name, e
+                        "Warning: Failed to cleanup VNET setup for jail '{full_name}': {e} -- keeping state record for manual cleanup"
                     );
                     leaked_resources = true;
                 }
@@ -1291,8 +1213,7 @@ impl Bridge {
                 }
                 Err(e) => {
                     eprintln!(
-                        "Warning: Failed to cleanup persisted VNET setup for jail '{}': {} -- keeping state record for manual cleanup",
-                        full_name, e
+                        "Warning: Failed to cleanup persisted VNET setup for jail '{full_name}': {e} -- keeping state record for manual cleanup"
                     );
                     leaked_resources = true;
                 }
@@ -1303,7 +1224,7 @@ impl Bridge {
             self.ip_allocator.release(&network_name, &ip);
             let _ = self.lease_store.release(&network_name, &full_name);
             if self.verbose {
-                println!("  Released IP {} back to network '{}'", ip, network_name);
+                println!("  Released IP {ip} back to network '{network_name}'");
             }
         } else {
             let _ = self.lease_store.release_owner(&full_name);
@@ -1313,10 +1234,9 @@ impl Bridge {
         // resource was released, so anything that leaked keeps the record
         // alive in `Failed` instead.
         let peaks = self.peak_details(&full_name);
-        let destroyed = |record: AuditRecord| -> AuditRecord {
-            peaks
-                .iter()
-                .fold(record, |acc, (key, value)| acc.with(key, value))
+        let destroyed = |mut record: AuditRecord| -> AuditRecord {
+            record.detail.extend(peaks.iter().cloned());
+            record
         };
 
         if leaked_resources {
@@ -1329,10 +1249,7 @@ impl Bridge {
                 AuditRecord::new(&full_name, AuditEvent::Destroyed).with("jid", jid),
             ));
             if let Err(e) = self.scope_store.delete(&full_name) {
-                eprintln!(
-                    "Warning: failed to remove scope record for '{}': {}",
-                    full_name, e
-                );
+                eprintln!("Warning: failed to remove scope record for '{full_name}': {e}");
             }
         }
 
@@ -1342,15 +1259,15 @@ impl Bridge {
     /// Force cleanup of a failed jail
     pub fn cleanup(&mut self, name: &str, force: bool) -> Result<()> {
         let (service_name, full_name) = self.resolve_jail_names(name)?;
-        println!("Cleaning up jail '{}'...", full_name);
+        println!("Cleaning up jail '{full_name}'...");
 
         let jail_def = self.config.get_jail(&service_name);
 
         if let Ok(jid) = jail_getid(&full_name) {
-            println!("  Removing jail (JID {})...", jid);
+            println!("  Removing jail (JID {jid})...");
             if let Err(e) = jail_remove(jid) {
                 if force {
-                    eprintln!("  Warning: Failed to remove jail: {}", e);
+                    eprintln!("  Warning: Failed to remove jail: {e}");
                 } else {
                     return Err(e);
                 }
@@ -1364,7 +1281,7 @@ impl Bridge {
             println!("  Destroying ZFS dataset...");
             if let Err(e) = zfs.destroy_jail_dataset(&full_name) {
                 if force {
-                    eprintln!("  Warning: Failed to destroy dataset: {}", e);
+                    eprintln!("  Warning: Failed to destroy dataset: {e}");
                 } else {
                     return Err(e);
                 }
@@ -1378,7 +1295,7 @@ impl Bridge {
             println!("  Cleaning up VNET setup...");
             if let Err(e) = vnet_setup.cleanup() {
                 if force {
-                    eprintln!("  Warning: Failed to cleanup VNET setup: {}", e);
+                    eprintln!("  Warning: Failed to cleanup VNET setup: {e}");
                 } else {
                     return Err(e);
                 }
@@ -1390,7 +1307,7 @@ impl Bridge {
             println!("  Cleaning up persisted VNET state...");
             if let Err(e) = VnetSetup::cleanup_state(&record) {
                 if force {
-                    eprintln!("  Warning: Failed to cleanup persisted VNET state: {}", e);
+                    eprintln!("  Warning: Failed to cleanup persisted VNET state: {e}");
                 } else {
                     return Err(e);
                 }
@@ -1401,24 +1318,21 @@ impl Bridge {
         if let Some((network_name, ip)) = self.allocated_ips.remove(&full_name) {
             self.ip_allocator.release(&network_name, &ip);
             let _ = self.lease_store.release(&network_name, &full_name);
-            println!("  Released IP {} back to network '{}'", ip, network_name);
+            println!("  Released IP {ip} back to network '{network_name}'");
         } else {
             let released = self.lease_store.release_owner(&full_name)?;
             for (network_name, ip) in released {
-                println!("  Released IP {} back to network '{}'", ip, network_name);
+                println!("  Released IP {ip} back to network '{network_name}'");
             }
         }
 
         self.audit
             .record(&AuditRecord::new(&full_name, AuditEvent::Destroyed).with("via", "cleanup"));
         if let Err(e) = self.scope_store.delete(&full_name) {
-            eprintln!(
-                "Warning: failed to remove scope record for '{}': {}",
-                full_name, e
-            );
+            eprintln!("Warning: failed to remove scope record for '{full_name}': {e}");
         }
 
-        println!("Cleanup complete for jail '{}'", full_name);
+        println!("Cleanup complete for jail '{full_name}'");
         Ok(())
     }
 }

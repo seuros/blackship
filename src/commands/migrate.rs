@@ -24,49 +24,46 @@ pub fn handle_migrate(
 
     if crate::jail::jail_getid(&full_name).is_ok() {
         return Err(Error::JailOperation(format!(
-            "Jail '{}' is running; stop it before migrating",
-            full_name
+            "Jail '{full_name}' is running; stop it before migrating"
         )));
     }
 
     let local_dataset = zfs.jail_dataset_name(&full_name);
     let remote_dataset =
-        remote_dataset.unwrap_or_else(|| format!("zroot/blackship/jails/{}", full_name));
+        remote_dataset.unwrap_or_else(|| format!("zroot/blackship/jails/{full_name}"));
 
     // Preflight: target reachable, remote dataset absent.
     let probe = Command::new("/usr/bin/ssh")
         .args(["-o", "BatchMode=yes", &target])
         .args(["zfs", "list", "-H", "-o", "name", &remote_dataset])
         .output()
-        .map_err(|e| Error::JailOperation(format!("Failed to run ssh: {}", e)))?;
+        .map_err(|e| Error::JailOperation(format!("Failed to run ssh: {e}")))?;
     if probe.status.success() {
         return Err(Error::JailOperation(format!(
-            "Dataset '{}' already exists on {}",
-            remote_dataset, target
+            "Dataset '{remote_dataset}' already exists on {target}"
         )));
     }
     let reachable = Command::new("/usr/bin/ssh")
         .args(["-o", "BatchMode=yes", &target, "true"])
         .status()
-        .map_err(|e| Error::JailOperation(format!("Failed to run ssh: {}", e)))?;
+        .map_err(|e| Error::JailOperation(format!("Failed to run ssh: {e}")))?;
     if !reachable.success() {
         return Err(Error::JailOperation(format!(
-            "Cannot reach '{}' over ssh (BatchMode)",
-            target
+            "Cannot reach '{target}' over ssh (BatchMode)"
         )));
     }
 
     // Snapshot with the jail definition staged inside the dataset.
     super::snapshot::stage_config_in_dataset(&config, &service_name, &full_name);
     let snap_name = zfs.create_snapshot(&full_name, None)?;
-    let snapshot = format!("{}@{}", local_dataset, snap_name);
+    let snapshot = format!("{local_dataset}@{snap_name}");
 
-    println!("Sending {} to {}:{} ...", snapshot, target, remote_dataset);
+    println!("Sending {snapshot} to {target}:{remote_dataset} ...");
     let mut send = Command::new("/sbin/zfs")
         .args(["send", "-R", &snapshot])
         .stdout(Stdio::piped())
         .spawn()
-        .map_err(|e| Error::JailOperation(format!("Failed to run zfs send: {}", e)))?;
+        .map_err(|e| Error::JailOperation(format!("Failed to run zfs send: {e}")))?;
     let send_out = send
         .stdout
         .take()
@@ -76,10 +73,10 @@ pub fn handle_migrate(
         .args(["zfs", "receive", "-u", &remote_dataset])
         .stdin(Stdio::from(send_out))
         .status()
-        .map_err(|e| Error::JailOperation(format!("Failed to run remote receive: {}", e)))?;
+        .map_err(|e| Error::JailOperation(format!("Failed to run remote receive: {e}")))?;
     let send_status = send
         .wait()
-        .map_err(|e| Error::JailOperation(format!("zfs send failed: {}", e)))?;
+        .map_err(|e| Error::JailOperation(format!("zfs send failed: {e}")))?;
 
     if !send_status.success() || !receive.success() {
         return Err(Error::JailOperation(
@@ -89,18 +86,12 @@ pub fn handle_migrate(
 
     println!("Transfer complete.");
     println!("On {target}, finish with:");
-    println!(
-        "  zfs set mountpoint=/var/blackship/jails/{} {}",
-        full_name, remote_dataset
-    );
+    println!("  zfs set mountpoint=/var/blackship/jails/{full_name} {remote_dataset}");
     println!("  # jail definition travels at .blackship/jail.toml inside the dataset");
-    println!("  blackship up {}", service_name);
+    println!("  blackship up {service_name}");
 
     if !keep {
-        println!(
-            "Source dataset kept; remove it with: blackship rm {} --volumes",
-            service_name
-        );
+        println!("Source dataset kept; remove it with: blackship rm {service_name} --volumes");
     }
 
     Ok(())

@@ -60,7 +60,7 @@ impl ZfsManager {
         let pool = pool.into();
         let base = base.into();
         Self {
-            base_dataset: format!("{}/{}", pool, base),
+            base_dataset: format!("{pool}/{base}"),
             jails_mountpoint: jails_mountpoint.into(),
         }
     }
@@ -116,7 +116,7 @@ impl ZfsManager {
     /// Create a dataset with default properties
     fn create_dataset(&self, dataset: &str) -> Result<()> {
         zfs_run(&["create", "-p", "-o", "compression=lz4", dataset], || {
-            format!("Failed to create dataset '{}'", dataset)
+            format!("Failed to create dataset '{dataset}'")
         })
     }
 
@@ -168,10 +168,10 @@ impl ZfsManager {
         let snapshot = format!("{}@{}", self.release_dataset(release), Self::PRISTINE);
         let target = self.jail_dataset(jail);
         if self.dataset_exists(&target)? {
-            return Err(Error::Zfs(format!("Dataset '{}' already exists", target)));
+            return Err(Error::Zfs(format!("Dataset '{target}' already exists")));
         }
         zfs_run(&["clone", &snapshot, &target], || {
-            format!("Failed to clone '{}' to '{}'", snapshot, target)
+            format!("Failed to clone '{snapshot}' to '{target}'")
         })?;
         self.set_property(
             &target,
@@ -194,7 +194,7 @@ impl ZfsManager {
         let source = self.require_jail_dataset(jail)?;
         let target = self.release_dataset(release);
         if self.dataset_exists(&target)? {
-            return Err(Error::Zfs(format!("Release '{}' already exists", release)));
+            return Err(Error::Zfs(format!("Release '{release}' already exists")));
         }
 
         let snapshot = format!("{}@{}", source, Self::PRISTINE);
@@ -203,12 +203,12 @@ impl ZfsManager {
         }
 
         zfs_run(&["clone", &snapshot, &target], || {
-            format!("Failed to clone '{}' to '{}'", snapshot, target)
+            format!("Failed to clone '{snapshot}' to '{target}'")
         })?;
 
         if !zfs_status(&["promote", &target])?.success() {
             let _ = zfs_status(&["destroy", &target]);
-            return Err(Error::Zfs(format!("Failed to promote '{}'", target)));
+            return Err(Error::Zfs(format!("Failed to promote '{target}'")));
         }
 
         self.set_property(
@@ -220,7 +220,7 @@ impl ZfsManager {
 
     /// Name of a build layer snapshot: bs-layer-<index>-<hash>
     pub fn layer_snapshot_name(index: usize, hash: &str) -> String {
-        format!("bs-layer-{}-{}", index, hash)
+        format!("bs-layer-{index}-{hash}")
     }
 
     /// Check whether a jail has a given build layer snapshot
@@ -238,14 +238,14 @@ impl ZfsManager {
     pub fn rollback_to_layer(&self, jail: &str, layer: &str) -> Result<()> {
         let snapshot = format!("{}@{}", self.jail_dataset(jail), layer);
         zfs_run(&["rollback", "-r", &snapshot], || {
-            format!("Failed to rollback to '{}'", snapshot)
+            format!("Failed to rollback to '{snapshot}'")
         })
     }
 
     /// Take a snapshot by full name (dataset@snap)
     fn take_snapshot(&self, snapshot_full: &str) -> Result<()> {
         zfs_run(&["snapshot", snapshot_full], || {
-            format!("Failed to snapshot '{}'", snapshot_full)
+            format!("Failed to snapshot '{snapshot_full}'")
         })
     }
 
@@ -265,7 +265,7 @@ impl ZfsManager {
         let dataset = self.jail_dataset(name);
 
         if self.dataset_exists(&dataset)? {
-            return Err(Error::Zfs(format!("Dataset '{}' already exists", dataset)));
+            return Err(Error::Zfs(format!("Dataset '{dataset}' already exists")));
         }
 
         self.create_dataset(&dataset)?;
@@ -284,7 +284,7 @@ impl ZfsManager {
         }
 
         zfs_run(&["destroy", "-r", &dataset], || {
-            format!("Failed to destroy dataset '{}'", dataset)
+            format!("Failed to destroy dataset '{dataset}'")
         })
     }
 
@@ -294,7 +294,7 @@ impl ZfsManager {
     /// non-ZFS host is indistinguishable from a ZFS host with no jails.
     pub fn list_jail_datasets(&self) -> Vec<String> {
         let jails = self.jails_dataset();
-        let prefix = format!("{}/", jails);
+        let prefix = format!("{jails}/");
 
         zfs_output(&[
             "list",
@@ -335,8 +335,7 @@ impl ZfsManager {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
         } else {
             Err(Error::Zfs(format!(
-                "Failed to get property '{}' for dataset '{}'",
-                property, dataset
+                "Failed to get property '{property}' for dataset '{dataset}'"
             )))
         }
     }
@@ -348,25 +347,16 @@ impl ZfsManager {
             return Ok(());
         }
 
-        zfs_run(
-            &["set", &format!("{}={}", property, value), dataset],
-            || {
-                format!(
-                    "Failed to set property '{}={}' for dataset '{}'",
-                    property, value, dataset
-                )
-            },
-        )
+        zfs_run(&["set", &format!("{property}={value}"), dataset], || {
+            format!("Failed to set property '{property}={value}' for dataset '{dataset}'")
+        })
     }
 
     /// Check that a jail dataset exists, returning its name or an error
     fn require_jail_dataset(&self, jail: &str) -> Result<String> {
         let dataset = self.jail_dataset(jail);
         if !self.dataset_exists(&dataset)? {
-            return Err(Error::Zfs(format!(
-                "Jail dataset '{}' does not exist",
-                jail
-            )));
+            return Err(Error::Zfs(format!("Jail dataset '{jail}' does not exist")));
         }
         Ok(dataset)
     }
@@ -375,10 +365,7 @@ impl ZfsManager {
     fn require_snapshot_exists(&self, snapshot_full: &str, snapshot: &str) -> Result<()> {
         let output = zfs_output(&["list", "-H", "-t", "snapshot", snapshot_full])?;
         if !output.status.success() {
-            return Err(Error::Zfs(format!(
-                "Snapshot '{}' does not exist",
-                snapshot
-            )));
+            return Err(Error::Zfs(format!("Snapshot '{snapshot}' does not exist")));
         }
         Ok(())
     }
@@ -394,10 +381,10 @@ impl ZfsManager {
             None => default_snapshot_name(),
         };
 
-        let snapshot = format!("{}@{}", dataset, snap_name);
+        let snapshot = format!("{dataset}@{snap_name}");
 
         zfs_run(&["snapshot", "-r", &snapshot], || {
-            format!("Failed to create snapshot '{}'", snapshot)
+            format!("Failed to create snapshot '{snapshot}'")
         })?;
         Ok(snap_name)
     }
@@ -449,7 +436,7 @@ impl ZfsManager {
     /// Warning: This destroys all data newer than the snapshot
     pub fn rollback_snapshot(&self, jail: &str, snapshot: &str, force: bool) -> Result<()> {
         let dataset = self.jail_dataset(jail);
-        let snapshot_full = format!("{}@{}", dataset, snapshot);
+        let snapshot_full = format!("{dataset}@{snapshot}");
 
         // Check if snapshot exists
         self.require_snapshot_exists(&snapshot_full, snapshot)?;
@@ -462,8 +449,7 @@ impl ZfsManager {
 
         zfs_run(&args, || {
             format!(
-                "Failed to rollback to snapshot '{}'. Use --force to destroy newer snapshots.",
-                snapshot
+                "Failed to rollback to snapshot '{snapshot}'. Use --force to destroy newer snapshots."
             )
         })
     }
@@ -471,10 +457,10 @@ impl ZfsManager {
     /// Delete a snapshot
     pub fn delete_snapshot(&self, jail: &str, snapshot: &str) -> Result<()> {
         let dataset = self.jail_dataset(jail);
-        let snapshot_full = format!("{}@{}", dataset, snapshot);
+        let snapshot_full = format!("{dataset}@{snapshot}");
 
         zfs_run(&["destroy", &snapshot_full], || {
-            format!("Failed to delete snapshot '{}'", snapshot)
+            format!("Failed to delete snapshot '{snapshot}'")
         })
     }
 
@@ -488,22 +474,19 @@ impl ZfsManager {
         new_jail: &str,
     ) -> Result<PathBuf> {
         let source_dataset = self.jail_dataset(source_jail);
-        let snapshot_full = format!("{}@{}", source_dataset, snapshot);
+        let snapshot_full = format!("{source_dataset}@{snapshot}");
         let target_dataset = self.jail_dataset(new_jail);
 
         // Check if snapshot exists
-        self.require_snapshot_exists(&snapshot_full, &format!("{}@{}", source_jail, snapshot))?;
+        self.require_snapshot_exists(&snapshot_full, &format!("{source_jail}@{snapshot}"))?;
 
         // Check if target already exists
         if self.dataset_exists(&target_dataset)? {
-            return Err(Error::Zfs(format!("Jail '{}' already exists", new_jail)));
+            return Err(Error::Zfs(format!("Jail '{new_jail}' already exists")));
         }
 
         zfs_run(&["clone", &snapshot_full, &target_dataset], || {
-            format!(
-                "Failed to clone snapshot '{}' to '{}'",
-                snapshot_full, new_jail
-            )
+            format!("Failed to clone snapshot '{snapshot_full}' to '{new_jail}'")
         })?;
         Ok(self.jail_path(new_jail))
     }

@@ -57,21 +57,16 @@ fn retry_call<T>(
             Ok(v) => return Ok(v),
             Err(e) if !is_retryable(&e) => {
                 return Err(Error::DownloadFailed(format!(
-                    "{} failed for {}: {}",
-                    what, url, e
+                    "{what} failed for {url}: {e}"
                 )));
             }
             Err(e) => {
                 if let Some(delay_ms) = backoff.delay(attempt, &mut rng) {
-                    eprintln!(
-                        "{} attempt {} failed, retrying in {}ms...",
-                        what, attempt, delay_ms
-                    );
+                    eprintln!("{what} attempt {attempt} failed, retrying in {delay_ms}ms...");
                     thread::sleep(Duration::from_millis(delay_ms));
                 } else {
                     return Err(Error::DownloadFailed(format!(
-                        "{} failed for {} after {} attempts: {}",
-                        what, url, attempt, e
+                        "{what} failed for {url} after {attempt} attempts: {e}"
                     )));
                 }
             }
@@ -97,7 +92,7 @@ pub fn download_file(
         })?;
     }
 
-    eprintln!("Downloading: {}", url);
+    eprintln!("Downloading: {url}");
 
     // Make HTTP request with retry
     let response = retry_call(url, retry_config, "Download", || ureq::get(url).call())?;
@@ -133,14 +128,14 @@ pub fn download_file(
     loop {
         let bytes_read = reader
             .read(&mut buffer)
-            .map_err(|e| Error::DownloadFailed(format!("Read error during download: {}", e)))?;
+            .map_err(|e| Error::DownloadFailed(format!("Read error during download: {e}")))?;
 
         if bytes_read == 0 {
             break;
         }
 
         file.write_all(&buffer[..bytes_read])
-            .map_err(|e| Error::DownloadFailed(format!("Write error during download: {}", e)))?;
+            .map_err(|e| Error::DownloadFailed(format!("Write error during download: {e}")))?;
 
         if expected_sha256.is_some() {
             hasher.update(&buffer[..bytes_read]);
@@ -152,13 +147,13 @@ pub fn download_file(
         if let Some(total) = content_length {
             let progress = (downloaded * 100 / total) as usize;
             if progress >= last_progress + 10 {
-                eprintln!("Progress: {}% ({} / {} bytes)", progress, downloaded, total);
+                eprintln!("Progress: {progress}% ({downloaded} / {total} bytes)");
                 last_progress = progress;
             }
         }
     }
 
-    eprintln!("Downloaded: {} bytes", downloaded);
+    eprintln!("Downloaded: {downloaded} bytes");
 
     // Verify checksum if provided
     if let Some(expected) = expected_sha256 {
@@ -181,7 +176,7 @@ pub fn download_file(
 /// Compute SHA256 hash of a file
 pub fn sha256_file(path: &Path) -> Result<String> {
     let file = File::open(path)
-        .map_err(|e| Error::DownloadFailed(format!("Failed to open file for checksum: {}", e)))?;
+        .map_err(|e| Error::DownloadFailed(format!("Failed to open file for checksum: {e}")))?;
 
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
@@ -190,7 +185,7 @@ pub fn sha256_file(path: &Path) -> Result<String> {
     loop {
         let bytes_read = reader
             .read(&mut buffer)
-            .map_err(|e| Error::DownloadFailed(format!("Read error computing checksum: {}", e)))?;
+            .map_err(|e| Error::DownloadFailed(format!("Read error computing checksum: {e}")))?;
 
         if bytes_read == 0 {
             break;
@@ -209,7 +204,7 @@ pub fn fetch_text(url: &str, retry_config: &RetryConfig) -> Result<String> {
     response
         .into_body()
         .read_to_string()
-        .map_err(|e| Error::DownloadFailed(format!("Failed to read response body: {}", e)))
+        .map_err(|e| Error::DownloadFailed(format!("Failed to read response body: {e}")))
 }
 
 /// Check if a URL exists (HEAD request)

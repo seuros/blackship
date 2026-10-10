@@ -26,7 +26,7 @@ pub fn handle_build(
 
     let context_dir = context.unwrap_or_else(|| {
         file.parent()
-            .map(|p| p.to_path_buf())
+            .map(std::path::Path::to_path_buf)
             .unwrap_or_else(|| std::env::current_dir().unwrap())
     });
 
@@ -59,7 +59,7 @@ pub fn handle_build(
         let release_path = config.config.releases_dir.join(release);
 
         if !release_path.exists() {
-            println!("Base release '{}' not found. Bootstrapping...", release);
+            println!("Base release '{release}' not found. Bootstrapping...");
             if let Some(zfs) = &zfs {
                 zfs.create_release_dataset(release, &release_path)?;
             }
@@ -75,7 +75,7 @@ pub fn handle_build(
                 && !zfs.jail_dataset_exists(&full_name)?
             {
                 if zfs.release_is_cloneable(release) {
-                    println!("Creating jail root by cloning {}...", release);
+                    println!("Creating jail root by cloning {release}...");
                     zfs.clone_jail_from_release(release, &full_name)?;
                 } else {
                     zfs.create_jail_dataset(&full_name)?;
@@ -85,7 +85,7 @@ pub fn handle_build(
             // ./bin instead of bare existence: a freshly created dataset
             // mounts as an existing-but-empty directory.
             if !target_path.join("bin").exists() {
-                println!("Creating jail root from {}...", release);
+                println!("Creating jail root from {release}...");
                 std::fs::create_dir_all(&target_path)?;
                 copy_release_to(&release_path, &target_path)?;
             }
@@ -110,7 +110,7 @@ pub fn handle_build(
             seed: hasher
                 .finalize()
                 .iter()
-                .map(|b| format!("{:02x}", b))
+                .map(|b| format!("{b:02x}"))
                 .collect(),
         }
     });
@@ -136,7 +136,7 @@ pub fn handle_build(
         println!("\nBuild complete! Jail root: {}", target_path.display());
         println!("Add the jail to blackship.toml to manage it:");
         println!("  [[jails]]");
-        println!("  name = \"{}\"", full_name);
+        println!("  name = \"{full_name}\"");
         println!("  path = \"{}\"", target_path.display());
     }
 
@@ -169,7 +169,7 @@ version = "1.0"
 # description = "My jail description"
 
 [build]
-from = "{}"
+from = "{base_release}"
 
 # Build arguments
 # [[build.args]]
@@ -188,13 +188,12 @@ from = "{}"
 # [start]
 # cmd = "/usr/sbin/service myapp start"
 # user = "root"
-"#,
-            base_release
+"#
         )
     } else {
         format!(
             r#"# Jailfile
-FROM {}
+FROM {base_release}
 
 # Build arguments
 # ARG VERSION=1.0
@@ -213,8 +212,7 @@ FROM {}
 
 # Default command
 # CMD /usr/sbin/service myapp start
-"#,
-            base_release
+"#
         )
     };
 
@@ -241,9 +239,8 @@ pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()>
             }
 
             fn is_template_file(path: &Path) -> bool {
-                let file_name = match path.file_name().and_then(|n| n.to_str()) {
-                    Some(name) => name,
-                    None => return false,
+                let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+                    return false;
                 };
 
                 if file_name == "Jailfile" || file_name.starts_with("Jailfile.") {
@@ -344,31 +341,31 @@ pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()>
                 let content = std::fs::read_to_string(path)?;
                 let jailfile = parse_jailfile(&content)?;
 
-                println!("Jailfile: {}\n", template);
+                println!("Jailfile: {template}\n");
 
                 if let Some(name) = &jailfile.metadata.name {
-                    println!("Name: {}", name);
+                    println!("Name: {name}");
                 }
                 if let Some(version) = &jailfile.metadata.version {
-                    println!("Version: {}", version);
+                    println!("Version: {version}");
                 }
                 if let Some(desc) = &jailfile.metadata.description {
-                    println!("Description: {}", desc);
+                    println!("Description: {desc}");
                 }
                 if let Some(author) = &jailfile.metadata.author {
-                    println!("Author: {}", author);
+                    println!("Author: {author}");
                 }
                 if !jailfile.metadata.labels.is_empty() {
                     println!("Labels:");
                     let mut labels: Vec<_> = jailfile.metadata.labels.iter().collect();
                     labels.sort();
                     for (key, value) in labels {
-                        println!("  {} = {}", key, value);
+                        println!("  {key} = {value}");
                     }
                 }
 
                 if let Some(from) = &jailfile.from {
-                    println!("\nBase release: {}", from);
+                    println!("\nBase release: {from}");
                 }
 
                 if !jailfile.args.is_empty() {
@@ -392,31 +389,31 @@ pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()>
                 println!("\nInstructions ({}):", jailfile.instructions.len());
                 for instr in &jailfile.instructions {
                     match instr {
-                        Instruction::Run(cmd) => println!("  RUN {}", cmd),
+                        Instruction::Run(cmd) => println!("  RUN {cmd}"),
                         Instruction::Copy(spec) => {
-                            println!("  COPY {} -> {}", spec.src, spec.dest)
+                            println!("  COPY {} -> {}", spec.src, spec.dest);
                         }
-                        Instruction::Env(k, v) => println!("  ENV {}={}", k, v),
-                        Instruction::Workdir(p) => println!("  WORKDIR {}", p),
-                        Instruction::Comment(text) => println!("  # {}", text),
+                        Instruction::Env(k, v) => println!("  ENV {k}={v}"),
+                        Instruction::Workdir(p) => println!("  WORKDIR {p}"),
+                        Instruction::Comment(text) => println!("  # {text}"),
                         Instruction::Label(key, value) => {
-                            println!("  LABEL {}={}", key, value)
+                            println!("  LABEL {key}={value}");
                         }
                         _ => println!("  {}", instr.name()),
                     }
                 }
 
                 if let Some(cmd) = &jailfile.cmd {
-                    println!("\nCMD: {}", cmd);
+                    println!("\nCMD: {cmd}");
                 }
                 if let Some(ep) = &jailfile.entrypoint {
-                    println!("ENTRYPOINT: {}", ep);
+                    println!("ENTRYPOINT: {ep}");
                 }
                 if let Some(stop) = &jailfile.stop {
-                    println!("STOP: {}", stop);
+                    println!("STOP: {stop}");
                 }
             } else {
-                println!("Template or file '{}' not found.", template);
+                println!("Template or file '{template}' not found.");
             }
         }
         TemplateAction::Validate { file } => {
@@ -428,11 +425,11 @@ pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()>
                     println!("  Instructions: {}", jailfile.instructions.len());
                     println!("  Build args: {}", jailfile.args.len());
                     if let Some(from) = &jailfile.from {
-                        println!("  Base release: {}", from);
+                        println!("  Base release: {from}");
                     }
                 }
                 Err(e) => {
-                    println!("[FAIL] Jailfile validation failed: {}", e);
+                    println!("[FAIL] Jailfile validation failed: {e}");
                     std::process::exit(1);
                 }
             }
@@ -451,7 +448,7 @@ pub(crate) fn copy_release_to(release_path: &Path, target: &Path) -> Result<()> 
         .status()
         .map_err(|e| error::Error::BuildFailed {
             step: "FROM".to_string(),
-            message: format!("Failed to copy base release: {}", e),
+            message: format!("Failed to copy base release: {e}"),
         })?;
     if !status.success() {
         return Err(error::Error::BuildFailed {

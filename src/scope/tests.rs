@@ -5,7 +5,7 @@ fn temp_root() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("blackship-scope-{}", unique))
+    std::env::temp_dir().join(format!("blackship-scope-{unique}"))
 }
 
 #[test]
@@ -184,5 +184,5 @@ fn scope_machine_schema_validates_without_errors() {
         .iter()
         .filter(|d| d.level == state_machines::DiagnosticLevel::Error)
         .collect();
-    assert!(errors.is_empty(), "schema errors: {:?}", errors);
+    assert!(errors.is_empty(), "schema errors: {errors:?}");
 }

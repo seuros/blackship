@@ -68,7 +68,7 @@ data_dir = "/var/blackship"
 [[jails]]
 name = "database"
 path = "/jails/database"
-cascade = "{}"
+cascade = "{policy}"
 
 [[jails]]
 name = "backend"
@@ -79,8 +79,7 @@ depends_on = ["database"]
 name = "frontend"
 path = "/jails/frontend"
 depends_on = ["backend"]
-"#,
-        policy
+"#
     ))
     .unwrap()
 }

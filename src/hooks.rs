@@ -9,6 +9,7 @@
 use crate::error::{Error, Result};
 use crate::jail::jexec::jexec_with_timeout;
 use crate::proc::{Outcome, run_supervised};
+use crate::strings::replace_in_place;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -59,7 +60,7 @@ impl std::fmt::Display for HookPhase {
             HookPhase::PreEva => "pre_eva",
             HookPhase::PostEva => "post_eva",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -213,27 +214,34 @@ impl HookContext {
     /// - ${jid} - Jail ID
     /// - ${custom_var} - Custom variables from extra
     pub fn substitute(&self, input: &str) -> String {
+        if !input.contains('$') {
+            return input.to_string();
+        }
+
         let mut result = input.to_string();
 
-        // Built-in variables
-        result = result.replace("${jail_name}", &self.jail_name);
-        result = result.replace("${jail_path}", &self.jail_path);
+        replace_in_place(&mut result, "${jail_name}", &self.jail_name);
+        replace_in_place(&mut result, "${jail_path}", &self.jail_path);
+        replace_in_place(
+            &mut result,
+            "${jail_ip}",
+            self.jail_ip.as_deref().unwrap_or(""),
+        );
 
-        if let Some(ip) = &self.jail_ip {
-            result = result.replace("${jail_ip}", ip);
-        } else {
-            result = result.replace("${jail_ip}", "");
+        if result.contains("${jid}") {
+            match self.jid {
+                Some(jid) => result = result.replace("${jid}", &jid.to_string()),
+                None => result = result.replace("${jid}", ""),
+            }
         }
 
-        if let Some(jid) = self.jid {
-            result = result.replace("${jid}", &jid.to_string());
-        } else {
-            result = result.replace("${jid}", "");
-        }
-
-        // Custom variables
+        let mut needle = String::new();
         for (name, value) in &self.extra {
-            result = result.replace(&format!("${{{}}}", name), value);
+            needle.clear();
+            needle.push_str("${");
+            needle.push_str(name);
+            needle.push('}');
+            replace_in_place(&mut result, &needle, value);
         }
 
         result
@@ -259,9 +267,9 @@ impl HookResult {
         let status = if self.success { "success" } else { "failed" };
         let code = self
             .exit_code
-            .map(|c| format!(" (exit {})", c))
+            .map(|c| format!(" (exit {c})"))
             .unwrap_or_default();
-        format!("{}{}", status, code)
+        format!("{status}{code}")
     }
 
     /// Get combined output (stdout + stderr)
@@ -356,7 +364,7 @@ impl HookRunner {
                         });
                     }
                     OnFailure::Continue => {
-                        eprintln!("Warning: {}", msg);
+                        eprintln!("Warning: {msg}");
                     }
                 }
             }

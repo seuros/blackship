@@ -162,13 +162,13 @@ pub fn handle(
             let config = manifest::load_merged(&files)?;
 
             if show {
-                println!("# Merged configuration from: {:?}\n", files);
+                println!("# Merged configuration from: {files:?}\n");
                 println!("[config]");
                 println!("data_dir = \"{}\"", config.config.data_dir.display());
                 if config.config.zfs_enabled {
                     println!("zfs_enabled = true");
                     if let Some(pool) = &config.config.zpool {
-                        println!("zpool = \"{}\"", pool);
+                        println!("zpool = \"{pool}\"");
                     }
                 }
                 println!();
@@ -179,7 +179,7 @@ pub fn handle(
                         println!("path = \"{}\"", path.display());
                     }
                     if let Some(release) = &jail.release {
-                        println!("release = \"{}\"", release);
+                        println!("release = \"{release}\"");
                     }
                     if let Some(build) = &jail.build {
                         println!("build = \"{}\"", build.display());
@@ -191,7 +191,7 @@ pub fn handle(
                 }
             } else {
                 println!("Configuration valid.");
-                println!("  Files: {:?}", files);
+                println!("  Files: {files:?}");
                 println!("  Jails: {}", config.jails.len());
             }
             Ok(())
@@ -261,7 +261,7 @@ fn build_jails(
             if jailfile_explicit.exists() {
                 let context_dir = jailfile_explicit
                     .parent()
-                    .unwrap_or(std::path::Path::new("."));
+                    .unwrap_or_else(|| std::path::Path::new("."));
                 build_jail_from_file(
                     config,
                     jailfile_explicit,
@@ -321,22 +321,26 @@ fn build_jail_from_file(
         let release_path = config.config.releases_dir.join(release);
 
         if !release_path.exists() {
-            println!("  Base release '{}' not found. Bootstrapping...", release);
+            println!("  Base release '{release}' not found. Bootstrapping...");
             if !dry_run {
                 bs.bootstrap(release, false)?;
             }
         }
 
         if !dry_run && !target_path.exists() {
-            println!("  Creating jail root from {}...", release);
+            println!("  Creating jail root from {release}...");
             std::fs::create_dir_all(&target_path)?;
             copy_release_to(&release_path, &target_path)?;
         }
     }
 
     let ctx_dir = context_dir
-        .map(|p| p.as_path())
-        .unwrap_or_else(|| jailfile_path.parent().unwrap_or(std::path::Path::new(".")));
+        .map(std::path::PathBuf::as_path)
+        .unwrap_or_else(|| {
+            jailfile_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+        });
 
     let ctx = BuildContext::new(ctx_dir, &target_path, &full_name).verbose(verbose);
     let mut executor = TemplateExecutor::new(ctx).dry_run(dry_run);

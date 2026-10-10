@@ -22,7 +22,7 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
         } => {
             let subnet: IpNet = subnet
                 .parse()
-                .map_err(|e| error::Error::Network(format!("Invalid subnet: {}", e)))?;
+                .map_err(|e| error::Error::Network(format!("Invalid subnet: {e}")))?;
 
             if store.get(&name)?.is_some() {
                 return Err(error::Error::NetworkAlreadyExists(name));
@@ -31,7 +31,7 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
             let gateway_ip = if let Some(gw) = gateway {
                 let gateway_ip = gw
                     .parse()
-                    .map_err(|e| error::Error::Network(format!("Invalid gateway: {}", e)))?;
+                    .map_err(|e| error::Error::Network(format!("Invalid gateway: {e}")))?;
                 IpPool::with_gateway(subnet, gateway_ip)?;
                 gateway_ip
             } else {
@@ -66,8 +66,7 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
                 };
                 if existing.subnet != record.subnet || configured_gateway != record.gateway {
                     return Err(error::Error::Network(format!(
-                        "Network '{}' is already defined differently in blackship.toml",
-                        name
+                        "Network '{name}' is already defined differently in blackship.toml"
                     )));
                 }
             }
@@ -83,10 +82,10 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
                 "Created network '{}' on bridge '{}' ({})",
                 name, bridge, record.backend
             );
-            println!("  Subnet: {}", subnet);
-            println!("  Gateway: {}", gateway_ip);
+            println!("  Subnet: {subnet}");
+            println!("  Gateway: {gateway_ip}");
             if let Some(host_iface) = &record.host_iface {
-                println!("  Host gateway interface: {}", host_iface);
+                println!("  Host gateway interface: {host_iface}");
             }
         }
         NetworkAction::Destroy { name, force } => {
@@ -131,7 +130,7 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
                     let host_iface = network
                         .host_iface
                         .as_deref()
-                        .map(|i| format!(" host_iface={}", i))
+                        .map(|i| format!(" host_iface={i}"))
                         .unwrap_or_default();
                     println!(
                         "  {}: bridge={} backend={} subnet={} gateway={}{} status={}",

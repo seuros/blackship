@@ -88,5 +88,5 @@ fn test_schema_validates_without_errors() {
         .iter()
         .filter(|d| d.level == state_machines::DiagnosticLevel::Error)
         .collect();
-    assert!(errors.is_empty(), "schema errors: {:?}", errors);
+    assert!(errors.is_empty(), "schema errors: {errors:?}");
 }

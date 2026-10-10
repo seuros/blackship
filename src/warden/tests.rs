@@ -58,7 +58,7 @@ fn test_idents_for_narrows_to_one_jid() {
     ]);
 
     let mut all = idents_for(&map, "web", None);
-    all.sort_by_key(|ident| format!("{:?}", ident));
+    all.sort_by_key(|ident| format!("{ident:?}"));
     assert_eq!(all, vec![JailIdent::Descriptor(10), JailIdent::Jid(19)]);
 
     assert_eq!(

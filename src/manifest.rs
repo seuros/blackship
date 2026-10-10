@@ -7,6 +7,7 @@ use crate::hooks::Hook;
 use crate::sickbay::checker::HealthCheckConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -20,8 +21,7 @@ pub fn validate_name(kind: &str, name: &str) -> Result<()> {
     }
     if name.contains('/') || name.contains('\0') || name == "." || name == ".." {
         return Err(Error::ConfigValidation(format!(
-            "{kind} name '{}' contains invalid characters",
-            name
+            "{kind} name '{name}' contains invalid characters"
         )));
     }
     if !name
@@ -29,8 +29,7 @@ pub fn validate_name(kind: &str, name: &str) -> Result<()> {
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
     {
         return Err(Error::ConfigValidation(format!(
-            "{kind} name '{}' contains invalid characters (only alphanumeric, dash, underscore, dot allowed)",
-            name
+            "{kind} name '{name}' contains invalid characters (only alphanumeric, dash, underscore, dot allowed)"
         )));
     }
     Ok(())
@@ -53,8 +52,7 @@ pub fn validate_record_name(kind: &str, name: &str) -> Result<()> {
     }
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err(Error::InvalidArgument(format!(
-            "{kind} name '{}' contains invalid characters",
-            name
+            "{kind} name '{name}' contains invalid characters"
         )));
     }
     Ok(())
@@ -69,20 +67,17 @@ fn validate_zfs_component(kind: &str, name: &str) -> Result<()> {
     }
     if name.starts_with('-') {
         return Err(Error::ConfigValidation(format!(
-            "{kind} name '{}' must not start with '-'",
-            name
+            "{kind} name '{name}' must not start with '-'"
         )));
     }
     if name == "." || name == ".." || name.contains("..") {
         return Err(Error::ConfigValidation(format!(
-            "{kind} name '{}' contains invalid component",
-            name
+            "{kind} name '{name}' contains invalid component"
         )));
     }
     if name.contains('@') || name.contains('\0') {
         return Err(Error::ConfigValidation(format!(
-            "{kind} name '{}' contains invalid characters",
-            name
+            "{kind} name '{name}' contains invalid characters"
         )));
     }
     if !name
@@ -90,8 +85,7 @@ fn validate_zfs_component(kind: &str, name: &str) -> Result<()> {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':' | '/'))
     {
         return Err(Error::ConfigValidation(format!(
-            "{kind} name '{}' contains invalid characters",
-            name
+            "{kind} name '{name}' contains invalid characters"
         )));
     }
     Ok(())
@@ -111,7 +105,7 @@ fn project_name_from_path(path: &Path) -> String {
         .filter(|p| !p.as_os_str().is_empty() && p.as_os_str() != ".")
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .or_else(|| {
             // Config in current directory - use cwd name
             std::env::current_dir()
@@ -206,7 +200,7 @@ pub struct BlackshipConfig {
 impl BlackshipConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
-        validate_name("project", &self.config.project_name())?;
+        validate_name("project", self.config.project_name())?;
 
         let mut names = std::collections::HashSet::new();
         let mut full_names = std::collections::HashSet::new();
@@ -220,12 +214,13 @@ impl BlackshipConfig {
             }
             // project="demo" + jails "web"/"demo-web" both resolve to "demo-web".
             let full = self.jail_name(&jail.name);
-            if !full_names.insert(full.clone()) {
+            if full_names.contains(&full) {
                 return Err(Error::ConfigValidation(format!(
                     "Jail '{}' resolves to full name '{}' which collides with another jail",
                     jail.name, full
                 )));
             }
+            full_names.insert(full);
         }
 
         // Check that all dependencies exist
@@ -288,7 +283,9 @@ impl BlackshipConfig {
             return Some(jail);
         }
         // Then try matching the full prefixed name
-        self.jails.iter().find(|j| self.jail_name(&j.name) == name)
+        self.jails
+            .iter()
+            .find(|j| self.full_name_matches(&j.name, name))
     }
 
     /// Resolve a jail identifier to (service_name, full_name)
@@ -298,32 +295,69 @@ impl BlackshipConfig {
         if let Some(jail) = self.jails.iter().find(|j| j.name == name) {
             return Some(names_of(jail));
         }
-        if let Some(jail) = self.jails.iter().find(|j| self.jail_name(&j.name) == name) {
+        if let Some(jail) = self
+            .jails
+            .iter()
+            .find(|j| self.full_name_matches(&j.name, name))
+        {
             return Some(names_of(jail));
         }
 
         // Unambiguous prefix of a service or full name
-        let matches: Vec<&JailDef> = self
+        let mut matches = self
             .jails
             .iter()
-            .filter(|j| j.name.starts_with(name) || self.jail_name(&j.name).starts_with(name))
-            .collect();
-        if let [jail] = matches.as_slice() {
-            return Some(names_of(jail));
+            .filter(|j| j.name.starts_with(name) || self.full_name_starts_with(&j.name, name));
+        let first = matches.next()?;
+        if matches.next().is_none() {
+            return Some(names_of(first));
         }
 
         None
     }
 
+    /// Does `service_name`'s full form equal `candidate`, without building it?
+    fn full_name_matches(&self, service_name: &str, candidate: &str) -> bool {
+        if self.is_prefixed(service_name) {
+            return service_name == candidate;
+        }
+        match candidate.strip_prefix(self.config.project_name()) {
+            Some(rest) => rest.strip_prefix('-') == Some(service_name),
+            None => false,
+        }
+    }
+
+    /// Does `service_name`'s full form start with `prefix`, without building it?
+    fn full_name_starts_with(&self, service_name: &str, prefix: &str) -> bool {
+        if self.is_prefixed(service_name) {
+            return service_name.starts_with(prefix);
+        }
+        let project = self.config.project_name();
+        match prefix.len().cmp(&project.len()) {
+            std::cmp::Ordering::Less | std::cmp::Ordering::Equal => project.starts_with(prefix),
+            std::cmp::Ordering::Greater => match prefix.strip_prefix(project) {
+                Some(rest) => match rest.strip_prefix('-') {
+                    Some(tail) => service_name.starts_with(tail),
+                    None => false,
+                },
+                None => false,
+            },
+        }
+    }
+
+    fn is_prefixed(&self, service_name: &str) -> bool {
+        service_name
+            .strip_prefix(self.config.project_name())
+            .is_some_and(|rest| rest.starts_with('-'))
+    }
+
     /// Get the full jail name with project prefix
     /// Format: {project}-{service_name}
     pub fn jail_name(&self, service_name: &str) -> String {
-        let project = self.config.project_name();
-        let prefix = format!("{}-", project);
-        if service_name.starts_with(&prefix) {
+        if self.is_prefixed(service_name) {
             service_name.to_string()
         } else {
-            format!("{}-{}", project, service_name)
+            format!("{}-{}", self.config.project_name(), service_name)
         }
     }
 
@@ -459,10 +493,8 @@ impl GlobalConfig {
 
     /// Get the effective project name
     /// Should always be set by load/load_merged, but falls back to "blackship" if not
-    pub fn project_name(&self) -> String {
-        self.project
-            .clone()
-            .unwrap_or_else(|| "blackship".to_string())
+    pub fn project_name(&self) -> &str {
+        self.project.as_deref().unwrap_or("blackship")
     }
 
     /// Merge another GlobalConfig into this one
@@ -1046,15 +1078,22 @@ impl DnsConfig {
         let mut content = String::new();
 
         if let Some(domain) = &self.domain {
-            content.push_str(&format!("domain {}\n", domain));
+            let _ = writeln!(content, "domain {domain}");
         }
 
         if !self.search.is_empty() {
-            content.push_str(&format!("search {}\n", self.search.join(" ")));
+            content.push_str("search ");
+            for (i, term) in self.search.iter().enumerate() {
+                if i > 0 {
+                    content.push(' ');
+                }
+                content.push_str(term);
+            }
+            content.push('\n');
         }
 
         for ns in &self.nameservers {
-            content.push_str(&format!("nameserver {}\n", ns));
+            let _ = writeln!(content, "nameserver {ns}");
         }
 
         Some(content)

@@ -5,6 +5,7 @@
 //! - Working directory
 //! - File copying context
 
+use crate::strings::replace_in_place;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -62,8 +63,7 @@ fn reject_parent_components(
             return Err(crate::error::Error::BuildFailed {
                 step: "path".to_string(),
                 message: format!(
-                    "Path '{}' contains '..' which could escape the {}",
-                    original, boundary
+                    "Path '{original}' contains '..' which could escape the {boundary}"
                 ),
             });
         }
@@ -134,7 +134,7 @@ impl BuildContext {
 
     /// Get a build argument
     pub fn get_arg(&self, name: &str) -> Option<&str> {
-        self.args.get(name).map(|s| s.as_str())
+        self.args.get(name).map(std::string::String::as_str)
     }
 
     /// Set an environment variable
@@ -178,8 +178,7 @@ impl BuildContext {
             return Err(crate::error::Error::BuildFailed {
                 step: "path".to_string(),
                 message: format!(
-                    "Absolute source path '{}' is not allowed; use a path relative to the build context",
-                    src
+                    "Absolute source path '{src}' is not allowed; use a path relative to the build context"
                 ),
             });
         }
@@ -280,37 +279,46 @@ impl BuildContext {
     /// - ${JAIL_NAME} - Current jail name
     /// - ${WORKDIR} - Current working directory
     pub fn substitute(&self, input: &str) -> String {
-        fn apply_var(mut s: String, name: &str, value: &str) -> String {
-            s = s.replace(&format!("${{{}}}", name), value);
-            s = s.replace(&format!("${}", name), value);
-            s
+        if !input.contains('$') {
+            return input.to_string();
         }
 
         let mut result = input.to_string();
+        let mut needle = String::new();
+        let mut apply_var = |result: &mut String, name: &str, value: &str| {
+            needle.clear();
+            needle.push_str("${");
+            needle.push_str(name);
+            needle.push('}');
+            replace_in_place(result, &needle, value);
 
-        // Replace build args
+            needle.clear();
+            needle.push('$');
+            needle.push_str(name);
+            replace_in_place(result, &needle, value);
+        };
+
         for (name, value) in &self.args {
-            result = apply_var(result, name, value);
+            apply_var(&mut result, name, value);
         }
 
-        // Replace environment variables
         for (name, value) in &self.env {
-            result = apply_var(result, name, value);
+            apply_var(&mut result, name, value);
         }
 
-        // Replace built-in variables
-        result = result.replace("${JAIL_NAME}", &self.jail_name);
-        result = result.replace("$JAIL_NAME", &self.jail_name);
-        result = result.replace("${WORKDIR}", self.workdir.to_str().unwrap_or("/"));
-        result = result.replace("$WORKDIR", self.workdir.to_str().unwrap_or("/"));
+        let workdir = self.workdir.to_str().unwrap_or("/");
+        replace_in_place(&mut result, "${JAIL_NAME}", &self.jail_name);
+        replace_in_place(&mut result, "$JAIL_NAME", &self.jail_name);
+        replace_in_place(&mut result, "${WORKDIR}", workdir);
+        replace_in_place(&mut result, "$WORKDIR", workdir);
 
         result
     }
 
     /// Log a message if verbose mode is enabled
-    pub fn log(&self, message: &str) {
+    pub fn log(&self, message: std::fmt::Arguments<'_>) {
         if self.verbose {
-            println!("[build] {}", message);
+            println!("[build] {message}");
         }
     }
 }

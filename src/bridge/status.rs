@@ -26,9 +26,9 @@ impl Bridge {
                     .map(|ip| ip.to_string())
                     .unwrap_or_else(|| "none".to_string());
 
-                println!("  [START] {}", full_name);
+                println!("  [START] {full_name}");
                 println!("          Path: {}", path.display());
-                println!("          IP: {}", ip);
+                println!("          IP: {ip}");
 
                 if self.zfs.is_some() && jail_def.path.is_none() {
                     println!("          ZFS: would create dataset");
@@ -73,7 +73,7 @@ impl Bridge {
             let is_running = jail_getid(&full_name).is_ok();
             let status = if is_running { "running" } else { "stopped" };
 
-            println!("  [STOP] {} (currently {})", full_name, status);
+            println!("  [STOP] {full_name} (currently {status})");
 
             if let Some(jail_def) = self.config.get_jail(&service_name)
                 && !jail_def.hooks.is_empty()
@@ -140,7 +140,7 @@ impl Bridge {
                             .config
                             .ips
                             .iter()
-                            .map(|ip| ip.to_string())
+                            .map(std::string::ToString::to_string)
                             .collect::<Vec<_>>(),
                     ),
                     None => (
@@ -186,7 +186,7 @@ impl Bridge {
                     }
                 };
 
-                println!("{:<20} {:<10} {:<10}", full_name, state, jid);
+                println!("{full_name:<20} {state:<10} {jid:<10}");
             }
         }
 

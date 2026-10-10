@@ -76,7 +76,7 @@ pub fn init(config: Option<&TelemetryConfig>) {
         match build(config) {
             Ok(telemetry) => Some(telemetry),
             Err(e) => {
-                eprintln!("Warning: telemetry disabled: {}", e);
+                eprintln!("Warning: telemetry disabled: {e}");
                 None
             }
         }
@@ -89,12 +89,12 @@ fn build(config: &TelemetryConfig) -> Result<Telemetry, String> {
         .enable_all()
         .thread_name("blackship-otlp")
         .build()
-        .map_err(|e| format!("failed to start telemetry runtime: {}", e))?;
+        .map_err(|e| format!("failed to start telemetry runtime: {e}"))?;
 
     let endpoint = config.endpoint.as_deref().unwrap_or(DEFAULT_ENDPOINT);
     let uri = endpoint
         .parse()
-        .map_err(|e| format!("invalid endpoint '{}': {}", endpoint, e))?;
+        .map_err(|e| format!("invalid endpoint '{endpoint}': {e}"))?;
 
     let mut exporter = OtelExporter::new_http(DefaultHttpWebClient::default())
         .with_endpoint(uri)
@@ -151,10 +151,10 @@ fn build_headers(headers: &BTreeMap<String, String>) -> Result<HeaderMap, String
     for (key, value) in headers {
         let name: rama::http::HeaderName = key
             .parse()
-            .map_err(|e| format!("invalid telemetry header name '{}': {}", key, e))?;
+            .map_err(|e| format!("invalid telemetry header name '{key}': {e}"))?;
         let value: rama::http::HeaderValue = value
             .parse()
-            .map_err(|e| format!("invalid telemetry header value for '{}': {}", key, e))?;
+            .map_err(|e| format!("invalid telemetry header value for '{key}': {e}"))?;
         map.insert(name, value);
     }
     Ok(map)
@@ -216,14 +216,17 @@ pub fn record_usage(jail: &str, sample: &std::collections::HashMap<String, u64>)
 
     let attributes = [KeyValue::new("jail", jail.to_string())];
     for (resource, value) in sample {
-        let gauge = gauges.entry(resource.clone()).or_insert_with(|| {
-            telemetry
+        if !gauges.contains_key(resource) {
+            let gauge = telemetry
                 .meter
-                .u64_gauge(format!("blackship.jail.{}", resource))
+                .u64_gauge(format!("blackship.jail.{resource}"))
                 .with_description("racct resource usage sampled by the warden")
-                .build()
-        });
-        gauge.record(*value, &attributes);
+                .build();
+            gauges.insert(resource.clone(), gauge);
+        }
+        if let Some(gauge) = gauges.get(resource) {
+            gauge.record(*value, &attributes);
+        }
     }
 }
 
@@ -233,10 +236,10 @@ pub fn shutdown() {
         return;
     };
     if let Err(e) = telemetry.tracer_provider.force_flush() {
-        eprintln!("Warning: failed to flush telemetry traces: {}", e);
+        eprintln!("Warning: failed to flush telemetry traces: {e}");
     }
     if let Err(e) = telemetry.meter_provider.force_flush() {
-        eprintln!("Warning: failed to flush telemetry metrics: {}", e);
+        eprintln!("Warning: failed to flush telemetry metrics: {e}");
     }
     let _ = telemetry.tracer_provider.shutdown();
     let _ = telemetry.meter_provider.shutdown();

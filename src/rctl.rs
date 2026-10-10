@@ -5,6 +5,7 @@
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 
 // Syscall numbers from sys/syscall.h
 const SYS_RCTL_ADD_RULE: libc::c_int = 528;
@@ -69,41 +70,38 @@ impl ResourceConfig {
         let mut rules = Vec::new();
 
         if let Some(ref mem) = self.memory {
-            rules.push(format!("jail:{}:memoryuse:deny={}", jail_name, mem));
+            rules.push(format!("jail:{jail_name}:memoryuse:deny={mem}"));
         }
         if let Some(ref vmem) = self.vmemory {
-            rules.push(format!("jail:{}:vmemoryuse:deny={}", jail_name, vmem));
+            rules.push(format!("jail:{jail_name}:vmemoryuse:deny={vmem}"));
         }
         if let Some(ref cpu) = self.cpu {
-            rules.push(format!("jail:{}:pcpu:deny={}", jail_name, cpu));
+            rules.push(format!("jail:{jail_name}:pcpu:deny={cpu}"));
         }
         if let Some(maxproc) = self.maxproc {
-            rules.push(format!("jail:{}:maxproc:deny={}", jail_name, maxproc));
+            rules.push(format!("jail:{jail_name}:maxproc:deny={maxproc}"));
         }
         if let Some(maxthreads) = self.maxthreads {
-            rules.push(format!("jail:{}:nthr:deny={}", jail_name, maxthreads));
+            rules.push(format!("jail:{jail_name}:nthr:deny={maxthreads}"));
         }
         if let Some(openfiles) = self.openfiles {
-            rules.push(format!("jail:{}:openfiles:deny={}", jail_name, openfiles));
+            rules.push(format!("jail:{jail_name}:openfiles:deny={openfiles}"));
         }
         if let Some(ref swap) = self.swap {
-            rules.push(format!("jail:{}:swapuse:deny={}", jail_name, swap));
+            rules.push(format!("jail:{jail_name}:swapuse:deny={swap}"));
         }
 
-        let own_prefix = format!("jail:{}:", jail_name);
+        let own_prefix = format!("jail:{jail_name}:");
         for rule in &self.rules {
             if rule.starts_with("jail:") {
                 if !rule.starts_with(&own_prefix) {
-                    eprintln!(
-                        "Warning: rejecting RCTL rule '{}' -- targets a different jail",
-                        rule
-                    );
+                    eprintln!("Warning: rejecting RCTL rule '{rule}' -- targets a different jail");
                     continue;
                 }
                 rules.push(rule.clone());
             } else {
                 // Prefix with jail subject if not already
-                rules.push(format!("jail:{}:{}", jail_name, rule));
+                rules.push(format!("jail:{jail_name}:{rule}"));
             }
         }
 
@@ -163,18 +161,26 @@ const MANAGED_RESOURCES: [&str; 7] = [
     "swapuse",
 ];
 
-fn managed_rules(config: &ResourceConfig, jail_name: &str) -> Vec<(String, String)> {
-    let prefix = format!("jail:{}:", jail_name);
-    config
-        .to_rules(jail_name)
-        .into_iter()
-        .filter_map(|rule| {
-            let resource = rule.strip_prefix(&prefix)?.split(':').next()?.to_string();
-            MANAGED_RESOURCES
-                .contains(&resource.as_str())
-                .then_some((resource, rule))
-        })
-        .collect()
+/// Split a profile's rules into the managed `(resource, rule)` pairs and the
+/// user's own rules, in one pass over `to_rules`.
+fn split_rules(config: &ResourceConfig, jail_name: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let prefix = format!("jail:{jail_name}:");
+    let mut managed = Vec::new();
+    let mut custom = Vec::new();
+
+    for rule in config.to_rules(jail_name) {
+        let resource = rule
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.split(':').next())
+            .filter(|resource| MANAGED_RESOURCES.contains(resource))
+            .map(str::to_string);
+        match resource {
+            Some(resource) => managed.push((resource, rule)),
+            None => custom.push(rule),
+        }
+    }
+
+    (managed, custom)
 }
 
 /// Rules to remove and rules to add for a phase switch.
@@ -187,8 +193,8 @@ pub fn phase_diff(
     from: &ResourceConfig,
     to: &ResourceConfig,
 ) -> (Vec<String>, Vec<String>) {
-    let from_managed = managed_rules(from, jail_name);
-    let to_managed = managed_rules(to, jail_name);
+    let (from_managed, from_custom) = split_rules(from, jail_name);
+    let (to_managed, to_custom) = split_rules(to, jail_name);
 
     let mut removals = Vec::new();
     let mut additions = Vec::new();
@@ -196,7 +202,7 @@ pub fn phase_diff(
     for (resource, rule) in &from_managed {
         match to_managed.iter().find(|(r, _)| r == resource) {
             Some((_, new_rule)) if new_rule == rule => {}
-            _ => removals.push(format!("jail:{}:{}", jail_name, resource)),
+            _ => removals.push(format!("jail:{jail_name}:{resource}")),
         }
     }
 
@@ -207,8 +213,6 @@ pub fn phase_diff(
         }
     }
 
-    let from_custom = custom_rules(from, jail_name);
-    let to_custom = custom_rules(to, jail_name);
     for rule in &from_custom {
         if !to_custom.contains(rule) {
             removals.push(rule.clone());
@@ -221,18 +225,6 @@ pub fn phase_diff(
     }
 
     (removals, additions)
-}
-
-fn custom_rules(config: &ResourceConfig, jail_name: &str) -> Vec<String> {
-    let managed: Vec<String> = managed_rules(config, jail_name)
-        .into_iter()
-        .map(|(_, rule)| rule)
-        .collect();
-    config
-        .to_rules(jail_name)
-        .into_iter()
-        .filter(|rule| !managed.contains(rule))
-        .collect()
 }
 
 /// Switch a live jail from one profile to another.
@@ -250,7 +242,7 @@ pub fn apply_phase(jail_name: &str, from: &ResourceConfig, to: &ResourceConfig) 
 
     for filter in &removals {
         if let Err(e) = rctl_remove_rule(filter) {
-            eprintln!("Warning: {}", e);
+            eprintln!("Warning: {e}");
         }
     }
     for rule in &additions {
@@ -265,9 +257,9 @@ pub fn apply_phase(jail_name: &str, from: &ResourceConfig, to: &ResourceConfig) 
 /// Explicit `cpuset` wins. `cores = N` picks the N logical CPUs with the
 /// fewest explicit claims across the other jails' configs (least-loaded
 /// spreading), so co-hosted jails end up on different cores by default.
-pub fn resolve_cpu_list(
+pub fn resolve_cpu_list<'a>(
     config: &ResourceConfig,
-    other_pins: impl Iterator<Item = String>,
+    other_pins: impl Iterator<Item = &'a str>,
 ) -> Option<String> {
     if let Some(list) = &config.cpuset {
         return Some(list.clone());
@@ -291,13 +283,14 @@ pub fn resolve_cpu_list(
     cores.sort_by_key(|&c| (load[c], c));
     cores.truncate(want.min(ncpu));
     cores.sort();
-    Some(
-        cores
-            .iter()
-            .map(|c| c.to_string())
-            .collect::<Vec<_>>()
-            .join(","),
-    )
+    let mut list = String::with_capacity(cores.len() * 3);
+    for core in cores {
+        if !list.is_empty() {
+            list.push(',');
+        }
+        let _ = write!(list, "{core}");
+    }
+    Some(list)
 }
 
 /// Pin a running jail to a CPU list via cpuset(1)
@@ -305,12 +298,9 @@ pub fn apply_cpuset(jid: i32, cpu_list: &str) -> Result<()> {
     let status = std::process::Command::new("/usr/bin/cpuset")
         .args(["-l", cpu_list, "-j", &jid.to_string()])
         .status()
-        .map_err(|e| Error::Rctl(format!("Failed to run cpuset: {}", e)))?;
+        .map_err(|e| Error::Rctl(format!("Failed to run cpuset: {e}")))?;
     if !status.success() {
-        return Err(Error::Rctl(format!(
-            "cpuset -l {} -j {} failed",
-            cpu_list, jid
-        )));
+        return Err(Error::Rctl(format!("cpuset -l {cpu_list} -j {jid} failed")));
     }
     Ok(())
 }
@@ -323,10 +313,7 @@ pub fn is_enabled() -> bool {
         .output();
 
     match output {
-        Ok(out) if out.status.success() => {
-            let val = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            val == "1"
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim() == "1",
         _ => false,
     }
 }
@@ -360,13 +347,13 @@ pub fn apply_limits(jail_name: &str, config: &ResourceConfig) -> Result<()> {
 /// Remove all resource limits for a jail
 pub fn remove_limits(jail_name: &str) {
     // Remove all rules matching this jail
-    let filter = format!("jail:{}", jail_name);
+    let filter = format!("jail:{jail_name}");
     let _ = rctl_remove_rule(&filter);
 }
 
 /// Get current resource usage for a jail
 pub fn get_usage(jail_name: &str) -> Result<std::collections::HashMap<String, u64>> {
-    let filter = format!("jail:{}", jail_name);
+    let filter = format!("jail:{jail_name}");
     rctl_get_racct(&filter)
 }
 
@@ -398,21 +385,21 @@ fn rctl_string_syscall(
 /// Add an RCTL rule via syscall
 fn rctl_add_rule(rule: &str) -> Result<()> {
     rctl_string_syscall(SYS_RCTL_ADD_RULE, rule, |e| {
-        format!("Failed to add rule '{}': {}", rule, e)
+        format!("Failed to add rule '{rule}': {e}")
     })
 }
 
 /// Remove RCTL rules matching a filter
 fn rctl_remove_rule(filter: &str) -> Result<()> {
     rctl_string_syscall(SYS_RCTL_REMOVE_RULE, filter, |e| {
-        format!("Failed to remove rules for '{}': {}", filter, e)
+        format!("Failed to remove rules for '{filter}': {e}")
     })
 }
 
 /// Get resource accounting data for a subject
 fn rctl_get_racct(filter: &str) -> Result<std::collections::HashMap<String, u64>> {
     let filter_bytes = filter.as_bytes();
-    let mut outbuf = vec![0u8; 4096];
+    let mut outbuf = [0u8; 4096];
 
     let ret = unsafe {
         libc::syscall(

@@ -15,7 +15,7 @@ use crate::sys::consts::*;
 /// Returns error if name is too long (max 15 chars + null terminator)
 fn copy_ifname(dest: &mut [libc::c_char; libc::IF_NAMESIZE], name: &str) -> Result<()> {
     let name_cstr =
-        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
+        CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {e}")))?;
     let name_bytes = name_cstr.as_bytes_with_nul();
 
     if name_bytes.len() > libc::IF_NAMESIZE {
@@ -35,7 +35,7 @@ fn copy_ifname(dest: &mut [libc::c_char; libc::IF_NAMESIZE], name: &str) -> Resu
 
 fn create_socket() -> Result<UdpSocket> {
     UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| Error::Network(format!("Failed to create socket: {}", e)))
+        .map_err(|e| Error::Network(format!("Failed to create socket: {e}")))
 }
 
 fn extract_ifname(name: &[libc::c_char; libc::IF_NAMESIZE]) -> Result<String> {
@@ -46,7 +46,7 @@ fn extract_ifname(name: &[libc::c_char; libc::IF_NAMESIZE]) -> Result<String> {
     let name_bytes: Vec<u8> = name[..name_len].iter().map(|&c| c as u8).collect();
 
     String::from_utf8(name_bytes)
-        .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))
+        .map_err(|e| Error::Network(format!("Invalid interface name: {e}")))
 }
 
 #[repr(C)]
@@ -192,7 +192,7 @@ fn bridge_drvspec(
     set: bool,
 ) -> Result<()> {
     bridge_drvspec_io(sock_fd, bridge, cmd, len, data, set)
-        .map_err(|e| Error::Network(format!("Bridge ioctl {} failed: {}", cmd, e)))
+        .map_err(|e| Error::Network(format!("Bridge ioctl {cmd} failed: {e}")))
 }
 
 /// Create an anonymous cloned interface and return the assigned name.
@@ -304,7 +304,7 @@ pub fn rename_interface(old_name: &str, new_name: &str) -> Result<()> {
     copy_ifname(&mut req.ifr_name, old_name)?;
 
     let new_cstr = CString::new(new_name)
-        .map_err(|e| Error::Network(format!("Invalid interface name: {}", e)))?;
+        .map_err(|e| Error::Network(format!("Invalid interface name: {e}")))?;
 
     req.ifr_data = new_cstr.as_ptr() as *mut libc::c_void;
 
@@ -329,16 +329,13 @@ pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
     // Parse MAC address
     let mac_parts: Vec<&str> = mac.split(':').collect();
     if mac_parts.len() != 6 {
-        return Err(Error::Network(format!(
-            "Invalid MAC address format: {}",
-            mac
-        )));
+        return Err(Error::Network(format!("Invalid MAC address format: {mac}")));
     }
 
     let mut mac_bytes = [0u8; 6];
     for (i, part) in mac_parts.iter().enumerate() {
         mac_bytes[i] = u8::from_str_radix(part, 16)
-            .map_err(|e| Error::Network(format!("Invalid MAC address: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Invalid MAC address: {e}")))?;
     }
 
     let mut req: IfReqSockaddr = unsafe { std::mem::zeroed() };
@@ -451,22 +448,19 @@ pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
         let ip = &addr[..slash_pos];
         let prefix: u8 = addr[slash_pos + 1..]
             .parse()
-            .map_err(|_| Error::Network(format!("Invalid prefix length in: {}", addr)))?;
+            .map_err(|_| Error::Network(format!("Invalid prefix length in: {addr}")))?;
         (ip, prefix)
     } else {
         (addr, 32)
     };
 
     if prefix_len > 32 {
-        return Err(Error::Network(format!(
-            "Invalid prefix length in: {}",
-            addr
-        )));
+        return Err(Error::Network(format!("Invalid prefix length in: {addr}")));
     }
 
     let ip: Ipv4Addr = ip_str
         .parse()
-        .map_err(|_| Error::Network(format!("Invalid IPv4 address: {}", ip_str)))?;
+        .map_err(|_| Error::Network(format!("Invalid IPv4 address: {ip_str}")))?;
 
     fn fill_sockaddr_in(dest: &mut libc::sockaddr_in, ip: Ipv4Addr) {
         dest.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
@@ -601,7 +595,7 @@ pub fn bridge_set_pvid(bridge: &str, member: &str, pvid: u16) -> Result<()> {
         &mut breq as *mut _ as *mut libc::c_void,
         true,
     )
-    .map_err(|e| Error::Network(format!("Failed to set PVID on {}: {}", member, e)))
+    .map_err(|e| Error::Network(format!("Failed to set PVID on {member}: {e}")))
 }
 
 /// Set tagged VLANs on a bridge member (trunk port)
@@ -635,7 +629,7 @@ pub fn bridge_set_tagged_vlans(bridge: &str, member: &str, vlans: &[u16]) -> Res
         &mut vreq as *mut _ as *mut libc::c_void,
         true,
     )
-    .map_err(|e| Error::Network(format!("Failed to set tagged VLANs on {}: {}", member, e)))
+    .map_err(|e| Error::Network(format!("Failed to set tagged VLANs on {member}: {e}")))
 }
 
 /// List member interfaces of a bridge
@@ -673,8 +667,7 @@ pub fn bridge_list_members(bridge: &str) -> Result<Vec<String>> {
                 continue;
             }
             return Err(Error::Network(format!(
-                "Failed to list bridge members: {}",
-                err
+                "Failed to list bridge members: {err}"
             )));
         }
 

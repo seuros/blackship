@@ -415,7 +415,7 @@ impl HealthChecker {
         let check_count = self.config.checks.len();
         let mut results: Vec<Option<CheckResult>> = Vec::with_capacity(check_count);
         let mut recovery_needed: Vec<(usize, RecoveryConfig)> = Vec::new();
-        let mut breaker_updates: Vec<(String, bool, f64)> = Vec::new();
+        let mut breaker_updates: Vec<(usize, bool, f64)> = Vec::new();
 
         // Get current time for rate limiting
         let now_secs = SystemTime::now()
@@ -428,7 +428,7 @@ impl HealthChecker {
             let breaker_closed = self
                 .circuit_breakers
                 .get(&check.name)
-                .map(|b| b.is_closed())
+                .map(breaker_machines::CircuitBreaker::is_closed)
                 .unwrap_or(true);
 
             if !breaker_closed {
@@ -478,11 +478,11 @@ impl HealthChecker {
                 // Reset failure count on success
                 self.check_states[idx].failures = 0;
                 self.check_states[idx].recovery_attempts = 0;
-                breaker_updates.push((check.name.clone(), true, duration_secs));
+                breaker_updates.push((idx, true, duration_secs));
             } else {
                 self.check_states[idx].failures += 1;
                 all_healthy = false;
-                breaker_updates.push((check.name.clone(), false, duration_secs));
+                breaker_updates.push((idx, false, duration_secs));
 
                 if self.check_states[idx].failures >= check.retries {
                     any_failing = true;
@@ -498,8 +498,8 @@ impl HealthChecker {
         }
 
         // Update circuit breakers
-        for (name, success, duration) in breaker_updates {
-            if let Some(breaker) = self.circuit_breakers.get_mut(&name) {
+        for (idx, success, duration) in breaker_updates {
+            if let Some(breaker) = self.circuit_breakers.get_mut(&self.config.checks[idx].name) {
                 if success {
                     breaker.record_success(duration);
                 } else {
@@ -537,7 +537,7 @@ impl HealthChecker {
             && let Some(handle) = &self.warden_handle
             && let Err(e) = handle.notify_healthy(&self.jail_name)
         {
-            eprintln!("Warning: Failed to notify Warden of health recovery: {}", e);
+            eprintln!("Warning: Failed to notify Warden of health recovery: {e}");
         }
 
         Ok(self.status)
@@ -581,11 +581,15 @@ impl HealthChecker {
         match run_supervised(&mut cmd, Duration::from_secs(timeout))
             .map_err(|e| failed(e.to_string()))?
         {
-            Outcome::Exited(out) => Ok((out.success, format!("{}{}", out.stdout, out.stderr))),
+            Outcome::Exited(out) => {
+                let mut combined = out.stdout;
+                combined.push_str(&out.stderr);
+                Ok((out.success, combined))
+            }
             // A timed-out check is a failing check, not a broken one.
             Outcome::TimedOut => Ok((
                 false,
-                format!("Health check timed out after {} seconds", timeout),
+                format!("Health check timed out after {timeout} seconds"),
             )),
         }
     }
@@ -596,13 +600,13 @@ impl HealthChecker {
     fn execute_in_jail(&self, jid: i32, command: &str, timeout: u64) -> Result<(bool, String)> {
         // Use native jexec with timeout - runs sh -c "<command>" inside jail
         match jexec_with_timeout(jid, &["sh", "-c", command], timeout) {
-            Ok((exit_code, stdout, stderr)) => {
-                let combined = format!("{}{}", stdout, stderr);
-                Ok((exit_code == 0, combined))
+            Ok((exit_code, mut stdout, stderr)) => {
+                stdout.push_str(&stderr);
+                Ok((exit_code == 0, stdout))
             }
             Err(Error::JailTimeout(secs)) => Ok((
                 false,
-                format!("Health check timed out after {} seconds", secs),
+                format!("Health check timed out after {secs} seconds"),
             )),
             Err(e) => Err(Error::HealthCheckFailed {
                 jail: self.jail_name.clone(),
@@ -649,7 +653,7 @@ impl HealthChecker {
         if let Some(handle) = &self.warden_handle
             && let Err(e) = handle.notify_health_failure(&self.jail_name)
         {
-            eprintln!("Warning: Failed to notify Warden of health failure: {}", e);
+            eprintln!("Warning: Failed to notify Warden of health failure: {e}");
         }
 
         // Execute recovery action
@@ -671,7 +675,7 @@ impl HealthChecker {
                             return Err(Error::HealthCheckFailed {
                                 jail: self.jail_name.clone(),
                                 check: "recovery".to_string(),
-                                message: format!("Failed to stop jail for restart: {}", e),
+                                message: format!("Failed to stop jail for restart: {e}"),
                             });
                         }
                         // Clear the stored JID since the jail is now stopped
@@ -704,7 +708,7 @@ impl HealthChecker {
                             return Err(Error::HealthCheckFailed {
                                 jail: self.jail_name.clone(),
                                 check: "recovery".to_string(),
-                                message: format!("Failed to stop jail: {}", e),
+                                message: format!("Failed to stop jail: {e}"),
                             });
                         }
                         // Clear the stored JID since the jail is now stopped

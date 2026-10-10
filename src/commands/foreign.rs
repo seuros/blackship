@@ -23,8 +23,7 @@ impl ForeignFormat {
             "ezjail" => Ok(Self::Ezjail),
             "rootfs" | "qjail" => Ok(Self::Rootfs),
             other => Err(Error::InvalidArgument(format!(
-                "Unknown import format '{}' (expected iocage, ezjail, or rootfs)",
-                other
+                "Unknown import format '{other}' (expected iocage, ezjail, or rootfs)"
             ))),
         }
     }
@@ -74,7 +73,7 @@ pub fn handle_foreign_import(
         .arg("-C")
         .arg(&staging)
         .status()
-        .map_err(|e| Error::JailOperation(format!("Failed to run tar: {}", e)))?;
+        .map_err(|e| Error::JailOperation(format!("Failed to run tar: {e}")))?;
     if !status.success() {
         return Err(Error::JailOperation(format!(
             "Failed to extract '{}'",
@@ -111,7 +110,7 @@ pub fn handle_foreign_import(
         .arg(format!("{}/.", root_source.display()))
         .arg(&target)
         .status()
-        .map_err(|e| Error::JailOperation(format!("Failed to copy root: {}", e)))?;
+        .map_err(|e| Error::JailOperation(format!("Failed to copy root: {e}")))?;
     if !status.success() {
         return Err(Error::JailOperation(
             "Failed to copy imported root into place".to_string(),
@@ -122,15 +121,15 @@ pub fn handle_foreign_import(
     println!("Imported '{}' -> {}", file.display(), target.display());
     println!("\nAdd it to blackship.toml:");
     println!("[[jails]]");
-    println!("name = \"{}\"", jail_name);
+    println!("name = \"{jail_name}\"");
     if let Some(release) = release_hint {
-        println!("# origin release: {}", release);
+        println!("# origin release: {release}");
     }
     println!("\n[jails.network]");
     println!("vnet = true");
     println!("networks = [\"default\"]");
     match ip_hint {
-        Some(ip) => println!("ip = \"{}\"", ip),
+        Some(ip) => println!("ip = \"{ip}\""),
         None => println!("# ip = \"10.0.1.x\""),
     }
     if format == ForeignFormat::Ezjail {
@@ -150,7 +149,7 @@ fn import_iocage(
         Error::JailOperation("No config.json in archive; not an iocage export?".to_string())
     })?;
     let parsed: serde_json::Value = serde_json::from_slice(&std::fs::read(&config_json)?)
-        .map_err(|e| Error::JailOperation(format!("Invalid iocage config.json: {}", e)))?;
+        .map_err(|e| Error::JailOperation(format!("Invalid iocage config.json: {e}")))?;
 
     let jail_name = name
         .or_else(|| {

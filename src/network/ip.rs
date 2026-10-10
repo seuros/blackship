@@ -42,8 +42,7 @@ impl IpPool {
     pub fn with_gateway(subnet: IpNet, gateway: IpAddr) -> Result<Self> {
         if !subnet.contains(&gateway) {
             return Err(Error::Network(format!(
-                "Gateway {} is not in subnet {}",
-                gateway, subnet
+                "Gateway {gateway} is not in subnet {subnet}"
             )));
         }
 
@@ -76,8 +75,7 @@ impl IpPool {
 
         if self.allocated.contains(&addr) {
             return Err(Error::Network(format!(
-                "Address {} is already allocated",
-                addr
+                "Address {addr} is already allocated"
             )));
         }
 
@@ -106,8 +104,7 @@ impl IpPool {
             }
         }
         Err(Error::Network(format!(
-            "No available addresses in {}",
-            subnet
+            "No available addresses in {subnet}"
         )))
     }
 
@@ -188,7 +185,7 @@ impl IpAllocator {
         let pool = self
             .pools
             .get_mut(network)
-            .ok_or_else(|| Error::Network(format!("Network '{}' not found", network)))?;
+            .ok_or_else(|| Error::Network(format!("Network '{network}' not found")))?;
         pool.allocate()
     }
 

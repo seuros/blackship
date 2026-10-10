@@ -77,7 +77,7 @@ fn report(orphans: &[Orphan], dry_run: bool) {
         };
         println!("  {} -- {}", label, orphan.reason);
         for resource in &orphan.resources {
-            println!("      {}", resource);
+            println!("      {resource}");
         }
         if orphan.requires_force {
             println!("      requires --force");

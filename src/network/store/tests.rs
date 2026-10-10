@@ -6,7 +6,7 @@ fn temp_store_root() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("blackship-network-store-{}", unique))
+    std::env::temp_dir().join(format!("blackship-network-store-{unique}"))
 }
 
 #[test]

@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 use crate::manifest;
 use crate::scope::ScopeStore;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 /// Everything derivable from a jail's event history.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -14,7 +15,7 @@ pub struct Summary {
     pub first_seen: Option<i64>,
     pub last_seen: Option<i64>,
     pub lifetime_secs: Option<i64>,
-    pub event_counts: BTreeMap<String, usize>,
+    pub event_counts: BTreeMap<&'static str, usize>,
     pub peaks: BTreeMap<String, String>,
     pub peak_samples: Option<String>,
     pub termination: Option<String>,
@@ -36,16 +37,14 @@ pub fn summarize(records: &[AuditRecord]) -> Summary {
     for record in records {
         *summary
             .event_counts
-            .entry(record.event.as_str().to_string())
+            .entry(record.event.as_str())
             .or_insert(0) += 1;
 
         for (key, value) in &record.detail {
             match key.strip_prefix("peak.") {
-                Some("samples") => summary.peak_samples = Some(value.to_string()),
+                Some("samples") => summary.peak_samples = Some(value.clone()),
                 Some(resource) => {
-                    summary
-                        .peaks
-                        .insert(resource.to_string(), value.to_string());
+                    summary.peaks.insert(resource.to_string(), value.clone());
                 }
                 None => {}
             }
@@ -93,10 +92,13 @@ pub fn handle_audit(config_path: &Path, jail: String, json: bool) -> Result<()> 
     let log = AuditLog::from_config(Some(&config));
     let scopes = ScopeStore::from_config(Some(&config));
 
-    let candidates = if jail.starts_with(&format!("{}-", project)) {
+    let prefixed = jail
+        .strip_prefix(project)
+        .is_some_and(|rest| rest.starts_with('-'));
+    let candidates = if prefixed {
         vec![jail.clone()]
     } else {
-        vec![format!("{}-{}", project, jail), jail.clone()]
+        vec![format!("{project}-{jail}"), jail.clone()]
     };
 
     let mut resolved = None;
@@ -152,22 +154,24 @@ fn print_json(full_name: &str, records: &[AuditRecord], summary: &Summary) -> Re
     });
 
     let rendered = serde_json::to_string_pretty(&value)
-        .map_err(|e| Error::State(format!("Failed to render audit JSON: {}", e)))?;
-    println!("{}", rendered);
+        .map_err(|e| Error::State(format!("Failed to render audit JSON: {e}")))?;
+    println!("{rendered}");
     Ok(())
 }
 
 fn print_timeline(full_name: &str, records: &[AuditRecord], summary: &Summary) {
-    println!("Audit history for '{}'", full_name);
+    println!("Audit history for '{full_name}'");
     println!();
 
+    let mut detail = String::new();
     for record in records {
-        let detail = record
-            .detail
-            .iter()
-            .map(|(key, value)| format!("{}={}", key, value))
-            .collect::<Vec<_>>()
-            .join(" ");
+        detail.clear();
+        for (key, value) in &record.detail {
+            if !detail.is_empty() {
+                detail.push(' ');
+            }
+            let _ = write!(detail, "{key}={value}");
+        }
         println!(
             "  {}  {:<14} {}",
             format_ts(record.ts),
@@ -183,11 +187,11 @@ fn print_timeline(full_name: &str, records: &[AuditRecord], summary: &Summary) {
 
     if !summary.peaks.is_empty() {
         match &summary.peak_samples {
-            Some(samples) => println!("Peak usage (max over {} samples, not exact):", samples),
+            Some(samples) => println!("Peak usage (max over {samples} samples, not exact):"),
             None => println!("Peak usage (sampled, not exact):"),
         }
         for (resource, value) in &summary.peaks {
-            println!("  {:<14} {}", resource, value);
+            println!("  {resource:<14} {value}");
         }
     }
 
@@ -196,7 +200,7 @@ fn print_timeline(full_name: &str, records: &[AuditRecord], summary: &Summary) {
     }
 
     match &summary.termination {
-        Some(reason) => println!("Termination: {}", reason),
+        Some(reason) => println!("Termination: {reason}"),
         None => println!("Termination: none recorded (jail may still be running)"),
     }
 }

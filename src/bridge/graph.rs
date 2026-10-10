@@ -25,8 +25,7 @@ impl Bridge {
             .map_err(|cycle| {
                 let cycle_node = &self.graph[cycle.node_id()];
                 Error::ConfigValidation(format!(
-                    "Cyclic dependency detected involving jail '{}'",
-                    cycle_node
+                    "Cyclic dependency detected involving jail '{cycle_node}'"
                 ))
             })
     }
@@ -153,7 +152,7 @@ impl Bridge {
             order
                 .iter()
                 .filter(|n| set.contains(**n))
-                .map(|n| n.to_string())
+                .map(std::string::ToString::to_string)
                 .collect()
         };
 

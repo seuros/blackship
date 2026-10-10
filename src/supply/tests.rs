@@ -26,8 +26,7 @@ fn test_client_errors_are_not_retried() {
     for code in [400, 401, 403, 404, 410, 451] {
         assert!(
             !is_retryable(&ureq::Error::StatusCode(code)),
-            "{} should fail fast",
-            code
+            "{code} should fail fast"
         );
     }
 }
@@ -38,8 +37,7 @@ fn test_transient_statuses_are_retried() {
     for code in [408, 429, 500, 502, 503, 504] {
         assert!(
             is_retryable(&ureq::Error::StatusCode(code)),
-            "{} should be retried",
-            code
+            "{code} should be retried"
         );
     }
 }

@@ -138,8 +138,7 @@ fn parse_line(line: &str) -> Result<Option<Instruction>> {
     match result {
         Ok((_, instruction)) => Ok(instruction),
         Err(_) => Err(Error::TemplateParseFailed(format!(
-            "Unknown instruction: {}",
-            line
+            "Unknown instruction: {line}"
         ))),
     }
 }

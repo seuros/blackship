@@ -83,7 +83,7 @@ fn restart(ctx: &SupervisorCtx) -> impl Future<Output = SupervisorEvent> + Send 
 
         match result {
             Ok(()) => {
-                println!("Warden: Jail '{}' restarted successfully", name);
+                println!("Warden: Jail '{name}' restarted successfully");
                 match crate::jail::jail_getid(&name) {
                     Ok(jid) => {
                         if let Err(e) = tx.try_send(WardenEvent::RegisterJail {
@@ -92,20 +92,18 @@ fn restart(ctx: &SupervisorCtx) -> impl Future<Output = SupervisorEvent> + Send 
                             descriptor_fd,
                         }) {
                             eprintln!(
-                                "Warden: Failed to re-register jail '{}' for monitoring: {}",
-                                name, e
+                                "Warden: Failed to re-register jail '{name}' for monitoring: {e}"
                             );
                         }
                     }
                     Err(e) => eprintln!(
-                        "Warden: Restarted jail '{}' but could not resolve its jid: {}",
-                        name, e
+                        "Warden: Restarted jail '{name}' but could not resolve its jid: {e}"
                     ),
                 }
                 SupervisorEvent::Restarted
             }
             Err(e) => {
-                eprintln!("Warden: Failed to restart jail '{}': {}", name, e);
+                eprintln!("Warden: Failed to restart jail '{name}': {e}");
                 SupervisorEvent::Relapsed
             }
         }

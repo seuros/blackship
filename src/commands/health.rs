@@ -1,5 +1,6 @@
 //! Health check command
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::error::Result;
@@ -32,7 +33,7 @@ pub fn handle(
         if json {
             println!("[]");
         } else if let Some(name) = jail {
-            println!("Jail '{}' not found in configuration.", name);
+            println!("Jail '{name}' not found in configuration.");
         } else {
             println!("No jails defined in configuration.");
         }
@@ -109,21 +110,21 @@ pub fn handle(
                     "checks": checks
                 }));
             } else {
-                let checks_summary: String = check_results
-                    .iter()
-                    .map(|(_check, result, failures)| match result {
+                let mut checks_summary = String::new();
+                for (_check, result, failures) in &check_results {
+                    if !checks_summary.is_empty() {
+                        checks_summary.push_str(", ");
+                    }
+                    match result {
                         Some(r) => {
-                            let summary = r.summary();
+                            checks_summary.push_str(&r.summary());
                             if *failures > 0 {
-                                format!("{} ({}x)", summary, failures)
-                            } else {
-                                summary
+                                let _ = write!(checks_summary, " ({failures}x)");
                             }
                         }
-                        None => "?".to_string(),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                        None => checks_summary.push('?'),
+                    }
+                }
 
                 let status_str = match status {
                     HealthStatus::Healthy => "\x1b[32mhealthy\x1b[0m",

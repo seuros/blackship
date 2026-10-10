@@ -35,10 +35,8 @@ impl EpairInterface {
         // The jail side is the same but with 'b' instead of 'a'
         let jail_side = host_side
             .strip_suffix('a')
-            .map(|s| format!("{}b", s))
-            .ok_or_else(|| {
-                Error::Network(format!("Unexpected epair name format: {}", host_side))
-            })?;
+            .map(|s| format!("{s}b"))
+            .ok_or_else(|| Error::Network(format!("Unexpected epair name format: {host_side}")))?;
 
         // Bring host side up using native ioctl
         if let Err(e) = ioctl::set_interface_up(&host_side, true) {
@@ -97,26 +95,24 @@ impl EpairInterface {
         // Configure IP address inside jail using native jexec syscall
         let (exit_code, _stdout, stderr) =
             jexec_with_output(jid, &["ifconfig", interface, addr])
-                .map_err(|e| Error::Network(format!("Failed to configure interface: {}", e)))?;
+                .map_err(|e| Error::Network(format!("Failed to configure interface: {e}")))?;
 
         if exit_code != 0 {
             let stderr_str = String::from_utf8_lossy(&stderr);
             return Err(Error::Network(format!(
-                "Failed to configure {} in jail {}: {}",
-                interface, jid, stderr_str
+                "Failed to configure {interface} in jail {jid}: {stderr_str}"
             )));
         }
 
         // Bring interface up using native jexec syscall
         let (exit_code, _stdout, stderr) =
             jexec_with_output(jid, &["ifconfig", interface, "up"])
-                .map_err(|e| Error::Network(format!("Failed to bring up interface: {}", e)))?;
+                .map_err(|e| Error::Network(format!("Failed to bring up interface: {e}")))?;
 
         if exit_code != 0 {
             let stderr_str = String::from_utf8_lossy(&stderr);
             return Err(Error::Network(format!(
-                "Failed to bring up {} in jail {}: {}",
-                interface, jid, stderr_str
+                "Failed to bring up {interface} in jail {jid}: {stderr_str}"
             )));
         }
 
@@ -124,15 +120,14 @@ impl EpairInterface {
         if let Some(gw) = gateway {
             let (exit_code, _stdout, stderr) =
                 jexec_with_output(jid, &["route", "add", "default", gw])
-                    .map_err(|e| Error::Network(format!("Failed to add route: {}", e)))?;
+                    .map_err(|e| Error::Network(format!("Failed to add route: {e}")))?;
 
             if exit_code != 0 {
                 let stderr_str = String::from_utf8_lossy(&stderr);
                 // Don't fail if route already exists
                 if !stderr_str.contains("File exists") {
                     return Err(Error::Network(format!(
-                        "Failed to add default route in jail {}: {}",
-                        jid, stderr_str
+                        "Failed to add default route in jail {jid}: {stderr_str}"
                     )));
                 }
             }

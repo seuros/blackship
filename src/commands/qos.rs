@@ -44,10 +44,7 @@ pub fn handle_qos(
             println!("{}: already in {} profile", jail, target.as_str());
         }
         ShiftOutcome::NotConfigured => {
-            println!(
-                "{}: no [jails.qos] block configured; resource limits are static",
-                jail
-            );
+            println!("{jail}: no [jails.qos] block configured; resource limits are static");
         }
     }
 

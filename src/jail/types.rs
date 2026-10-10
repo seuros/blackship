@@ -115,8 +115,7 @@ impl TryFrom<&toml::Value> for ParamValue {
             toml::Value::Boolean(b) => Ok(ParamValue::Bool(*b)),
             toml::Value::String(s) => Ok(ParamValue::String(s.clone())),
             _ => Err(Error::ConfigValidation(format!(
-                "Unsupported parameter type: {:?}",
-                value
+                "Unsupported parameter type: {value:?}"
             ))),
         }
     }

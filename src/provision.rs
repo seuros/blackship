@@ -209,8 +209,7 @@ impl Provisioner {
         let host = crate::sys::OsVersion::detect_kernel()?;
         if version.major > host.major {
             return Err(Error::JailOperation(format!(
-                "Cannot bootstrap {} on a FreeBSD {} host: jail userlands must not be newer than the kernel",
-                release, host
+                "Cannot bootstrap {release} on a FreeBSD {host} host: jail userlands must not be newer than the kernel"
             )));
         }
 
@@ -246,7 +245,7 @@ impl Provisioner {
             ),
         )?;
 
-        eprintln!("Bootstrapping {} via pkgbase ({} / {})", release, abi, repo);
+        eprintln!("Bootstrapping {release} via pkgbase ({abi} / {repo})");
         // pkg(8) itself lives in the ports repo, not base; jails bootstrap
         // it on first `pkg` use like any fresh FreeBSD install.
         for pkg_args in [
@@ -258,11 +257,11 @@ impl Provisioner {
                 .arg(&release_path)
                 .arg("--repo-conf-dir")
                 .arg(&repo_dir)
-                .args(["-o", &format!("ABI={}", abi)])
+                .args(["-o", &format!("ABI={abi}")])
                 .args(["-o", "IGNORE_OSVERSION=yes"])
                 .args(&pkg_args)
                 .status()
-                .map_err(|e| Error::JailOperation(format!("Failed to run pkg: {}", e)))?;
+                .map_err(|e| Error::JailOperation(format!("Failed to run pkg: {e}")))?;
             if !status.success() {
                 return Err(Error::JailOperation(format!(
                     "pkg {} failed for pkgbase bootstrap of {}",
@@ -332,7 +331,7 @@ impl Provisioner {
         // Download and extract each archive with retry
         for archive in &self.archives {
             let url = self.archive_url(release, archive);
-            let cache_file = self.cache_dir.join(format!("{}-{}.txz", release, archive));
+            let cache_file = self.cache_dir.join(format!("{release}-{archive}.txz"));
 
             // Get expected checksum
             let expected_sha256 = checksums.get(archive.as_str());
@@ -361,19 +360,19 @@ impl Provisioner {
 
                 let result: Result<()> = (|| {
                     if needs_download {
-                        eprintln!("Downloading {}.txz...", archive);
+                        eprintln!("Downloading {archive}.txz...");
                         download_file(
                             &url,
                             &cache_file,
-                            expected_sha256.map(|s| s.as_str()),
+                            expected_sha256.map(std::string::String::as_str),
                             &self.retry_config,
                         )?;
                     } else {
-                        eprintln!("Using cached {}.txz", archive);
+                        eprintln!("Using cached {archive}.txz");
                     }
 
                     // Extract archive
-                    eprintln!("Extracting {}.txz...", archive);
+                    eprintln!("Extracting {archive}.txz...");
                     self.extract_txz(&cache_file, &release_path)?;
                     Ok(())
                 })();
@@ -383,8 +382,7 @@ impl Provisioner {
                     Err(e) => {
                         if let Some(delay_ms) = backoff.delay(attempt, &mut rng) {
                             eprintln!(
-                                "Archive {} attempt {} failed, retrying in {}ms...",
-                                archive, attempt, delay_ms
+                                "Archive {archive} attempt {attempt} failed, retrying in {delay_ms}ms..."
                             );
                             // Remove potentially corrupt cached file before retry
                             let _ = fs::remove_file(&cache_file);
@@ -449,9 +447,9 @@ impl Provisioner {
         }
 
         fs::remove_dir_all(&path)
-            .map_err(|e| Error::ExtractionFailed(format!("Failed to delete release: {}", e)))?;
+            .map_err(|e| Error::ExtractionFailed(format!("Failed to delete release: {e}")))?;
 
-        eprintln!("Deleted release: {}", release);
+        eprintln!("Deleted release: {release}");
         Ok(())
     }
 
@@ -467,7 +465,7 @@ impl Provisioner {
 
         for path in essential_paths {
             if !release_path.join(path).exists() {
-                eprintln!("Missing essential file: {}", path);
+                eprintln!("Missing essential file: {path}");
                 return Ok(false);
             }
         }

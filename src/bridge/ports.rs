@@ -58,12 +58,11 @@ impl Bridge {
             }
 
             leased_ip.ok_or_else(|| {
-                Error::Network(format!("Jail '{}' has no IP address configured", full_name))
+                Error::Network(format!("Jail '{full_name}' has no IP address configured"))
             })?
         } else {
             return Err(Error::Network(format!(
-                "Jail '{}' has no IP address configured",
-                full_name
+                "Jail '{full_name}' has no IP address configured"
             )));
         };
 
@@ -98,7 +97,7 @@ impl Bridge {
         self.bulkhead.remove_jail_forwards(&full_name)?;
 
         if self.verbose {
-            println!("Removed port forwards for jail '{}'", full_name);
+            println!("Removed port forwards for jail '{full_name}'");
         }
 
         Ok(())

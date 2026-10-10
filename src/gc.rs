@@ -88,25 +88,25 @@ pub fn classify(survey: &Survey) -> Vec<Orphan> {
 
         let mut resources = Vec::new();
         if let Some(subject) = &scope.rctl_subject {
-            resources.push(format!("rctl {}", subject));
+            resources.push(format!("rctl {subject}"));
         }
         if scope.has_vnet_record {
             resources.push("vnet".to_string());
         }
         if let Some(anchor) = &scope.drain_anchor {
-            resources.push(format!("pf anchor {}", anchor));
+            resources.push(format!("pf anchor {anchor}"));
         }
         for mount in &scope.mounts {
             resources.push(format!("mount {}", mount.display()));
         }
         for ip in &scope.allocated_ips {
-            resources.push(format!("lease {}", ip));
+            resources.push(format!("lease {ip}"));
         }
         if let Some(dataset) = &scope.zfs_dataset {
             resources.push(if scope.ephemeral {
-                format!("dataset {} (ephemeral)", dataset)
+                format!("dataset {dataset} (ephemeral)")
             } else {
-                format!("dataset {} (retained)", dataset)
+                format!("dataset {dataset} (retained)")
             });
         }
 
@@ -232,7 +232,7 @@ impl Reaper {
                     live.insert(name);
                 }
                 Err(e) if self.verbose => {
-                    eprintln!("Warning: could not read name of JID {}: {}", jid, e)
+                    eprintln!("Warning: could not read name of JID {jid}: {e}");
                 }
                 Err(_) => {}
             }
@@ -246,7 +246,7 @@ impl Reaper {
             datasets: self
                 .zfs
                 .as_ref()
-                .map(|zfs| zfs.list_jail_datasets())
+                .map(super::zfs::ZfsManager::list_jail_datasets)
                 .unwrap_or_default(),
             drain_anchors: crate::bulkhead::list_drain_anchors(),
         })
@@ -327,24 +327,21 @@ impl Reaper {
                 match &self.zfs {
                     Some(zfs) => {
                         if let Err(e) = zfs.destroy_jail_dataset(&scope.name) {
-                            eprintln!("Warning: failed to destroy '{}': {}", dataset, e);
-                            residual.push(format!("dataset {}", dataset));
+                            eprintln!("Warning: failed to destroy '{dataset}': {e}");
+                            residual.push(format!("dataset {dataset}"));
                         }
                     }
-                    None => residual.push(format!("dataset {}", dataset)),
+                    None => residual.push(format!("dataset {dataset}")),
                 }
             } else {
-                println!(
-                    "  Keeping non-ephemeral dataset '{}' (use --force to destroy)",
-                    dataset
-                );
+                println!("  Keeping non-ephemeral dataset '{dataset}' (use --force to destroy)");
             }
         }
 
         let released = self.lease_store.release_owner(&scope.name)?;
         if self.verbose {
             for (network, ip) in &released {
-                println!("  Released {} from network '{}'", ip, network);
+                println!("  Released {ip} from network '{network}'");
             }
         }
 
@@ -387,7 +384,7 @@ pub fn auto_reconcile(config: &BlackshipConfig, verbose: bool) {
         Ok(reaper) => reaper,
         Err(e) => {
             if verbose {
-                eprintln!("Warning: skipping reconcile: {}", e);
+                eprintln!("Warning: skipping reconcile: {e}");
             }
             return;
         }
@@ -396,7 +393,7 @@ pub fn auto_reconcile(config: &BlackshipConfig, verbose: bool) {
     let survey = match reaper.survey() {
         Ok(survey) => survey,
         Err(e) => {
-            eprintln!("Warning: reconcile survey failed: {}", e);
+            eprintln!("Warning: reconcile survey failed: {e}");
             return;
         }
     };
@@ -411,7 +408,7 @@ pub fn auto_reconcile(config: &BlackshipConfig, verbose: bool) {
             orphan.jail
         );
         if let Err(e) = reaper.reap(&orphan, false, false) {
-            eprintln!("Warning: {}", e);
+            eprintln!("Warning: {e}");
         }
     }
 }

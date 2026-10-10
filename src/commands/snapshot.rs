@@ -52,16 +52,16 @@ pub(crate) fn stage_config_in_dataset(
     }
     let stage = root.join(".blackship");
     if let Err(e) = std::fs::create_dir_all(&stage) {
-        eprintln!("Warning: failed to stage config in dataset: {}", e);
+        eprintln!("Warning: failed to stage config in dataset: {e}");
         return;
     }
     match toml::to_string_pretty(jail_def) {
         Ok(serialized) => {
             if let Err(e) = std::fs::write(stage.join("jail.toml"), serialized) {
-                eprintln!("Warning: failed to write staged jail.toml: {}", e);
+                eprintln!("Warning: failed to write staged jail.toml: {e}");
             }
         }
-        Err(e) => eprintln!("Warning: failed to serialize jail definition: {}", e),
+        Err(e) => eprintln!("Warning: failed to serialize jail definition: {e}"),
     }
     let jailfile = jail_def
         .jailfile
@@ -97,10 +97,7 @@ pub fn handle_commit(config_path: &Path, jail: String, release: String) -> Resul
         release,
         release_path.display()
     );
-    println!(
-        "Use it with: FROM {}  (Jailfile) or release = \"{}\"",
-        release, release
-    );
+    println!("Use it with: FROM {release}  (Jailfile) or release = \"{release}\"");
     Ok(())
 }
 
@@ -114,7 +111,7 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
 
             stage_config_in_dataset(&config, &service_name, &full_name);
             let snap_name = zfs.create_snapshot(&full_name, name.as_deref())?;
-            println!("Created snapshot: {}@{}", full_name, snap_name);
+            println!("Created snapshot: {full_name}@{snap_name}");
         }
         SnapshotAction::List { jail, json } => {
             let (_service_name, full_name) = resolve_jail(&config, &jail)?;
@@ -135,9 +132,9 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
                     .collect();
                 println!("{}", serde_json::to_string_pretty(&json_data).unwrap());
             } else if snapshots.is_empty() {
-                println!("No snapshots for jail '{}'.", full_name);
+                println!("No snapshots for jail '{full_name}'.");
             } else {
-                println!("Snapshots for jail '{}':", full_name);
+                println!("Snapshots for jail '{full_name}':");
                 println!(
                     "{:<30} {:<24} {:<10} {:<10}",
                     "NAME", "CREATED", "USED", "REFER"
@@ -160,22 +157,18 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
 
             if jail::jail_getid(&full_name).is_ok() {
                 return Err(error::Error::JailOperation(format!(
-                    "Jail '{}' is running. Stop it first with 'blackship down {}'",
-                    full_name, full_name
+                    "Jail '{full_name}' is running. Stop it first with 'blackship down {full_name}'"
                 )));
             }
 
             zfs.rollback_snapshot(&full_name, &snapshot, force)?;
-            println!(
-                "Rolled back jail '{}' to snapshot '{}'",
-                full_name, snapshot
-            );
+            println!("Rolled back jail '{full_name}' to snapshot '{snapshot}'");
         }
         SnapshotAction::Delete { jail, snapshot } => {
             let (_service_name, full_name) = resolve_jail(&config, &jail)?;
 
             zfs.delete_snapshot(&full_name, &snapshot)?;
-            println!("Deleted snapshot '{}@{}'", full_name, snapshot);
+            println!("Deleted snapshot '{full_name}@{snapshot}'");
         }
     }
 
@@ -198,8 +191,7 @@ pub fn handle_clone(config_path: &Path, source: String, name: String) -> Result<
 
     if config.resolve_jail_names(&name).is_some() {
         return Err(error::Error::JailOperation(format!(
-            "Jail '{}' already exists in config",
-            name
+            "Jail '{name}' already exists in config"
         )));
     }
 
@@ -208,14 +200,11 @@ pub fn handle_clone(config_path: &Path, source: String, name: String) -> Result<
     let new_full_name = config.jail_name(&name);
     let new_path = zfs.clone_from_snapshot(&source_full, snapshot, &new_full_name)?;
 
-    println!(
-        "Cloned '{}@{}' to new jail '{}'",
-        source_full, snapshot, new_full_name
-    );
+    println!("Cloned '{source_full}@{snapshot}' to new jail '{new_full_name}'");
     println!("Path: {}", new_path.display());
     println!("\nTo use this jail, add it to blackship.toml:");
     println!("  [[jails]]");
-    println!("  name = \"{}\"", name);
+    println!("  name = \"{name}\"");
     println!("  path = \"{}\"", new_path.display());
 
     Ok(())
@@ -237,7 +226,7 @@ pub fn handle_export(
     let jail_path = jail_def.effective_path(&config.config, &full_name);
 
     let output_path =
-        output.unwrap_or_else(|| std::path::PathBuf::from(format!("{}.tar.zst", full_name)));
+        output.unwrap_or_else(|| std::path::PathBuf::from(format!("{full_name}.tar.zst")));
 
     let hostname = jail_def.hostname.as_deref();
     let ip = jail_def
@@ -301,7 +290,7 @@ pub fn handle_import(
 
     println!("\nTo add the imported jail to your config:");
     println!("  [[jails]]");
-    println!("  name = \"{}\"", imported_name);
+    println!("  name = \"{imported_name}\"");
     println!("  path = \"{}\"", target_path.display());
 
     Ok(())

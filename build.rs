@@ -11,11 +11,11 @@ use std::{env, fs};
 const SHIM: &str = "build/sys_consts.c";
 
 fn main() {
-    println!("cargo:rerun-if-changed={}", SHIM);
+    println!("cargo:rerun-if-changed={SHIM}");
     println!("cargo:rerun-if-env-changed=CC");
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("freebsd") {
-        panic!("blackship targets FreeBSD only; {} needs its headers", SHIM);
+        panic!("blackship targets FreeBSD only; {SHIM} needs its headers");
     }
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR unset"));
@@ -30,8 +30,8 @@ fn main() {
         .arg(&exe)
         .arg(SHIM)
         .status()
-        .unwrap_or_else(|e| panic!("failed to run {}: {}", cc, e));
-    assert!(status.success(), "{} failed to compile {}", cc, SHIM);
+        .unwrap_or_else(|e| panic!("failed to run {cc}: {e}"));
+    assert!(status.success(), "{cc} failed to compile {SHIM}");
 
     let output = Command::new(&exe)
         .output()

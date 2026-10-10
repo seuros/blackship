@@ -29,6 +29,7 @@ mod provision;
 mod rctl;
 mod scope;
 mod sickbay;
+mod strings;
 mod supply;
 mod sys;
 mod telemetry;

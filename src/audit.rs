@@ -88,7 +88,7 @@ impl AuditLog {
     /// Append a record to the jail's log and export it.
     pub fn record(&self, record: &AuditRecord) {
         if let Err(e) = self.append(record) {
-            eprintln!("Warning: failed to write audit record: {}", e);
+            eprintln!("Warning: failed to write audit record: {e}");
         }
         crate::telemetry::emit(record);
     }
@@ -100,21 +100,21 @@ impl AuditLog {
     pub fn append(&self, record: &AuditRecord) -> Result<()> {
         validate_name(&record.jail)?;
         fs::create_dir_all(&self.root)
-            .map_err(|e| Error::State(format!("Failed to create audit dir: {}", e)))?;
+            .map_err(|e| Error::State(format!("Failed to create audit dir: {e}")))?;
 
         let path = self.log_path(&record.jail);
         self.rotate_if_needed(&path)?;
 
         let line = serde_json::to_string(record)
-            .map_err(|e| Error::State(format!("Failed to serialize audit record: {}", e)))?;
+            .map_err(|e| Error::State(format!("Failed to serialize audit record: {e}")))?;
 
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
-            .map_err(|e| Error::State(format!("Failed to open audit log: {}", e)))?;
-        writeln!(file, "{}", line)
-            .map_err(|e| Error::State(format!("Failed to append audit record: {}", e)))
+            .map_err(|e| Error::State(format!("Failed to open audit log: {e}")))?;
+        writeln!(file, "{line}")
+            .map_err(|e| Error::State(format!("Failed to append audit record: {e}")))
     }
 
     /// Read a jail's history, oldest first, including the rotated generation.
@@ -125,12 +125,12 @@ impl AuditLog {
             let content = match fs::read_to_string(&path) {
                 Ok(content) => content,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(Error::State(format!("Failed to read audit log: {}", e))),
+                Err(e) => return Err(Error::State(format!("Failed to read audit log: {e}"))),
             };
             for line in content.lines().filter(|l| !l.trim().is_empty()) {
                 match serde_json::from_str::<AuditRecord>(line) {
                     Ok(record) => records.push(record),
-                    Err(e) => eprintln!("Warning: skipping malformed audit line: {}", e),
+                    Err(e) => eprintln!("Warning: skipping malformed audit line: {e}"),
                 }
             }
         }
@@ -144,7 +144,7 @@ impl AuditLog {
             if let Err(e) = fs::remove_file(&path)
                 && e.kind() != std::io::ErrorKind::NotFound
             {
-                return Err(Error::State(format!("Failed to remove audit log: {}", e)));
+                return Err(Error::State(format!("Failed to remove audit log: {e}")));
             }
         }
         Ok(())
@@ -159,15 +159,15 @@ impl AuditLog {
 
         let rotated = path.with_extension("jsonl.1");
         fs::rename(path, &rotated)
-            .map_err(|e| Error::State(format!("Failed to rotate audit log: {}", e)))
+            .map_err(|e| Error::State(format!("Failed to rotate audit log: {e}")))
     }
 
     fn log_path(&self, jail: &str) -> PathBuf {
-        self.root.join(format!("{}.jsonl", jail))
+        self.root.join(format!("{jail}.jsonl"))
     }
 
     fn rotated_path(&self, jail: &str) -> PathBuf {
-        self.root.join(format!("{}.jsonl.1", jail))
+        self.root.join(format!("{jail}.jsonl.1"))
     }
 }
 

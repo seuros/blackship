@@ -61,8 +61,7 @@ pub fn handle_bootstrap(
             dataset_backed = true;
         } else {
             println!(
-                "Release '{}' is a plain directory; re-run with --force to make it clone-ready.",
-                release
+                "Release '{release}' is a plain directory; re-run with --force to make it clone-ready."
             );
         }
     }
@@ -75,7 +74,7 @@ pub fn handle_bootstrap(
 
     if dataset_backed && let Some(zfs) = &zfs {
         zfs.snapshot_release_pristine(&release)?;
-        println!("Release '{}' is clone-ready (@pristine).", release);
+        println!("Release '{release}' is clone-ready (@pristine).");
     }
     Ok(())
 }
@@ -133,9 +132,9 @@ pub fn handle_releases(
         }
         ReleasesAction::Verify { release } => {
             if bs.verify(&release)? {
-                println!("Release '{}' is valid.", release);
+                println!("Release '{release}' is valid.");
             } else {
-                println!("Release '{}' is corrupted or incomplete.", release);
+                println!("Release '{release}' is corrupted or incomplete.");
                 std::process::exit(1);
             }
         }

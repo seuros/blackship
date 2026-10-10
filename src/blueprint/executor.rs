@@ -61,7 +61,7 @@ impl TemplateExecutor {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(prev.as_bytes());
-        hasher.update(format!("{:?}", instruction).as_bytes());
+        hasher.update(format!("{instruction:?}").as_bytes());
         if let Instruction::Copy(spec) = instruction
             && let Ok(src_path) = self.context.resolve_source(&spec.src)
         {
@@ -77,7 +77,7 @@ impl TemplateExecutor {
 
     /// Execute a Jailfile to build a jail
     pub fn execute(&mut self, jailfile: &Jailfile) -> Result<()> {
-        self.context.log(&format!(
+        self.context.log(format_args!(
             "Building jail '{}' from {:?}",
             self.context.jail_name(),
             jailfile.from
@@ -136,12 +136,12 @@ impl TemplateExecutor {
             {
                 let layer = crate::zfs::ZfsManager::layer_snapshot_name(index, &keys[index][..12]);
                 if let Err(e) = cache.zfs.create_layer(&cache.jail, &layer) {
-                    eprintln!("Warning: failed to snapshot build layer: {}", e);
+                    eprintln!("Warning: failed to snapshot build layer: {e}");
                 }
             }
         }
 
-        self.context.log(&format!(
+        self.context.log(format_args!(
             "Build complete for '{}'",
             self.context.jail_name()
         ));
@@ -153,18 +153,18 @@ impl TemplateExecutor {
     fn execute_instruction(&mut self, instruction: &Instruction) -> Result<()> {
         match instruction {
             Instruction::From(release) => {
-                self.context.log(&format!("FROM {}", release));
+                self.context.log(format_args!("FROM {release}"));
                 // FROM is handled at a higher level (bootstrap)
                 // The jail root should already be populated from the base release
             }
 
             Instruction::Arg(arg) => {
-                self.context.log(&format!(
+                self.context.log(format_args!(
                     "ARG {}{}",
                     arg.name,
                     arg.default
                         .as_ref()
-                        .map(|d| format!("={}", d))
+                        .map(|d| format!("={d}"))
                         .unwrap_or_default()
                 ));
                 // Args are processed before instruction execution
@@ -172,13 +172,13 @@ impl TemplateExecutor {
 
             Instruction::Env(name, value) => {
                 let value = self.context.substitute(value);
-                self.context.log(&format!("ENV {}={}", name, value));
+                self.context.log(format_args!("ENV {name}={value}"));
                 self.context.set_env(name, &value);
             }
 
             Instruction::Run(command) => {
                 let command = self.context.substitute(command);
-                self.context.log(&format!("RUN {}", command));
+                self.context.log(format_args!("RUN {command}"));
                 if !self.dry_run {
                     self.execute_run(&command)?;
                 }
@@ -186,7 +186,7 @@ impl TemplateExecutor {
 
             Instruction::Copy(spec) => {
                 self.context
-                    .log(&format!("COPY {} -> {}", spec.src, spec.dest));
+                    .log(format_args!("COPY {} -> {}", spec.src, spec.dest));
                 if !self.dry_run {
                     self.execute_copy(spec)?;
                 }
@@ -194,7 +194,7 @@ impl TemplateExecutor {
 
             Instruction::Workdir(path) => {
                 let path = self.context.substitute(path);
-                self.context.log(&format!("WORKDIR {}", path));
+                self.context.log(format_args!("WORKDIR {path}"));
                 self.context.set_workdir(&path);
 
                 // Create the directory in the jail if it doesn't exist
@@ -254,37 +254,37 @@ impl TemplateExecutor {
 
             Instruction::Expose(port) => {
                 self.context
-                    .log(&format!("EXPOSE {}/{}", port.port, port.protocol));
+                    .log(format_args!("EXPOSE {}/{}", port.port, port.protocol));
                 // Expose is metadata - no action needed during build
             }
 
             Instruction::Cmd(cmd) => {
                 let cmd = self.context.substitute(cmd);
-                self.context.log(&format!("CMD {}", cmd));
+                self.context.log(format_args!("CMD {cmd}"));
                 // CMD is metadata - stored for jail start
             }
 
             Instruction::Entrypoint(cmd) => {
                 let cmd = self.context.substitute(cmd);
-                self.context.log(&format!("ENTRYPOINT {}", cmd));
+                self.context.log(format_args!("ENTRYPOINT {cmd}"));
                 // Entrypoint is metadata - stored for jail start
             }
 
             Instruction::User(user) => {
                 let user = self.context.substitute(user);
-                self.context.log(&format!("USER {}", user));
+                self.context.log(format_args!("USER {user}"));
                 // User is metadata - stored for jail config
             }
 
             Instruction::Label(key, value) => {
                 let value = self.context.substitute(value);
-                self.context.log(&format!("LABEL {}={}", key, value));
+                self.context.log(format_args!("LABEL {key}={value}"));
                 // Labels are metadata
             }
 
             Instruction::Volume(path) => {
                 let path = self.context.substitute(path);
-                self.context.log(&format!("VOLUME {}", path));
+                self.context.log(format_args!("VOLUME {path}"));
 
                 // Create the volume mount point
                 if !self.dry_run {
@@ -380,7 +380,7 @@ impl TemplateExecutor {
             std::fs::create_dir_all(&dev_path).ok();
 
             if let Err(e) = crate::sys::mount_devfs(&dev_path) {
-                eprintln!("Warning: {}", e);
+                eprintln!("Warning: {e}");
             }
         }
 
@@ -401,17 +401,14 @@ impl TemplateExecutor {
 
         let (exit_code, stdout, stderr) = result.map_err(|e| Error::BuildFailed {
             step: "RUN".to_string(),
-            message: format!("Failed to execute chroot: {}", e),
+            message: format!("Failed to execute chroot: {e}"),
         })?;
 
         if exit_code != 0 {
             let stderr_str = String::from_utf8_lossy(&stderr);
             return Err(Error::BuildFailed {
                 step: "RUN".to_string(),
-                message: format!(
-                    "Command failed with exit code {}: {}",
-                    exit_code, stderr_str
-                ),
+                message: format!("Command failed with exit code {exit_code}: {stderr_str}"),
             });
         }
 
@@ -420,7 +417,7 @@ impl TemplateExecutor {
             let stdout_str = String::from_utf8_lossy(&stdout);
             if !stdout_str.is_empty() {
                 for line in stdout_str.lines() {
-                    println!("  {}", line);
+                    println!("  {line}");
                 }
             }
         }
@@ -630,7 +627,7 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     })? {
         let entry = entry.map_err(|e| Error::BuildFailed {
             step: "COPY".to_string(),
-            message: format!("Failed to read directory entry: {}", e),
+            message: format!("Failed to read directory entry: {e}"),
         })?;
 
         let src_path = entry.path();
@@ -743,7 +740,7 @@ fn set_owner(path: &Path, owner: &str) -> Result<()> {
     // Use native chown(2) syscall instead of spawning process
     let path_cstr = CString::new(path.to_str().unwrap()).map_err(|e| Error::BuildFailed {
         step: "COPY".to_string(),
-        message: format!("Invalid path: {}", e),
+        message: format!("Invalid path: {e}"),
     })?;
 
     let result = unsafe { libc::chown(path_cstr.as_ptr(), uid, gid) };
@@ -764,7 +761,7 @@ fn hex_digest(hasher: sha2::Sha256) -> String {
     hasher
         .finalize()
         .iter()
-        .map(|b| format!("{:02x}", b))
+        .map(|b| format!("{b:02x}"))
         .collect()
 }
 

@@ -95,11 +95,11 @@ impl NetworkStore {
     pub fn create(&self, record: &NetworkRecord) -> Result<()> {
         validate_network_name(&record.name)?;
         fs::create_dir_all(&self.root)
-            .map_err(|e| Error::Network(format!("Failed to create network state dir: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to create network state dir: {e}")))?;
 
         let path = self.record_path(&record.name)?;
         let content = toml::to_string(record)
-            .map_err(|e| Error::Network(format!("Failed to serialize network metadata: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to serialize network metadata: {e}")))?;
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -108,14 +108,13 @@ impl NetworkStore {
             Ok(mut file) => {
                 use std::io::Write;
                 file.write_all(content.as_bytes())
-                    .map_err(|e| Error::Network(format!("Failed to write network metadata: {}", e)))
+                    .map_err(|e| Error::Network(format!("Failed to write network metadata: {e}")))
             }
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
                 Err(Error::NetworkAlreadyExists(record.name.clone()))
             }
             Err(err) => Err(Error::Network(format!(
-                "Failed to create network metadata file: {}",
-                err
+                "Failed to create network metadata file: {err}"
             ))),
         }
     }
@@ -125,12 +124,12 @@ impl NetworkStore {
     pub fn save(&self, record: &NetworkRecord) -> Result<()> {
         validate_network_name(&record.name)?;
         fs::create_dir_all(&self.root)
-            .map_err(|e| Error::Network(format!("Failed to create network state dir: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to create network state dir: {e}")))?;
         let path = self.record_path(&record.name)?;
         let content = toml::to_string(record)
-            .map_err(|e| Error::Network(format!("Failed to serialize network metadata: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to serialize network metadata: {e}")))?;
         fs::write(&path, content)
-            .map_err(|e| Error::Network(format!("Failed to write network metadata: {}", e)))
+            .map_err(|e| Error::Network(format!("Failed to write network metadata: {e}")))
     }
 
     pub fn get(&self, name: &str) -> Result<Option<NetworkRecord>> {
@@ -149,7 +148,7 @@ impl NetworkStore {
         }
 
         fs::remove_file(&path)
-            .map_err(|e| Error::Network(format!("Failed to remove network metadata: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to remove network metadata: {e}")))?;
         Ok(true)
     }
 
@@ -160,11 +159,11 @@ impl NetworkStore {
 
         let mut records = Vec::new();
         let entries = fs::read_dir(&self.root)
-            .map_err(|e| Error::Network(format!("Failed to read network state dir: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to read network state dir: {e}")))?;
 
         for entry in entries {
-            let entry = entry
-                .map_err(|e| Error::Network(format!("Failed to read network entry: {}", e)))?;
+            let entry =
+                entry.map_err(|e| Error::Network(format!("Failed to read network entry: {e}")))?;
             let path = entry.path();
 
             if path.extension() != Some(OsStr::new("toml")) {
@@ -182,7 +181,7 @@ impl NetworkStore {
 
     fn record_path(&self, name: &str) -> Result<PathBuf> {
         validate_network_name(name)?;
-        Ok(self.root.join(format!("{}.toml", name)))
+        Ok(self.root.join(format!("{name}.toml")))
     }
 }
 
@@ -205,7 +204,7 @@ impl NetworkLeaseStore {
 
     /// Lock file guarding read-modify-write of one network's lease list
     fn lock_path(&self, network: &str) -> PathBuf {
-        self.root.join(format!("{}.lock", network))
+        self.root.join(format!("{network}.lock"))
     }
 
     pub fn record(&self, network: &str, owner: &str, ip: IpAddr) -> Result<()> {
@@ -218,7 +217,7 @@ impl NetworkLeaseStore {
         }
 
         fs::create_dir_all(&self.root)
-            .map_err(|e| Error::Network(format!("Failed to create network lease dir: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to create network lease dir: {e}")))?;
 
         let mut leases = self.list(network)?;
         let ip_str = ip.to_string();
@@ -269,8 +268,7 @@ impl NetworkLeaseStore {
         if leases.is_empty() {
             fs::remove_file(&path).map_err(|e| {
                 Error::Network(format!(
-                    "Failed to remove empty network lease metadata: {}",
-                    e
+                    "Failed to remove empty network lease metadata: {e}"
                 ))
             })?;
         } else {
@@ -291,12 +289,11 @@ impl NetworkLeaseStore {
 
         let mut released = Vec::new();
         let entries = fs::read_dir(&self.root)
-            .map_err(|e| Error::Network(format!("Failed to read network lease dir: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to read network lease dir: {e}")))?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| {
-                Error::Network(format!("Failed to read network lease entry: {}", e))
-            })?;
+            let entry = entry
+                .map_err(|e| Error::Network(format!("Failed to read network lease entry: {e}")))?;
             let path = entry.path();
             if path.extension() != Some(OsStr::new("toml")) {
                 continue;
@@ -324,7 +321,7 @@ impl NetworkLeaseStore {
     }
 
     fn record_path(&self, network: &str) -> PathBuf {
-        self.root.join(format!("{}.toml", network))
+        self.root.join(format!("{network}.toml"))
     }
 }
 
@@ -339,7 +336,7 @@ impl VnetStateStore {
         Self::validate_owner(&record.owner)?;
 
         fs::create_dir_all(&self.root)
-            .map_err(|e| Error::Network(format!("Failed to create VNET state dir: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to create VNET state dir: {e}")))?;
         write_toml_atomic(
             &self.record_path(&record.owner),
             record,
@@ -365,7 +362,7 @@ impl VnetStateStore {
         }
 
         fs::remove_file(&path)
-            .map_err(|e| Error::Network(format!("Failed to remove VNET state metadata: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to remove VNET state metadata: {e}")))?;
         Ok(true)
     }
 
@@ -376,8 +373,7 @@ impl VnetStateStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => {
                 return Err(Error::Network(format!(
-                    "Failed to read VNET state dir: {}",
-                    e
+                    "Failed to read VNET state dir: {e}"
                 )));
             }
         };
@@ -390,7 +386,7 @@ impl VnetStateStore {
             }
             match read_toml::<VnetStateRecord>(&path, "VNET state metadata") {
                 Ok(record) => records.push(record),
-                Err(e) => eprintln!("Warning: skipping VNET state record {:?}: {}", path, e),
+                Err(e) => eprintln!("Warning: skipping VNET state record {path:?}: {e}"),
             }
         }
         records.sort_by(|a, b| a.owner.cmp(&b.owner));
@@ -398,7 +394,7 @@ impl VnetStateStore {
     }
 
     fn record_path(&self, owner: &str) -> PathBuf {
-        self.root.join(format!("{}.toml", owner))
+        self.root.join(format!("{owner}.toml"))
     }
 
     /// Validate owner string to prevent path traversal
@@ -410,8 +406,7 @@ impl VnetStateStore {
         }
         if owner.contains('/') || owner.contains('\\') || owner.contains("..") {
             return Err(Error::InvalidArgument(format!(
-                "VNET state owner '{}' contains invalid characters",
-                owner
+                "VNET state owner '{owner}' contains invalid characters"
             )));
         }
         Ok(())
@@ -575,8 +570,7 @@ pub fn allocate_and_record(
         }
     }
     Err(Error::Network(format!(
-        "Could not claim a free address on network '{}' after 256 attempts",
-        network
+        "Could not claim a free address on network '{network}' after 256 attempts"
     )))
 }
 
@@ -592,14 +586,14 @@ impl FileLock {
     pub fn acquire(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
-                .map_err(|e| Error::Network(format!("Failed to create lock dir: {}", e)))?;
+                .map_err(|e| Error::Network(format!("Failed to create lock dir: {e}")))?;
         }
         let file = fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(false)
             .open(path)
-            .map_err(|e| Error::Network(format!("Failed to open lock file: {}", e)))?;
+            .map_err(|e| Error::Network(format!("Failed to open lock file: {e}")))?;
         let fd = std::os::unix::io::AsRawFd::as_raw_fd(&file);
         if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
             return Err(Error::Network(format!(
@@ -633,8 +627,7 @@ fn validate_network_name(name: &str) -> Result<()> {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     {
         return Err(Error::InvalidArgument(format!(
-            "Invalid network name '{}': use only letters, numbers, '.', '-' and '_'",
-            name
+            "Invalid network name '{name}': use only letters, numbers, '.', '-' and '_'"
         )));
     }
 

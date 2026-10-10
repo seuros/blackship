@@ -25,6 +25,7 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 use crate::jail::jail_getid;
+use std::fmt::Write as _;
 use std::process::{Command, ExitStatus, Stdio};
 
 /// Options for executing commands in a jail
@@ -72,35 +73,37 @@ pub fn exec_in_jail(jail: &str, command: &[String], opts: &ExecOptions) -> Resul
         cmd.arg("-c");
 
         let mut script = String::new();
-        let mut assignments = Vec::new();
+        let mut assignments = String::new();
 
         // Validate every key, whether it is exported or handed to env -i
         for (key, value) in &opts.env {
             if !is_valid_env_key(key) {
                 return Err(Error::JailExecFailed(format!(
-                    "Invalid environment variable key: '{}'. Keys must start with a letter or underscore, followed by alphanumerics or underscores.",
-                    key
+                    "Invalid environment variable key: '{key}'. Keys must start with a letter or underscore, followed by alphanumerics or underscores."
                 )));
             }
             let escaped = shell_quote(value);
             if opts.clear_env {
-                assignments.push(format!("{}={}", key, escaped));
+                if !assignments.is_empty() {
+                    assignments.push(' ');
+                }
+                let _ = write!(assignments, "{key}={escaped}");
             } else {
-                script.push_str(&format!("export {}={}; ", key, escaped));
+                let _ = write!(script, "export {key}={escaped}; ");
             }
         }
 
         // Add working directory change (properly escaped)
         if let Some(ref workdir) = opts.workdir {
             let escaped_workdir = shell_quote(workdir);
-            script.push_str(&format!("cd {} || exit 1; ", escaped_workdir));
+            let _ = write!(script, "cd {escaped_workdir} || exit 1; ");
         }
 
         script.push_str("exec ");
         if opts.clear_env {
             script.push_str("/usr/bin/env -i ");
             if !assignments.is_empty() {
-                script.push_str(&assignments.join(" "));
+                script.push_str(&assignments);
                 script.push(' ');
             }
         }
@@ -110,8 +113,12 @@ pub fn exec_in_jail(jail: &str, command: &[String], opts: &ExecOptions) -> Resul
             script.push_str("/bin/sh");
         } else {
             // Always quote each argument for safety
-            let quoted: Vec<String> = command.iter().map(|arg| shell_quote(arg)).collect();
-            script.push_str(&quoted.join(" "));
+            for (i, arg) in command.iter().enumerate() {
+                if i > 0 {
+                    script.push(' ');
+                }
+                script.push_str(&shell_quote(arg));
+            }
         }
 
         cmd.arg(script);
@@ -134,7 +141,7 @@ pub fn exec_in_jail(jail: &str, command: &[String], opts: &ExecOptions) -> Resul
 
     let status = cmd
         .status()
-        .map_err(|e| Error::JailExecFailed(format!("Failed to execute jexec: {}", e)))?;
+        .map_err(|e| Error::JailExecFailed(format!("Failed to execute jexec: {e}")))?;
 
     Ok(status)
 }

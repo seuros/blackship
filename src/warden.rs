@@ -69,7 +69,7 @@ impl IntentionalStops {
     fn lock_jids(&self) -> std::sync::MutexGuard<'_, HashSet<i32>> {
         self.jids
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn mark(&self, jid: i32) {
@@ -142,7 +142,7 @@ impl RestartState {
                 .multiplier(2.0)
                 .max_attempts(10)
                 .jitter_factor(0.5),
-            breaker: CircuitBuilder::new(format!("warden_{}", name))
+            breaker: CircuitBuilder::new(format!("warden_{name}"))
                 .failure_threshold(5)
                 .success_threshold(2)
                 .half_open_timeout_secs(300.0)
@@ -209,10 +209,7 @@ impl Supervision {
         let mut runner = Runner::new(machine, SUPERVISION_MAILBOX);
 
         if let Err(e) = runner.start(clock) {
-            eprintln!(
-                "Warden: Failed to start supervision of jail '{}': {:?}",
-                name, e
-            );
+            eprintln!("Warden: Failed to start supervision of jail '{name}': {e:?}");
         }
 
         Self {
@@ -239,8 +236,7 @@ impl Supervision {
 
         let Some(delay) = delay else {
             eprintln!(
-                "Warden: Not restarting jail '{}' (circuit breaker open or max attempts reached)",
-                name
+                "Warden: Not restarting jail '{name}' (circuit breaker open or max attempts reached)"
             );
             self.enqueue(name, SupervisorEvent::Exhausted);
             return;
@@ -257,10 +253,7 @@ impl Supervision {
             .runner
             .schedule_after(clock, ticks, SupervisorEvent::Retry)
         {
-            eprintln!(
-                "Warden: Failed to schedule restart of jail '{}': {:?}",
-                name, e
-            );
+            eprintln!("Warden: Failed to schedule restart of jail '{name}': {e:?}");
         }
     }
 
@@ -273,10 +266,7 @@ impl Supervision {
 
     fn enqueue(&self, name: &str, event: SupervisorEvent) {
         if let Err(e) = self.runner.enqueue(event) {
-            eprintln!(
-                "Warden: Supervision mailbox rejected event for '{}': {:?}",
-                name, e
-            );
+            eprintln!("Warden: Supervision mailbox rejected event for '{name}': {e:?}");
         }
     }
 }
@@ -318,8 +308,7 @@ impl Warden {
                 }
                 Err(e) => {
                     eprintln!(
-                        "Warden: Failed to create kqueue source: {}, falling back to polling",
-                        e
+                        "Warden: Failed to create kqueue source: {e}, falling back to polling"
                     );
                     None
                 }
@@ -383,18 +372,17 @@ impl Warden {
             };
 
             match registered {
-                Ok(()) => println!("Warden: Monitoring jail '{}' ({}) via kqueue", name, ident),
-                Err(e) => eprintln!(
-                    "Warden: Failed to register kqueue for jail '{}' ({}): {}",
-                    name, ident, e
-                ),
+                Ok(()) => println!("Warden: Monitoring jail '{name}' ({ident}) via kqueue"),
+                Err(e) => {
+                    eprintln!("Warden: Failed to register kqueue for jail '{name}' ({ident}): {e}");
+                }
             }
         }
     }
 
     /// Stop monitoring only the identities that belong to a specific jid.
     fn unregister_jail_jid(&mut self, name: &str, jid: i32) {
-        self.unregister_idents(name, Some(jid))
+        self.unregister_idents(name, Some(jid));
     }
 
     fn unregister_idents(&mut self, name: &str, only_jid: Option<i32>) {
@@ -408,24 +396,20 @@ impl Warden {
         if let Some(ref kq) = self.kqueue
             && let Err(e) = kq.unregister(ident)
         {
-            eprintln!(
-                "Warden: Failed to unregister kqueue for jail '{}' ({}): {}",
-                name, ident, e
-            );
+            eprintln!("Warden: Failed to unregister kqueue for jail '{name}' ({ident}): {e}");
         }
     }
 
     /// Process kqueue events (non-blocking poll)
     fn process_kqueue_events(&mut self) -> Vec<(MonitoredJail, JailEvent)> {
-        let kq = match &self.kqueue {
-            Some(kq) => kq,
-            None => return Vec::new(),
+        let Some(kq) = &self.kqueue else {
+            return Vec::new();
         };
 
         let events = match kq.poll(Some(Duration::ZERO)) {
             Ok(events) => events,
             Err(e) => {
-                eprintln!("Warden: kqueue poll error: {}", e);
+                eprintln!("Warden: kqueue poll error: {e}");
                 return Vec::new();
             }
         };
@@ -478,11 +462,10 @@ impl Warden {
                     self.monitored.remove(&ident);
                     if self.intentional_stops.contains(jid) {
                         println!(
-                            "Warden: Kernel reports jail '{}' ({}) removed after requested stop",
-                            name, ident
+                            "Warden: Kernel reports jail '{name}' ({ident}) removed after requested stop"
                         );
                     } else {
-                        println!("Warden: Kernel reports jail '{}' ({}) removed", name, ident);
+                        println!("Warden: Kernel reports jail '{name}' ({ident}) removed");
                         self.handle_failure(&name);
                     }
                 }
@@ -492,12 +475,12 @@ impl Warden {
                     } else {
                         "a child jail"
                     };
-                    println!("Warden: Jail '{}' ({}) created {}", name, ident, detail);
+                    println!("Warden: Jail '{name}' ({ident}) created {detail}");
                 }
                 JailEvent::Set { .. } => {}
                 JailEvent::Attach { ident, coalesced } => {
                     if coalesced {
-                        println!("Warden: Jail '{}' ({}) had multiple attaches", name, ident);
+                        println!("Warden: Jail '{name}' ({ident}) had multiple attaches");
                     }
                 }
             }
@@ -508,14 +491,11 @@ impl Warden {
     async fn pump(&mut self) {
         for (name, supervision) in &mut self.supervisors {
             if supervision.runner.tick(&self.clock).is_err() {
-                eprintln!(
-                    "Warden: Monotonic clock went backwards supervising jail '{}'",
-                    name
-                );
+                eprintln!("Warden: Monotonic clock went backwards supervising jail '{name}'");
             }
 
             if let Err(e) = supervision.runner.drain(SUPERVISION_STEPS).await {
-                eprintln!("Warden: Supervision of jail '{}' failed: {:?}", name, e);
+                eprintln!("Warden: Supervision of jail '{name}' failed: {e:?}");
             }
 
             supervision.settle();
@@ -527,14 +507,11 @@ impl Warden {
     async fn handle_event(&mut self, event: WardenEvent) {
         match event {
             WardenEvent::JailFailed { name } => {
-                println!("Warden: Jail '{}' failed, initiating restart", name);
+                println!("Warden: Jail '{name}' failed, initiating restart");
                 self.handle_failure(&name);
             }
             WardenEvent::JailHealthFailed { name } => {
-                println!(
-                    "Warden: Jail '{}' health check failed, initiating restart",
-                    name
-                );
+                println!("Warden: Jail '{name}' health check failed, initiating restart");
                 self.handle_failure(&name);
             }
             WardenEvent::JailHealthy { name } => {
@@ -544,7 +521,7 @@ impl Warden {
                 self.shift_to_steady(&name, "timer").await;
             }
             WardenEvent::JailStarted { name } => {
-                println!("Warden: Jail '{}' started successfully", name);
+                println!("Warden: Jail '{name}' started successfully");
                 if let Some(supervision) = self.supervisors.get_mut(&name)
                     && supervision.state() == SupervisorState::Backoff
                 {
@@ -552,7 +529,7 @@ impl Warden {
                 }
             }
             WardenEvent::JailStopped { name, jid } => {
-                println!("Warden: Jail '{}' stopped intentionally", name);
+                println!("Warden: Jail '{name}' stopped intentionally");
                 self.supervisors.remove(&name);
                 self.unregister_jail_jid(&name, jid);
                 self.intentional_stops.clear(jid);
@@ -579,16 +556,10 @@ impl Warden {
 
         match result {
             Ok(crate::bridge::ShiftOutcome::Shifted) => {
-                println!(
-                    "Warden: Jail '{}' shifted to steady QoS profile ({})",
-                    name, trigger
-                );
+                println!("Warden: Jail '{name}' shifted to steady QoS profile ({trigger})");
             }
             Ok(_) => {}
-            Err(e) => eprintln!(
-                "Warden: Failed to shift jail '{}' to steady QoS profile: {}",
-                name, e
-            ),
+            Err(e) => eprintln!("Warden: Failed to shift jail '{name}' to steady QoS profile: {e}"),
         }
     }
 
@@ -605,10 +576,9 @@ impl Warden {
 
         match supervision.state() {
             SupervisorState::Healthy => supervision.enqueue(name, SupervisorEvent::Failed),
-            SupervisorState::Dead => eprintln!(
-                "Warden: Not restarting jail '{}' (supervision exhausted)",
-                name
-            ),
+            SupervisorState::Dead => {
+                eprintln!("Warden: Not restarting jail '{name}' (supervision exhausted)");
+            }
             state => println!(
                 "Warden: Jail '{}' is already recovering ({})",
                 name,

@@ -60,7 +60,7 @@ mod phase_snapshot {
         let snapshot = ScopeMachineSnapshot::deserialize(deserializer)?;
         DynamicScopeMachine::from_snapshot(snapshot)
             .map(|machine| machine.current_state())
-            .map_err(|(_, e)| serde::de::Error::custom(format!("invalid scope phase: {:?}", e)))
+            .map_err(|(_, e)| serde::de::Error::custom(format!("invalid scope phase: {e:?}")))
     }
 }
 
@@ -110,9 +110,15 @@ impl PeakMetrics {
     /// Fold a racct sample in, keeping the per-resource maximum.
     pub fn observe(&mut self, sample: &std::collections::HashMap<String, u64>) {
         for (key, value) in sample {
-            let slot = self.resources.entry(key.clone()).or_insert(0);
-            if *value > *slot {
-                *slot = *value;
+            match self.resources.get_mut(key) {
+                Some(slot) => {
+                    if *value > *slot {
+                        *slot = *value;
+                    }
+                }
+                None => {
+                    self.resources.insert(key.clone(), *value);
+                }
             }
         }
         self.samples = Some(self.samples.unwrap_or(0) + 1);
@@ -209,7 +215,7 @@ impl ScopeRecord {
 
     pub fn advance_or_warn(&mut self, event: ScopeMachineEvent) {
         if let Err(e) = self.advance(event) {
-            eprintln!("Warning: {}", e);
+            eprintln!("Warning: {e}");
         }
     }
 
@@ -240,7 +246,7 @@ impl ScopeStore {
     pub fn save(&self, record: &ScopeRecord) -> Result<()> {
         validate_name(&record.name)?;
         fs::create_dir_all(&self.root)
-            .map_err(|e| Error::State(format!("Failed to create scope dir: {}", e)))?;
+            .map_err(|e| Error::State(format!("Failed to create scope dir: {e}")))?;
         write_toml_atomic(&self.record_path(&record.name), record, "scope record")
     }
 
@@ -260,7 +266,7 @@ impl ScopeStore {
             return Ok(false);
         }
         fs::remove_file(&path)
-            .map_err(|e| Error::State(format!("Failed to remove scope record: {}", e)))?;
+            .map_err(|e| Error::State(format!("Failed to remove scope record: {e}")))?;
         Ok(true)
     }
 
@@ -268,7 +274,7 @@ impl ScopeStore {
         let entries = match fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(Error::State(format!("Failed to read scope dir: {}", e))),
+            Err(e) => return Err(Error::State(format!("Failed to read scope dir: {e}"))),
         };
 
         let mut records = Vec::new();
@@ -279,7 +285,7 @@ impl ScopeStore {
             }
             match read_toml::<ScopeRecord>(&path, "scope record") {
                 Ok(record) => records.push(record),
-                Err(e) => eprintln!("Warning: skipping scope record {:?}: {}", path, e),
+                Err(e) => eprintln!("Warning: skipping scope record {path:?}: {e}"),
             }
         }
         records.sort_by(|a, b| a.name.cmp(&b.name));
@@ -301,7 +307,7 @@ impl ScopeStore {
     }
 
     fn record_path(&self, name: &str) -> PathBuf {
-        self.root.join(format!("{}.toml", name))
+        self.root.join(format!("{name}.toml"))
     }
 }
 

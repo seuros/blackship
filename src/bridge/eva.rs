@@ -40,12 +40,12 @@ fn param_display(value: &ParamValue) -> String {
         ParamValue::Bool(b) => b.to_string(),
         ParamValue::Ipv4(addrs) => addrs
             .iter()
-            .map(|a| a.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join(","),
         ParamValue::Ipv6(addrs) => addrs
             .iter()
-            .map(|a| a.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join(","),
     }
@@ -160,7 +160,7 @@ fn jls_json(full_name: &str, keys: &[&str]) -> Result<HashMap<String, String>> {
         .and_then(|i| i.get("jail"))
         .and_then(|j| j.as_array())
         .and_then(|a| a.first())
-        .ok_or_else(|| Error::JailOperation(format!("jls returned no data for '{}'", full_name)))?;
+        .ok_or_else(|| Error::JailOperation(format!("jls returned no data for '{full_name}'")))?;
 
     let mut map = HashMap::new();
     for key in keys {
@@ -195,7 +195,7 @@ impl Bridge {
             match self.eva_jail(name, dry_run) {
                 Ok(()) => {}
                 Err(e) => {
-                    eprintln!("EVA failed for '{}': {}", name, e);
+                    eprintln!("EVA failed for '{name}': {e}");
                     failures.push((name.clone(), e));
                 }
             }
@@ -222,12 +222,9 @@ impl Bridge {
             return Ok(());
         };
 
-        let jid = match jail_getid(&full_name) {
-            Ok(jid) => jid,
-            Err(_) => {
-                println!("  [SKIP] {} (not running)", full_name);
-                return Ok(());
-            }
+        let Ok(jid) = jail_getid(&full_name) else {
+            println!("  [SKIP] {full_name} (not running)");
+            return Ok(());
         };
 
         let is_vnet = jail_def.network.as_ref().is_some_and(|n| n.vnet);
@@ -246,34 +243,33 @@ impl Bridge {
 
         let resources = self.effective_resources(&full_name, jail_def);
         let rctl_rules = resources.to_rules(&full_name);
-        let other_pins: Vec<String> = self
+        let other_pins = self
             .config
             .jails
             .iter()
             .filter(|other| other.name != service_name)
-            .filter_map(|other| other.startup_resources().cpuset.clone())
-            .collect();
-        let cpu_list = crate::rctl::resolve_cpu_list(resources, other_pins.into_iter());
+            .filter_map(|other| other.startup_resources().cpuset.as_deref());
+        let cpu_list = crate::rctl::resolve_cpu_list(resources, other_pins);
 
         if dry_run {
-            println!("  [EVA] {} (JID {})", full_name, jid);
+            println!("  [EVA] {full_name} (JID {jid})");
             for line in &diff.display {
-                println!("          {}", line);
+                println!("          {line}");
             }
             for line in &diff.immutable_diffs {
-                println!("        ! {} (requires restart)", line);
+                println!("        ! {line} (requires restart)");
             }
             for key in &unreadable {
-                println!("          {}: not reported by jls, would apply blind", key);
+                println!("          {key}: not reported by jls, would apply blind");
             }
             if resources.has_rctl_rules() {
                 println!("          rctl: replace with {} rule(s):", rctl_rules.len());
                 for rule in &rctl_rules {
-                    println!("            {}", rule);
+                    println!("            {rule}");
                 }
             }
             if let Some(ref list) = cpu_list {
-                println!("          cpuset: pin to CPUs {}", list);
+                println!("          cpuset: pin to CPUs {list}");
             }
             if diff.changes.is_empty() && !resources.has_rctl_rules() && cpu_list.is_none() {
                 println!("          (no changes)");
@@ -291,16 +287,13 @@ impl Bridge {
         hook_runner.execute_phase(HookPhase::PreEva, &hook_context)?;
 
         for line in &diff.immutable_diffs {
-            eprintln!(
-                "Warning: '{}': {} -- requires restart, not applied",
-                full_name, line
-            );
+            eprintln!("Warning: '{full_name}': {line} -- requires restart, not applied");
         }
 
         if !diff.changes.is_empty() {
             jail_update(jid, &diff.changes)?;
             for line in &diff.display {
-                println!("  {}: {}", full_name, line);
+                println!("  {full_name}: {line}");
             }
         }
 
@@ -309,17 +302,15 @@ impl Bridge {
             && let Err(e) = crate::rctl::apply_limits(&full_name, resources)
         {
             eprintln!(
-                "Warning: rctl limits partially applied for '{}': {} -- re-run eva or restart",
-                full_name, e
+                "Warning: rctl limits partially applied for '{full_name}': {e} -- re-run eva or restart"
             );
         }
 
         if let Some(ref list) = cpu_list {
             match crate::rctl::apply_cpuset(jid, list) {
-                Ok(()) => println!("  {}: pinned to CPUs {}", full_name, list),
+                Ok(()) => println!("  {full_name}: pinned to CPUs {list}"),
                 Err(e) => eprintln!(
-                    "Warning: cpuset re-pin failed for '{}': {} -- re-run eva or restart",
-                    full_name, e
+                    "Warning: cpuset re-pin failed for '{full_name}': {e} -- re-run eva or restart"
                 ),
             }
         }
@@ -327,7 +318,7 @@ impl Bridge {
         hook_runner.execute_phase(HookPhase::PostEva, &hook_context)?;
 
         if diff.changes.is_empty() && !resources.has_rctl_rules() && cpu_list.is_none() {
-            println!("  [OK] {} (no changes)", full_name);
+            println!("  [OK] {full_name} (no changes)");
         } else {
             println!(
                 "  [OK] {} ({} param(s) updated)",

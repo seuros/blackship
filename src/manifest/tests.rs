@@ -158,3 +158,46 @@ fn test_xdg_paths() {
     assert!(data_dir.to_string_lossy().ends_with("blackship"));
     assert!(cache_dir.to_string_lossy().ends_with("blackship"));
 }
+
+#[test]
+fn test_jail_lookup_matches_prefixed_and_unprefixed_names() {
+    let toml = r#"
+[config]
+project = "demo"
+
+[[jails]]
+name = "web"
+
+[[jails]]
+name = "demo-api"
+"#;
+    let config: BlackshipConfig = toml::from_str(toml).unwrap();
+
+    assert_eq!(config.jail_name("web"), "demo-web");
+    assert_eq!(config.jail_name("demo-api"), "demo-api");
+
+    assert_eq!(config.get_jail("web").map(|j| j.name.as_str()), Some("web"));
+    assert_eq!(
+        config.get_jail("demo-web").map(|j| j.name.as_str()),
+        Some("web")
+    );
+    assert_eq!(
+        config.get_jail("demo-api").map(|j| j.name.as_str()),
+        Some("demo-api")
+    );
+    assert!(config.get_jail("demo-nope").is_none());
+    assert!(config.get_jail("other-web").is_none());
+
+    assert_eq!(
+        config.resolve_jail_names("we"),
+        Some(("web".to_string(), "demo-web".to_string()))
+    );
+    assert_eq!(
+        config.resolve_jail_names("demo-a"),
+        Some(("demo-api".to_string(), "demo-api".to_string()))
+    );
+    // "demo" and "demo-" prefix both jails' full names: ambiguous.
+    assert!(config.resolve_jail_names("demo").is_none());
+    assert!(config.resolve_jail_names("demo-").is_none());
+    assert!(config.resolve_jail_names("zzz").is_none());
+}

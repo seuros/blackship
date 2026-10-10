@@ -20,11 +20,17 @@ fn survey(
     datasets: &[&str],
 ) -> Survey {
     Survey {
-        live: live.iter().map(|s| s.to_string()).collect(),
+        live: live.iter().map(std::string::ToString::to_string).collect(),
         scopes,
         vnet,
-        tagged_ifaces: ifaces.iter().map(|s| s.to_string()).collect(),
-        datasets: datasets.iter().map(|s| s.to_string()).collect(),
+        tagged_ifaces: ifaces
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
+        datasets: datasets
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
         drain_anchors: Vec::new(),
     }
 }
@@ -33,7 +39,7 @@ fn running_scope(name: &str) -> ScopeRecord {
     let mut scope = ScopeRecord::new(name);
     scope.jid = Some(11);
     scope.phase = ScopeMachineState::Running;
-    scope.rctl_subject = Some(format!("jail:{}", name));
+    scope.rctl_subject = Some(format!("jail:{name}"));
     scope.has_vnet_record = true;
     scope
 }
