@@ -19,6 +19,7 @@ A FreeBSD jail orchestrator with TOML configuration, dependency management, stat
 - **Stats**: per-jail CPU, RSS, and process counts from jls/ps libxo JSON
 - **Port Forwarding**: PF-based port exposure with source IP binding
 - **Shell Completion**: Bash, Zsh, and Fish completions
+- **MCP Server**: `blackship mcp` exposes host facts, the real parsers, and operator-approved file creation over MCP, so a model can author a `blackship.toml` or Jailfile against this host instead of guessing
 
 ## Requirements
 
@@ -404,6 +405,12 @@ jailfile = "./custom/Api.jailfile"  # Explicit Jailfile path
 | Command | Description |
 |---------|-------------|
 | `blackship completion bash\|zsh\|fish` | Generate shell completion |
+
+### MCP Server
+
+| Command | Description |
+|---------|-------------|
+| `blackship mcp` | Serve the MCP protocol on stdin/stdout (see [MCP Server](#mcp-server-1)) |
 
 ## Jailfile Format
 
@@ -974,6 +981,111 @@ When act_runner receives a job with a `jail://` label, the runner could:
 4. Clean up via `blackship rm <jail> --force`
 
 **Note:** This requires custom act_runner configuration or a wrapper script - it is not built into act_runner by default.
+
+## MCP Server
+
+`blackship mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io)
+over stdin/stdout, so an MCP-capable assistant can author jail configuration
+for *this* host. Writing a `blackship.toml` or a Jailfile by hand means knowing
+two schemas and knowing what the host can actually do; the server supplies both,
+plus the real parsers, so a draft is checked before it reaches disk.
+
+It is built by default. Compile without it using `--no-default-features`.
+
+### Running it
+
+```sh
+blackship mcp
+```
+
+It needs no root, and it does not require a `blackship.toml` to exist --
+creating one is the point. Register it with a client:
+
+```json
+{
+  "mcpServers": {
+    "blackship": {
+      "command": "blackship",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Pass `--config <path>` before `mcp` to change the manifest path the tools
+default to. Stdout carries the JSON-RPC frame stream, so diagnostics go to
+`$XDG_DATA_HOME/blackship/mcp.log` (by default
+`~/.local/share/blackship/mcp.log`) instead; set `RUST_LOG` to raise the level.
+
+### Tools
+
+Read-only, no approval needed:
+
+| Tool | Returns |
+|------|---------|
+| `host_facts` | Kernel version and the real feature gates, rctl state and managed resources, CPU count, zpools, bootstrapped releases, running jails |
+| `manifest_inspect` | The parsed manifest as JSON |
+| `manifest_validate` | Every diagnostic, staged read -> parse -> validate |
+| `jailfile_inspect` | The parsed Jailfile as JSON |
+| `jailfile_validate` | Every bad line with line and column, in one call |
+
+File-producing, and approval is not optional:
+
+| Tool | Writes |
+|------|--------|
+| `manifest_create` | A `blackship.toml` rendered from a project name and a list of jails |
+| `jailfile_create` | A Jailfile in the TOML format |
+
+`host_facts` is what makes the rest worth having: releases, interfaces, and
+resource limits come from the host rather than from a model's weights.
+
+### Writes are gated on the operator
+
+Neither creating tool can write a file on its own authority. Both render the
+text, validate it through the same code `blackship up` and `blackship build`
+use, and then ask **you** through an MCP
+[elicitation](https://modelcontextprotocol.io/specification/server/elicitation).
+Nothing lands on disk unless you set `confirm`, and replacing an existing file
+additionally needs `overwrite`, which is only ever offered when the file really
+exists. The prompt names the absolute path.
+
+The gate fails closed. A declined or cancelled request, a form returned without
+`confirm`, a client that does not support elicitation, a prompt left unanswered
+for two minutes, a target directory that does not exist, and a draft that does
+not validate all produce the same result on disk: nothing. A refusal comes back
+as a payload with `"written": false` and a reason, so the model can tell a
+rejection from an error.
+
+Writes themselves go through a temp file in the target directory followed by a
+rename, so an interrupted write cannot truncate an existing manifest. That is
+also why the target's directory has to exist: it is checked before you are
+asked, so an approval is never spent on a write that cannot land. blackship
+does not create directories on your behalf.
+
+### Prompts
+
+The prompts carry the workflow -- they tell the model which tools to call and in
+what order, rather than leaving it to infer that.
+
+| Prompt | Purpose |
+|--------|---------|
+| `new_project` | Author a `blackship.toml`: gather host facts, draft, validate, then create |
+| `new_jailfile` | The same arc, ending at `jailfile_create` |
+| `diagnose_config` | Explain why an existing file is rejected, in terms of the schema |
+
+### Resources
+
+| URI | Contents |
+|-----|----------|
+| `blackship:///man` | The CLI manual, generated from the live command spec |
+| `blackship:///man.kdl` | The full command tree as KDL |
+| `blackship:///schema/manifest` | JSON Schema for what `manifest_create` accepts |
+| `blackship:///schema/jailfile` | JSON Schema for what `jailfile_create` accepts |
+| `blackship:///reference/jailfile` | The line-format keywords, including which Dockerfile constructs do **not** exist here |
+| `blackship:///reference/jail-params` | The reserved `jail_set(2)` parameters blackship manages itself |
+
+The manual and the schemas are generated, not hand-written, so a new subcommand
+or a new parameter shows up the day it is added and cannot drift out of date.
 
 ## Troubleshooting
 
