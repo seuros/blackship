@@ -134,6 +134,49 @@ cmd = "service nginx stop"
 }
 
 #[test]
+fn test_diagnose_reports_every_bad_line() {
+    let content = "FROM 15.1-RELEASE\nFROBNICATE everything\nRUN true\n    WIBBLE nothing\n";
+
+    let diagnostics = diagnose(content, JailfileFormat::Line);
+
+    assert_eq!(diagnostics.len(), 2);
+    assert_eq!(diagnostics[0].line, 2);
+    assert_eq!(diagnostics[0].column, 1);
+    assert_eq!(diagnostics[1].line, 4);
+    assert_eq!(diagnostics[1].column, 5);
+}
+
+#[test]
+fn test_forced_line_format_tolerates_toml_lookalike_body() {
+    let content = "FROM 15.1-RELEASE\nRUN printf '[build]\\n' > /tmp/fake.toml\n";
+
+    let jf = parse_jailfile_as(content, JailfileFormat::Line).unwrap();
+
+    assert_eq!(jf.from, Some("15.1-RELEASE".to_string()));
+    assert_eq!(
+        jf.run_commands(),
+        vec!["printf '[build]\\n' > /tmp/fake.toml"]
+    );
+    assert!(parse_jailfile(content).is_err());
+}
+
+#[test]
+fn test_jailfile_json_preserves_instruction_order() {
+    let content = "FROM 15.1-RELEASE\nENV TZ=UTC\nRUN pkg install -y nginx\nEXPOSE 80/tcp\nCMD /usr/sbin/service nginx start\n";
+    let jf = parse_jailfile_as(content, JailfileFormat::Line).unwrap();
+
+    let value = serde_json::to_value(&jf).unwrap();
+    let kinds: Vec<&str> = value["instructions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i.as_object().unwrap().keys().next().unwrap().as_str())
+        .collect();
+
+    assert_eq!(kinds, vec!["From", "Env", "Run", "Expose", "Cmd"]);
+}
+
+#[test]
 fn test_comment_lines_are_retained() {
     let jf = parse_jailfile("# build the web jail\nFROM 15.1-RELEASE\n").unwrap();
     assert!(

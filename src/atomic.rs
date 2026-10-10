@@ -21,6 +21,14 @@ pub fn write_toml_atomic<T: Serialize>(path: &Path, value: &T, label: &str) -> R
     let content = toml::to_string(value)
         .map_err(|e| Error::State(format!("Failed to serialize {label}: {e}")))?;
 
+    write_atomic(path, &content, label)
+}
+
+/// Replace `path` with `content` atomically.
+///
+/// The temp file is created beside the target, so the final `rename` stays
+/// within one filesystem.
+pub fn write_atomic(path: &Path, content: &str, label: &str) -> Result<()> {
     let nonce = {
         use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now()

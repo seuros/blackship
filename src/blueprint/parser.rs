@@ -16,20 +16,140 @@ use nom::{
     combinator::{map, opt, rest},
     sequence::{delimited, pair, preceded},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Which parser to use for a Jailfile
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum JailfileFormat {
+    /// Sniff the content and pick a parser
+    #[default]
+    Auto,
+    /// Always use the line-based (Dockerfile-like) parser
+    Line,
+    /// Always use the TOML parser
+    Toml,
+}
+
+/// A single parse problem, with 1-based position
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct Diagnostic {
+    /// 1-based line number
+    pub line: usize,
+    /// 1-based column of the first non-whitespace character
+    pub column: usize,
+    /// Human-readable description of the problem
+    pub message: String,
+}
 
 /// Parse a Jailfile (auto-detects format)
 pub fn parse_jailfile(content: &str) -> Result<Jailfile> {
-    // Try to detect format
-    let trimmed = content.trim();
+    parse_jailfile_as(content, JailfileFormat::Auto)
+}
 
-    // If it starts with [ or contains [metadata], it's TOML
-    if trimmed.starts_with('[') || trimmed.contains("[metadata]") || trimmed.contains("[build]") {
-        parse_toml_format(content)
-    } else {
-        parse_line_format(content)
+/// Parse a Jailfile with an explicit format, bypassing the sniffer
+pub(crate) fn parse_jailfile_as(content: &str, format: JailfileFormat) -> Result<Jailfile> {
+    match resolve_format(content, format) {
+        JailfileFormat::Toml => parse_toml_format(content),
+        _ => parse_line_format(content),
     }
+}
+
+/// Resolve `Auto` to a concrete format by sniffing the content
+///
+/// The sniff is textual, so a line-format Jailfile whose body merely mentions
+/// `[build]` or `[metadata]` is misrouted to the TOML parser. Callers that
+/// report which parser ran need this to be visible.
+pub(crate) fn resolve_format(content: &str, format: JailfileFormat) -> JailfileFormat {
+    match format {
+        JailfileFormat::Auto => {
+            let trimmed = content.trim();
+            if trimmed.starts_with('[')
+                || trimmed.contains("[metadata]")
+                || trimmed.contains("[build]")
+            {
+                JailfileFormat::Toml
+            } else {
+                JailfileFormat::Line
+            }
+        }
+        explicit => explicit,
+    }
+}
+
+/// Collect every parse problem in `content` in a single pass
+///
+/// Returns an empty vector when `content` parses cleanly. The line format
+/// reports one diagnostic per bad line; TOML can only report its first error.
+#[cfg_attr(
+    all(not(test), not(feature = "mcp")),
+    expect(
+        dead_code,
+        reason = "the MCP jailfile_validate tool is this function's only caller"
+    )
+)]
+pub(crate) fn diagnose(content: &str, format: JailfileFormat) -> Vec<Diagnostic> {
+    match resolve_format(content, format) {
+        JailfileFormat::Toml => diagnose_toml(content),
+        _ => diagnose_line_format(content),
+    }
+}
+
+fn diagnose_line_format(content: &str) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    for (index, raw) in content.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if let Err(e) = parse_line(line) {
+            diagnostics.push(Diagnostic {
+                line: index + 1,
+                column: raw.chars().take_while(|c| c.is_whitespace()).count() + 1,
+                message: e.to_string(),
+            });
+        }
+    }
+
+    diagnostics
+}
+
+fn diagnose_toml(content: &str) -> Vec<Diagnostic> {
+    match toml::from_str::<TomlJailfile>(content) {
+        Ok(_) => Vec::new(),
+        Err(e) => {
+            let (line, column) = e
+                .span()
+                .map_or((1, 1), |span| byte_offset_to_position(content, span.start));
+            vec![Diagnostic {
+                line,
+                column,
+                message: e.message().to_string(),
+            }]
+        }
+    }
+}
+
+/// Convert a byte offset into a 1-based (line, column) pair
+fn byte_offset_to_position(content: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut column = 1;
+
+    for (index, ch) in content.char_indices() {
+        if index >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+
+    (line, column)
 }
 
 /// Parse line-based format (Dockerfile-like)
@@ -255,82 +375,81 @@ fn parse_volume(input: &str) -> nom::IResult<&str, &str> {
     preceded(pair(tag_no_case("VOLUME"), space1), rest).parse(input)
 }
 
+#[derive(Debug, Deserialize)]
+struct TomlJailfile {
+    #[serde(default)]
+    metadata: Option<JailfileMetadata>,
+    #[serde(default)]
+    build: Option<TomlBuild>,
+    #[serde(default)]
+    start: Option<TomlStart>,
+    #[serde(default)]
+    stop: Option<TomlStop>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TomlBuild {
+    from: Option<String>,
+    workdir: Option<String>,
+    #[serde(default)]
+    args: Vec<TomlArg>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    #[serde(default)]
+    run: Vec<TomlRun>,
+    #[serde(default)]
+    copy: Vec<TomlCopy>,
+    #[serde(default)]
+    expose: Vec<TomlExpose>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TomlArg {
+    name: String,
+    #[serde(default)]
+    default: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TomlRun {
+    command: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TomlCopy {
+    src: String,
+    dest: String,
+    #[serde(default)]
+    mode: Option<u32>,
+    #[serde(default)]
+    owner: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TomlExpose {
+    port: u16,
+    #[serde(default = "default_protocol")]
+    protocol: String,
+}
+
+fn default_protocol() -> String {
+    "tcp".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct TomlStart {
+    cmd: Option<String>,
+    entrypoint: Option<String>,
+    user: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TomlStop {
+    cmd: Option<String>,
+}
+
 /// Parse TOML format Jailfile
-fn parse_toml_format(content: &str) -> Result<Jailfile> {
-    // Define TOML structure
-    #[derive(Debug, Deserialize)]
-    struct TomlJailfile {
-        #[serde(default)]
-        metadata: Option<JailfileMetadata>,
-        #[serde(default)]
-        build: Option<TomlBuild>,
-        #[serde(default)]
-        start: Option<TomlStart>,
-        #[serde(default)]
-        stop: Option<TomlStop>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct TomlBuild {
-        from: Option<String>,
-        workdir: Option<String>,
-        #[serde(default)]
-        args: Vec<TomlArg>,
-        #[serde(default)]
-        env: HashMap<String, String>,
-        #[serde(default)]
-        run: Vec<TomlRun>,
-        #[serde(default)]
-        copy: Vec<TomlCopy>,
-        #[serde(default)]
-        expose: Vec<TomlExpose>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct TomlArg {
-        name: String,
-        #[serde(default)]
-        default: Option<String>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct TomlRun {
-        command: String,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct TomlCopy {
-        src: String,
-        dest: String,
-        #[serde(default)]
-        mode: Option<u32>,
-        #[serde(default)]
-        owner: Option<String>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct TomlExpose {
-        port: u16,
-        #[serde(default = "default_protocol")]
-        protocol: String,
-    }
-
-    fn default_protocol() -> String {
-        "tcp".to_string()
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct TomlStart {
-        cmd: Option<String>,
-        entrypoint: Option<String>,
-        user: Option<String>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct TomlStop {
-        cmd: Option<String>,
-    }
-
+pub(crate) fn parse_toml_format(content: &str) -> Result<Jailfile> {
     let parsed: TomlJailfile = toml::from_str(content)?;
 
     let mut jailfile = Jailfile::new();

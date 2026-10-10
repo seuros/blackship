@@ -21,7 +21,7 @@ use super::Bridge;
 /// Reserved params are rejected so manifests cannot bypass jail isolation.
 /// `allow.` is matched by prefix: module-registered params are runtime
 /// sysctl entries no header can enumerate.
-pub(super) fn is_reserved_param(key: &str) -> bool {
+pub(crate) fn is_reserved_param(key: &str) -> bool {
     use crate::sys::consts::*;
     key.starts_with("allow.")
         || matches!(

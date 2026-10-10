@@ -2,11 +2,11 @@
 //!
 //! Defines the instructions that can be used in a Jailfile.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Build argument definition
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BuildArg {
     /// Argument name
     pub name: String,
@@ -32,7 +32,7 @@ impl BuildArg {
 }
 
 /// Port exposure definition
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExposePort {
     /// Port number
     pub port: u16,
@@ -63,7 +63,7 @@ impl ExposePort {
 }
 
 /// Copy instruction source/destination
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CopySpec {
     /// Source path (relative to build context)
     pub src: String,
@@ -88,7 +88,7 @@ impl CopySpec {
 }
 
 /// A single build instruction
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum Instruction {
     /// FROM <release> - Base release to build from
     From(String),
@@ -143,7 +143,7 @@ impl Instruction {
 }
 
 /// Jailfile metadata
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct JailfileMetadata {
     /// Template name
     pub name: Option<String>,
@@ -159,7 +159,7 @@ pub struct JailfileMetadata {
 }
 
 /// A parsed Jailfile
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Jailfile {
     /// Metadata
     pub metadata: JailfileMetadata,

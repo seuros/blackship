@@ -483,6 +483,10 @@ pub enum Commands {
     /// Start the Warden supervisor to monitor and auto-restart jails
     Supervise,
 
+    /// Run an MCP stdio server for generating jail configuration
+    #[cfg(feature = "mcp")]
+    Mcp,
+
     /// Tail logs from a running jail
     Logs {
         /// Jail name
@@ -789,6 +793,8 @@ impl Commands {
             | Self::Stats { .. }
             | Self::Audit { .. }
             | Self::Completion { .. } => false,
+            #[cfg(feature = "mcp")]
+            Self::Mcp => false,
         }
     }
 }

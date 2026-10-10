@@ -140,6 +140,9 @@ impl AppContext {
 
             Commands::Supervise => commands::supervise::handle(&self.config_path, self.verbose),
 
+            #[cfg(feature = "mcp")]
+            Commands::Mcp => commands::mcp::handle(&self.config_path),
+
             Commands::Bootstrap {
                 release,
                 force,

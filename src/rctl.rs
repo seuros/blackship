@@ -161,6 +161,18 @@ const MANAGED_RESOURCES: [&str; 7] = [
     "swapuse",
 ];
 
+/// The resources a profile owns, for callers outside this module.
+#[cfg_attr(
+    not(feature = "mcp"),
+    expect(
+        dead_code,
+        reason = "the MCP host_facts tool is this accessor's only caller"
+    )
+)]
+pub(crate) fn managed_resources() -> &'static [&'static str] {
+    &MANAGED_RESOURCES
+}
+
 /// Split a profile's rules into the managed `(resource, rule)` pairs and the
 /// user's own rules, in one pass over `to_rules`.
 fn split_rules(config: &ResourceConfig, jail_name: &str) -> (Vec<(String, String)>, Vec<String>) {

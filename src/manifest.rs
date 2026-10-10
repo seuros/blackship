@@ -92,7 +92,7 @@ fn validate_zfs_component(kind: &str, name: &str) -> Result<()> {
 }
 
 /// Read a config file, mapping IO errors to ConfigRead
-fn read_config_file(path: &Path) -> Result<String> {
+pub(crate) fn read_config_file(path: &Path) -> Result<String> {
     fs::read_to_string(path).map_err(|e| Error::ConfigRead {
         path: path.to_path_buf(),
         source: e,

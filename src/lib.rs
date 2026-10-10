@@ -23,6 +23,8 @@ mod gc;
 mod hooks;
 mod jail;
 mod manifest;
+#[cfg(feature = "mcp")]
+mod mcp;
 mod network;
 mod proc;
 mod provision;
