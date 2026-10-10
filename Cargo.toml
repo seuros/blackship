@@ -13,7 +13,8 @@ categories = ["command-line-utilities", "os::freebsd-apis"]
 exclude = ["**/tests.rs"]
 
 [features]
-default = []
+default = ["mcp"]
+mcp = ["dep:mcp-host", "dep:schemars", "dep:tracing", "dep:tracing-subscriber"]
 # state_machine! expands cfg(feature = "inspect") into the calling crate.
 inspect = ["state-machines/inspect"]
 
@@ -65,6 +66,10 @@ jiff = "0.2"
 
 # Telemetry
 rama = { version = "0.4", features = ["opentelemetry", "grpc", "http-full", "rustls"] }
+mcp-host = { version = "0.9.0", features = ["macros"], optional = true }
+schemars = { version = "1.2.2", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
 [dev-dependencies]
 state-machines = { version = "0.31", features = [
