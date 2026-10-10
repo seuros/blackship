@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 /// Blackship - FreeBSD jail orchestrator
-#[derive(usage::Cli)]
+#[derive(usage_rs::Cli)]
 #[usage(bin = "blackship", version, completion)]
 pub struct Cli {
     /// Configuration file path
@@ -22,7 +22,7 @@ pub struct Cli {
 }
 
 /// Available commands
-#[derive(usage::Subcommands)]
+#[derive(usage_rs::Subcommands)]
 pub enum Commands {
     /// Start jails (respecting dependencies)
     Up {
@@ -531,7 +531,7 @@ pub fn into_pairs(pairs: Vec<KeyVal>) -> Vec<(String, String)> {
 }
 
 /// Shells completion scripts can be generated for
-#[derive(Clone, Copy, usage::ValueEnum)]
+#[derive(Clone, Copy, usage_rs::ValueEnum)]
 pub enum Shell {
     Bash,
     Elvish,
@@ -541,19 +541,19 @@ pub enum Shell {
 }
 
 impl Shell {
-    fn runtime(self) -> usage::complete::Shell {
+    fn runtime(self) -> usage_rs::complete::Shell {
         match self {
-            Self::Bash => usage::complete::Shell::Bash,
-            Self::Elvish => usage::complete::Shell::Elvish,
-            Self::Fish => usage::complete::Shell::Fish,
-            Self::Nu => usage::complete::Shell::Nu,
-            Self::Zsh => usage::complete::Shell::Zsh,
+            Self::Bash => usage_rs::complete::Shell::Bash,
+            Self::Elvish => usage_rs::complete::Shell::Elvish,
+            Self::Fish => usage_rs::complete::Shell::Fish,
+            Self::Nu => usage_rs::complete::Shell::Nu,
+            Self::Zsh => usage_rs::complete::Shell::Zsh,
         }
     }
 }
 
 /// Actions for the template command
-#[derive(usage::Subcommands)]
+#[derive(usage_rs::Subcommands)]
 pub enum TemplateAction {
     /// List available templates
     List,
@@ -573,7 +573,7 @@ pub enum TemplateAction {
 }
 
 /// Actions for the releases command
-#[derive(usage::Subcommands)]
+#[derive(usage_rs::Subcommands)]
 pub enum ReleasesAction {
     /// List all bootstrapped releases (default)
     List,
@@ -592,7 +592,7 @@ pub enum ReleasesAction {
 }
 
 /// Actions for the snapshot command
-#[derive(usage::Subcommands)]
+#[derive(usage_rs::Subcommands)]
 pub enum SnapshotAction {
     /// Create a snapshot of a jail
     Create {
@@ -637,7 +637,7 @@ pub enum SnapshotAction {
 }
 
 /// Actions for the armada command (docker-compose style orchestration)
-#[derive(usage::Subcommands)]
+#[derive(usage_rs::Subcommands)]
 pub enum ArmadaAction {
     /// Initialize a new blackship.toml
     Init {
@@ -708,7 +708,7 @@ pub enum ArmadaAction {
 }
 
 /// Actions for the network command
-#[derive(usage::Subcommands)]
+#[derive(usage_rs::Subcommands)]
 pub enum NetworkAction {
     /// Create a new network
     Create {

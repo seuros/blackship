@@ -19,7 +19,7 @@ inspect = ["state-machines/inspect"]
 
 [dependencies]
 # CLI
-usage = { package = "usage-rs", version = "6", features = ["completions"] }
+usage-rs = { version = "7", features = ["completions"] }
 
 # Config
 serde = { version = "1.0", features = ["derive"] }
@@ -44,7 +44,7 @@ sha2 = "0.11"
 hex = "0.4"
 tar = "0.4"
 xz2 = "0.1"
-zstd = "0.13"
+zstd = "0.14"
 
 # Networking
 ipnet = "2.12"
@@ -53,10 +53,10 @@ ipnet = "2.12"
 nom = "8.0"
 
 # State machine and resilience (seuros crates)
-state-machines = { version = "0.30", features = ["dynamic", "runtime-send", "serde"] }
-breaker-machines = "0.16.1"
-chrono-machines = "0.6"
-throttle-machines = "0.2"
+state-machines = { version = "0.31", features = ["dynamic", "runtime-send", "serde"] }
+breaker-machines = "0.19"
+chrono-machines = "0.8"
+throttle-machines = "0.2.1"
 rand = "0.10"
 
 # Async runtime for Warden
@@ -67,7 +67,7 @@ jiff = "0.2"
 rama = { version = "0.4", features = ["opentelemetry", "grpc", "http-full", "rustls"] }
 
 [dev-dependencies]
-state-machines = { version = "0.30", features = [
+state-machines = { version = "0.31", features = [
     "dynamic",
     "runtime-send",
     "serde",
