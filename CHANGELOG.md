@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.0](https://github.com/seuros/blackship/compare/blackship-v0.1.9...blackship-v0.2.0) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **scope:** scope records written by 0.1.9 and earlier no longer load.
+
+### Features
+
+* **mcp:** stdio server for authoring and validating jail configuration ([1cf3745](https://github.com/seuros/blackship/commit/1cf3745686f1391a56b1f0e6b1a307566e4aae58))
+* retire the dead code by wiring up the features it belonged to ([8bd0d90](https://github.com/seuros/blackship/commit/8bd0d901d0fe6a0c1edd9675d95e11ded6295a73))
+* **scope:** drive supervision and scope records with state-machines ([4f14403](https://github.com/seuros/blackship/commit/4f14403a171b17b90f51acba285de053855db59c))
+* **scope:** durable jail lifecycle, orphan GC, QoS phases, drain, OTLP ([dab8fdc](https://github.com/seuros/blackship/commit/dab8fdc51ae157382c4357ae22cf155bfcf09e64))
+
+
+### Bug Fixes
+
+* **build:** honour --dry-run when the base release is absent ([dc4a801](https://github.com/seuros/blackship/commit/dc4a801cc949124a5d5d7eb8bfe88efff3b499bf))
+* **build:** show LABEL key and value in template inspect ([c3fe4f8](https://github.com/seuros/blackship/commit/c3fe4f8860d2f75acb1921cdd14e6cc4f0012c80))
+
+
+### Performance Improvements
+
+* stop allocating on paths that discard the allocation ([7003a5d](https://github.com/seuros/blackship/commit/7003a5d9ae5a8daa824c6a83a50c8566975cfd5f))
+
 ## [0.1.9](https://github.com/seuros/blackship/compare/blackship-v0.1.8...blackship-v0.1.9) (2026-09-11)
 
 
