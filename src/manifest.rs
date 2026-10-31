@@ -1004,6 +1004,10 @@ pub struct JailNetworkConfig {
     #[serde(default)]
     pub vnet: bool,
 
+    /// Share the host's network stack (`ip4=inherit`). Ignored if `vnet` is true.
+    #[serde(default)]
+    pub shared: bool,
+
     /// Bridge interface to attach the epair to (required for VNET)
     /// e.g., "blackship0"
     pub bridge: Option<String>,

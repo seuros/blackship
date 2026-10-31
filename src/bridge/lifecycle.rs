@@ -86,9 +86,37 @@ pub(super) fn build_jail_params(
                 params.insert("ip6.addr".to_string(), ParamValue::Ipv6(vec![addr]));
             }
         }
+    } else if jail_def.network.as_ref().is_some_and(|n| n.shared) {
+        // Same jailsys param as `vnet` above.
+        params.insert("ip4".to_string(), ParamValue::Int(libc::JAIL_SYS_INHERIT));
     }
 
     Ok(params)
+}
+
+/// Copies the host's resolv.conf into a shared-network jail, if it has none.
+fn copy_resolv_conf_if_absent(jail_root: &std::path::Path) {
+    let resolv_path = jail_root.join("etc/resolv.conf");
+
+    if crate::blueprint::context::reject_symlink_ancestors(jail_root, &resolv_path).is_err() {
+        return;
+    }
+
+    if !resolv_path.exists()
+        && let Ok(content) = std::fs::read("/etc/resolv.conf")
+    {
+        if let Some(parent) = resolv_path.parent() {
+            let _ = std::fs::create_dir_all(parent); // best-effort
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&resolv_path)
+        {
+            use std::io::Write;
+            let _ = f.write_all(&content); // best-effort
+        }
+    }
 }
 
 impl Bridge {
@@ -734,6 +762,10 @@ impl Bridge {
                     return Err(e);
                 }
             }
+        }
+
+        if jail_def.network.as_ref().is_some_and(|n| n.shared) {
+            copy_resolv_conf_if_absent(&path);
         }
 
         println!("Starting jail '{full_name}'...");

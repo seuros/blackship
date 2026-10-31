@@ -226,6 +226,7 @@ ip = "10.0.1.10"                      # Static IP, or omit for auto-assignment
 gateway = "10.0.1.1"                  # Optional if resolved from named network
 mac_address = "02:00:00:00:00:01"     # Static MAC (default: deterministic from jail name)
 # backend = "netgraph"                # Inherited from the named network when omitted
+# shared = true                       # Share the host's network (ip4=inherit); ignored if vnet=true
 
 [jails.network.dns]
 nameservers = ["8.8.8.8", "8.8.4.4"]  # DNS servers
