@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/seuros/blackship/compare/blackship-v0.2.0...blackship-v0.2.1) (2026-10-31)
+
+
+### Features
+
+* **network:** add shared jail network option ([935f9e0](https://github.com/seuros/blackship/commit/935f9e0ff93507b2d5beb5a7b0bdf07ac6b4f5dc))
+
 ## [0.2.0](https://github.com/seuros/blackship/compare/blackship-v0.1.9...blackship-v0.2.0) (2026-10-11)
 
 
