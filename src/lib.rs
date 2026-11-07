@@ -26,6 +26,7 @@ mod manifest;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod network;
+mod output;
 mod proc;
 mod provision;
 mod rctl;
@@ -39,3 +40,4 @@ mod warden;
 mod zfs;
 
 pub use app::run;
+pub use output::CliError;

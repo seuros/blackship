@@ -177,6 +177,50 @@ blackship ps
 blackship ps --json
 ```
 
+## Machine-readable CLI
+
+Automation can opt into a versioned JSON contract with the global
+`--format json` option. The first contract version covers the read-only
+commands most useful to management UIs:
+
+```sh
+blackship --format json ps
+blackship --format json check
+blackship --format json network list
+blackship --format json ports
+blackship --format json ports web
+```
+
+Successful commands write an envelope to standard output:
+
+```json
+{
+  "schema_version": 1,
+  "ok": true,
+  "data": []
+}
+```
+
+Failures, including command-line parsing errors, exit non-zero and write a
+single JSON object to standard error. Error codes are stable identifiers
+intended for program logic; messages remain for people and diagnostics:
+
+```json
+{
+  "schema_version": 1,
+  "ok": false,
+  "error": {
+    "code": "jail_not_found",
+    "message": "Jail 'web' not found"
+  }
+}
+```
+
+Commands without a complete JSON contract fail with
+`unsupported_output_format`; they never fall back to mixed human-readable
+output. Existing command-local flags such as `blackship ps --json` retain
+their original, unenveloped output for compatibility.
+
 ## Configuration Reference
 
 ### Global Config
