@@ -69,7 +69,7 @@ releases_dir = "/var/blackship/releases"
 cache_dir = "/var/blackship/cache"
 ```
 
-> **Note:** While paths are user-writable by default, `bootstrap` extraction requires root privileges because FreeBSD base archives contain root-owned files with special permissions (setuid binaries, etc.). Blackship will re-exec through `sudo` or `doas` if needed.
+> **Note:** While paths are user-writable by default, `bootstrap` extraction requires root privileges because FreeBSD base archives contain root-owned files with special permissions (setuid binaries, etc.). Blackship will re-exec through FreeBSD's `mdo` when the current user has an applicable `mac_do` rule, then fall back to `doas` or `sudo`.
 
 ## Quick Start
 
