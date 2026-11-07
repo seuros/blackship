@@ -1,20 +1,67 @@
 //! Application entry point and CLI dispatch.
 
 use crate::bridge::Bridge;
-use crate::cli::{Cli, Commands};
+use crate::cli::{Cli, Commands, NetworkAction, OutputFormat};
 use crate::error::{Error, Result};
+use crate::output::CliError;
 use crate::{commands, console, manifest};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
 /// Run the Blackship CLI application.
-pub fn run() -> Result<()> {
-    let cli = Cli::parse_args();
+pub fn run() -> std::result::Result<(), CliError> {
+    let cli = parse_cli()?;
+    let format = cli.format;
+    run_cli(cli).map_err(|error| CliError::new(format, error))
+}
+
+fn parse_cli() -> std::result::Result<Cli, CliError> {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if requested_json(&args) {
+        let args: Vec<&OsStr> = args.iter().map(OsString::as_os_str).collect();
+        match Cli::parse_from(&args) {
+            Ok(cli) => Ok(cli),
+            Err(
+                usage_rs::Error::Help { .. }
+                | usage_rs::Error::HelpAll { .. }
+                | usage_rs::Error::Version { .. },
+            ) => Ok(Cli::parse_args()),
+            Err(error) => {
+                let message = usage_rs::render_failure_plain(Cli::spec(), &args, &error);
+                Err(CliError::new(
+                    OutputFormat::Json,
+                    Error::CliParse(message.trim().to_string()),
+                ))
+            }
+        }
+    } else {
+        Ok(Cli::parse_args())
+    }
+}
+
+fn requested_json(args: &[OsString]) -> bool {
+    let mut args = args.iter().take_while(|arg| arg.as_os_str() != "--");
+    while let Some(arg) = args.next() {
+        if arg == "--format=json" {
+            return true;
+        }
+        if arg == "--format" && args.next().is_some_and(|value| value == "json") {
+            return true;
+        }
+    }
+    false
+}
+
+fn run_cli(cli: Cli) -> Result<()> {
+    if cli.format == OutputFormat::Json && !cli.command.supports_machine_output() {
+        return Err(Error::UnsupportedOutputFormat);
+    }
+
     maybe_escalate_to_root(&cli.command)?;
-    let ctx = AppContext::new(cli.config, cli.verbose);
+    let ctx = AppContext::new(cli.config, cli.verbose, cli.format);
     ctx.init_telemetry();
     let result = ctx.dispatch(cli.command);
     crate::telemetry::shutdown();
@@ -24,13 +71,15 @@ pub fn run() -> Result<()> {
 struct AppContext {
     config_path: PathBuf,
     verbose: bool,
+    format: OutputFormat,
 }
 
 impl AppContext {
-    fn new(config_path: PathBuf, verbose: bool) -> Self {
+    fn new(config_path: PathBuf, verbose: bool, format: OutputFormat) -> Self {
         Self {
             config_path,
             verbose,
+            format,
         }
     }
 
@@ -162,7 +211,12 @@ impl AppContext {
 
             Commands::Network { action } => {
                 let config = self.load_config_if_present()?;
-                commands::network::handle(config.as_ref(), action)
+                if self.format == OutputFormat::Json && matches!(&action, NetworkAction::List) {
+                    let networks = commands::network::list(config.as_ref())?;
+                    crate::output::print_success(&networks)
+                } else {
+                    commands::network::handle(config.as_ref(), action)
+                }
             }
 
             Commands::Health {
@@ -208,7 +262,14 @@ impl AppContext {
                 bind_ip,
             ),
 
-            Commands::Ports { jail } => commands::ports::handle_ports(&self.config_path, jail),
+            Commands::Ports { jail } => {
+                if self.format == OutputFormat::Json {
+                    let forwards = commands::ports::list_ports(&self.config_path, jail.as_deref())?;
+                    crate::output::print_success(&forwards)
+                } else {
+                    commands::ports::handle_ports(&self.config_path, jail)
+                }
+            }
 
             Commands::Unexpose { jail } => {
                 commands::ports::handle_unexpose(&self.config_path, self.verbose, jail)
@@ -308,14 +369,20 @@ impl AppContext {
 
             Commands::Ps { json } => {
                 let bridge = self.verbose_bridge()?;
-                bridge.ps(json)?;
-                Ok(())
+                if self.format == OutputFormat::Json {
+                    crate::output::print_success(&bridge.ps_data())
+                } else {
+                    bridge.ps(json)
+                }
             }
 
             Commands::Check => {
                 let bridge = self.verbose_bridge()?;
-                bridge.check()?;
-                Ok(())
+                if self.format == OutputFormat::Json {
+                    crate::output::print_success(&bridge.check_data()?)
+                } else {
+                    bridge.check()
+                }
             }
 
             Commands::Setup { enable_pf } => {
@@ -429,4 +496,30 @@ fn find_escalator() -> Option<&'static str> {
     .find(|path| {
         std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requested_json;
+    use std::ffi::OsString;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn detects_both_json_option_forms() {
+        assert!(requested_json(&args(&["--format", "json", "ps"])));
+        assert!(requested_json(&args(&["--format=json", "check"])));
+        assert!(requested_json(&args(&[
+            "--format", "text", "--format", "json", "ps"
+        ])));
+    }
+
+    #[test]
+    fn ignores_format_words_after_double_dash() {
+        assert!(!requested_json(&args(&[
+            "exec", "web", "--", "echo", "--format", "json"
+        ])));
+    }
 }

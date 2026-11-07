@@ -1,6 +1,6 @@
 fn main() {
     if let Err(e) = blackship::run() {
-        eprintln!("Error: {e}");
+        eprintln!("{e}");
         std::process::exit(1);
     }
 }

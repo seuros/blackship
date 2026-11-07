@@ -1,4 +1,41 @@
 use super::*;
+use std::ffi::OsStr;
+
+#[test]
+fn test_json_output_format_parses_globally() {
+    let argv = [OsStr::new("--format"), OsStr::new("json"), OsStr::new("ps")];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert_eq!(cli.format, OutputFormat::Json);
+    assert!(matches!(cli.command, Commands::Ps { json: false }));
+}
+
+#[test]
+fn test_text_output_format_is_default() {
+    let argv = [OsStr::new("check")];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert_eq!(cli.format, OutputFormat::Text);
+}
+
+#[test]
+fn test_machine_output_support_is_explicit() {
+    assert!(Commands::Check.supports_machine_output());
+    assert!(
+        Commands::Network {
+            action: NetworkAction::List
+        }
+        .supports_machine_output()
+    );
+    assert!(
+        !Commands::Up {
+            jail: None,
+            all: true,
+            dry_run: false,
+        }
+        .supports_machine_output()
+    );
+}
 
 #[test]
 fn test_network_create_requires_root() {

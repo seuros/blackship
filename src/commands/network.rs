@@ -4,10 +4,59 @@ use crate::cli::NetworkAction;
 use crate::error::Result;
 use crate::network::netgraph::NgBridge;
 use crate::{error, manifest, network};
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct NetworkStatus {
+    pub name: String,
+    pub bridge: String,
+    pub backend: String,
+    pub subnet: String,
+    pub gateway: String,
+    pub host_iface: Option<String>,
+    pub status: &'static str,
+}
+
+/// List persisted networks with their current runtime status.
+pub fn list(config: Option<&manifest::BlackshipConfig>) -> Result<Vec<NetworkStatus>> {
+    use network::NetworkStore;
+    use network::bridge::Bridge;
+
+    NetworkStore::from_config(config)
+        .list()?
+        .into_iter()
+        .map(|record| {
+            // NgBridge::open needs a control socket (root); the host
+            // eiface's ifnet is visible to everyone, so check that.
+            let alive = match record.backend.as_str() {
+                "netgraph" => {
+                    record
+                        .host_iface
+                        .as_deref()
+                        .map(network::ioctl::interface_exists)
+                        .transpose()?
+                        .unwrap_or(false)
+                        || NgBridge::open(&record.bridge).is_ok()
+                }
+                _ => Bridge::exists(&record.bridge)?,
+            };
+
+            Ok(NetworkStatus {
+                name: record.name,
+                bridge: record.bridge,
+                backend: record.backend,
+                subnet: record.subnet,
+                gateway: record.gateway,
+                host_iface: record.host_iface,
+                status: if alive { "active" } else { "missing-bridge" },
+            })
+        })
+        .collect()
+}
 
 pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction) -> Result<()> {
     use ipnet::IpNet;
-    use network::bridge::{Bridge, destroy_bridge};
+    use network::bridge::destroy_bridge;
     use network::{IpPool, NetworkRecord, NetworkStore};
 
     let store = NetworkStore::from_config(config);
@@ -106,27 +155,12 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
             println!("Destroyed network '{}' on bridge '{}'", name, record.bridge);
         }
         NetworkAction::List => {
-            let networks = store.list()?;
+            let networks = list(config)?;
             if networks.is_empty() {
                 println!("No networks found.");
             } else {
                 println!("Networks:");
                 for network in networks {
-                    // NgBridge::open needs a control socket (root); the host
-                    // eiface's ifnet is visible to everyone, so check that.
-                    let alive = match network.backend.as_str() {
-                        "netgraph" => {
-                            network
-                                .host_iface
-                                .as_deref()
-                                .map(network::ioctl::interface_exists)
-                                .transpose()?
-                                .unwrap_or(false)
-                                || NgBridge::open(&network.bridge).is_ok()
-                        }
-                        _ => Bridge::exists(&network.bridge)?,
-                    };
-                    let status = if alive { "active" } else { "missing-bridge" };
                     let host_iface = network
                         .host_iface
                         .as_deref()
@@ -140,7 +174,7 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
                         network.subnet,
                         network.gateway,
                         host_iface,
-                        status
+                        network.status
                     );
                 }
             }

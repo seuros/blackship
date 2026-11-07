@@ -2,8 +2,38 @@
 
 use crate::error::Result;
 use crate::jail::jail_getid;
+use serde::Serialize;
 
 use super::Bridge;
+
+/// Stable jail status representation used by JSON consumers.
+#[derive(Debug, Serialize)]
+pub struct JailStatus {
+    pub name: String,
+    pub state: String,
+    pub jid: Option<i32>,
+    pub running: bool,
+    pub hostname: Option<String>,
+    pub ip: Option<String>,
+    pub ips: Vec<String>,
+    pub path: String,
+}
+
+/// Result of validating the manifest and resolving its jail paths.
+#[derive(Debug, Serialize)]
+pub struct CheckReport {
+    pub valid: bool,
+    pub start_order: Vec<String>,
+    pub zfs_enabled: bool,
+    pub jail_paths: Vec<JailPathStatus>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JailPathStatus {
+    pub name: String,
+    pub path: String,
+    pub exists: bool,
+}
 
 impl Bridge {
     /// Dry run: show what 'up' would do without making changes
@@ -113,9 +143,37 @@ impl Bridge {
     /// Print jail status
     pub fn ps(&self, json: bool) -> Result<()> {
         if json {
-            let mut jails_data: Vec<serde_json::Value> = Vec::new();
+            println!("{}", serde_json::to_string_pretty(&self.ps_data()).unwrap());
+        } else {
+            println!("{:<20} {:<10} {:<10}", "NAME", "STATE", "JID");
+            println!("{}", "-".repeat(42));
 
             for jail_def in &self.config.jails {
+                let full_name = self.config.jail_name(&jail_def.name);
+                let (state, jid) = if let Some(instance) = self.instances.get(&full_name) {
+                    let state = format!("{:?}", instance.state());
+                    let jid = instance.jid.map(|j| j.to_string()).unwrap_or_default();
+                    (state, jid)
+                } else {
+                    match jail_getid(&full_name) {
+                        Ok(jid) => ("Running".to_string(), jid.to_string()),
+                        Err(_) => ("Stopped".to_string(), String::new()),
+                    }
+                };
+
+                println!("{full_name:<20} {state:<10} {jid:<10}");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Return jail status without writing terminal output.
+    pub fn ps_data(&self) -> Vec<JailStatus> {
+        self.config
+            .jails
+            .iter()
+            .map(|jail_def| {
                 let full_name = self.config.jail_name(&jail_def.name);
                 let instance = self.instances.get(&full_name);
 
@@ -144,81 +202,87 @@ impl Bridge {
                             .collect::<Vec<_>>(),
                     ),
                     None => (
-                        full_name.clone(),
-                        jail_def.effective_path(&self.config.config, &full_name),
+                        full_name,
+                        jail_def.effective_path(
+                            &self.config.config,
+                            &self.config.jail_name(&jail_def.name),
+                        ),
                         jail_def.hostname.clone(),
                         jail_def
                             .network
                             .as_ref()
-                            .and_then(|n| n.ip)
+                            .and_then(|network| network.ip)
                             .map(|ip| vec![ip.to_string()])
                             .unwrap_or_default(),
                     ),
                 };
+                let ip = ips.first().cloned();
 
-                jails_data.push(serde_json::json!({
-                    "name": name,
-                    "state": state,
-                    "jid": jid,
-                    "running": running,
-                    "hostname": hostname,
-                    "ip": ips.first(),
-                    "ips": ips,
-                    "path": path.to_string_lossy()
-                }));
-            }
-
-            println!("{}", serde_json::to_string_pretty(&jails_data).unwrap());
-        } else {
-            println!("{:<20} {:<10} {:<10}", "NAME", "STATE", "JID");
-            println!("{}", "-".repeat(42));
-
-            for jail_def in &self.config.jails {
-                let full_name = self.config.jail_name(&jail_def.name);
-                let (state, jid) = if let Some(instance) = self.instances.get(&full_name) {
-                    let state = format!("{:?}", instance.state());
-                    let jid = instance.jid.map(|j| j.to_string()).unwrap_or_default();
-                    (state, jid)
-                } else {
-                    match jail_getid(&full_name) {
-                        Ok(jid) => ("Running".to_string(), jid.to_string()),
-                        Err(_) => ("Stopped".to_string(), String::new()),
-                    }
-                };
-
-                println!("{full_name:<20} {state:<10} {jid:<10}");
-            }
-        }
-
-        Ok(())
+                JailStatus {
+                    name,
+                    state,
+                    jid,
+                    running,
+                    hostname,
+                    ip,
+                    ips,
+                    path: path.to_string_lossy().into_owned(),
+                }
+            })
+            .collect()
     }
 
     /// Validate configuration
     pub fn check(&self) -> Result<()> {
+        let report = self.check_data()?;
         println!("Configuration is valid.");
-
-        let order = self.start_order()?;
         println!("\nStart order:");
-        for (i, name) in order.iter().enumerate() {
-            let full_name = self.config.jail_name(name);
-            println!("  {}. {}", i + 1, full_name);
+        for (i, name) in report.start_order.iter().enumerate() {
+            println!("  {}. {}", i + 1, name);
         }
 
-        if self.zfs.is_some() {
+        if report.zfs_enabled {
             println!("\nZFS: enabled");
         } else {
             println!("\nZFS: disabled");
         }
 
         println!("\nJail paths:");
-        for jail in &self.config.jails {
-            let full_name = self.config.jail_name(&jail.name);
-            let path = jail.effective_path(&self.config.config, &full_name);
-            let exists = path.exists();
-            let status = if exists { "exists" } else { "missing" };
-            println!("  {}: {} ({})", full_name, path.display(), status);
+        for jail in report.jail_paths {
+            let status = if jail.exists { "exists" } else { "missing" };
+            println!("  {}: {} ({})", jail.name, jail.path, status);
         }
 
         Ok(())
+    }
+
+    /// Validate configuration and return a structured report.
+    pub fn check_data(&self) -> Result<CheckReport> {
+        let start_order = self
+            .start_order()?
+            .into_iter()
+            .map(|name| self.config.jail_name(&name))
+            .collect();
+        let jail_paths = self
+            .config
+            .jails
+            .iter()
+            .map(|jail| {
+                let name = self.config.jail_name(&jail.name);
+                let path = jail.effective_path(&self.config.config, &name);
+                JailPathStatus {
+                    name,
+                    exists: path.exists(),
+                    path: path.to_string_lossy().into_owned(),
+                }
+            })
+            .collect();
+
+        Ok(CheckReport {
+            valid: true,
+            start_order,
+            zfs_enabled: self.zfs.is_some(),
+            jail_paths,
+        })
     }
 }

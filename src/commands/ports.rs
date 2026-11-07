@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use crate::bulkhead::PortForward;
 use crate::error::Result;
 use crate::{bridge, error, manifest};
 
@@ -51,8 +52,7 @@ pub fn handle_expose(
 }
 
 pub fn handle_ports(config_path: &Path, jail: Option<String>) -> Result<()> {
-    let config = manifest::load(config_path)?;
-    let bridge = bridge::Bridge::new(config)?;
+    let forwards = list_ports(config_path, jail.as_deref())?;
 
     println!("Port forwarding status:");
     println!(
@@ -60,12 +60,6 @@ pub fn handle_ports(config_path: &Path, jail: Option<String>) -> Result<()> {
         "JAIL", "PROTO", "EXTERNAL", "INTERNAL"
     );
     println!("{}", "-".repeat(70));
-
-    let forwards = if let Some(jail_name) = &jail {
-        bridge.get_jail_port_forwards(jail_name)
-    } else {
-        bridge.list_port_forwards().iter().collect()
-    };
 
     if forwards.is_empty() {
         println!("No port forwards configured.");
@@ -89,6 +83,22 @@ pub fn handle_ports(config_path: &Path, jail: Option<String>) -> Result<()> {
     println!("  blackship expose <jail> -p <port> [--bind-ip <ip>]");
 
     Ok(())
+}
+
+/// Return configured port forwards without writing terminal output.
+pub fn list_ports(config_path: &Path, jail: Option<&str>) -> Result<Vec<PortForward>> {
+    let config = manifest::load(config_path)?;
+    let bridge = bridge::Bridge::new(config)?;
+
+    Ok(if let Some(jail_name) = jail {
+        bridge
+            .get_jail_port_forwards(jail_name)
+            .into_iter()
+            .cloned()
+            .collect()
+    } else {
+        bridge.list_port_forwards().to_vec()
+    })
 }
 
 pub fn handle_unexpose(config_path: &Path, verbose: bool, jail: String) -> Result<()> {
