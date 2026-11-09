@@ -143,6 +143,7 @@ impl Instruction {
 
 /// Jailfile metadata
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct JailfileMetadata {
     /// Template name
     pub name: Option<String>,

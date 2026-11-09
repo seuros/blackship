@@ -78,7 +78,7 @@ workdir = "/usr/local"
 
 [[build.args]]
 name = "NGINX_VERSION"
-default = "1.25"
+default = "1.30"
 
 [[build.run]]
 command = "pkg install -y nginx"
@@ -118,7 +118,7 @@ fn test_parse_stop_nom_format() {
 fn test_parse_stop_toml_format() {
     let jf = parse_jailfile(
         r#"
-[jail]
+[build]
 from = "15.1-RELEASE"
 
 [stop]
@@ -185,4 +185,42 @@ fn test_comment_lines_are_retained() {
             .iter()
             .any(|i| matches!(i, Instruction::Comment(t) if t == "build the web jail"))
     );
+}
+
+/// `blackship:///reference/jailfile` documents this order; keep them in step.
+#[test]
+fn test_toml_steps_run_in_fixed_order() {
+    // `copy` is written before `run`; the parser still runs it after.
+    let content = r#"
+[build]
+from = "15.1-RELEASE"
+workdir = "/srv"
+
+[[build.copy]]
+src = "a"
+dest = "b"
+
+[[build.run]]
+command = "true"
+"#;
+    let jf = parse_toml_format(content).unwrap();
+    let names: Vec<_> = jf.instructions.iter().map(Instruction::name).collect();
+    assert_eq!(names, ["FROM", "WORKDIR", "RUN", "COPY"]);
+}
+
+#[test]
+fn test_toml_rejects_unknown_keys() {
+    // The shape older docs showed: every key here used to be dropped silently,
+    // leaving a "valid" Jailfile with no FROM.
+    let old_shape = r#"
+from = "15.1-RELEASE"
+
+[[instructions]]
+type = "run"
+command = "pkg install -y nginx"
+"#;
+    assert!(parse_toml_format(old_shape).is_err());
+
+    let typo = "[build]\nfrom = \"15.1-RELEASE\"\n\n[[build.run]]\ncomand = \"true\"\n";
+    assert!(parse_toml_format(typo).is_err());
 }

@@ -375,7 +375,10 @@ fn parse_volume(input: &str) -> nom::IResult<&str, &str> {
     preceded(pair(tag_no_case("VOLUME"), space1), rest).parse(input)
 }
 
+// Unknown keys are errors: a misplaced table would otherwise be dropped and
+// the Jailfile would still report itself valid.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TomlJailfile {
     #[serde(default)]
     metadata: Option<JailfileMetadata>,
@@ -388,6 +391,7 @@ struct TomlJailfile {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TomlBuild {
     from: Option<String>,
     workdir: Option<String>,
@@ -404,6 +408,7 @@ struct TomlBuild {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TomlArg {
     name: String,
     #[serde(default)]
@@ -411,11 +416,13 @@ struct TomlArg {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TomlRun {
     command: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TomlCopy {
     src: String,
     dest: String,
@@ -426,6 +433,7 @@ struct TomlCopy {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TomlExpose {
     port: u16,
     #[serde(default = "default_protocol")]
@@ -437,6 +445,7 @@ fn default_protocol() -> String {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TomlStart {
     cmd: Option<String>,
     entrypoint: Option<String>,
@@ -444,6 +453,7 @@ struct TomlStart {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TomlStop {
     cmd: Option<String>,
 }
