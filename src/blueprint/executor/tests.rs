@@ -55,3 +55,110 @@ fn test_variable_substitution_in_instructions() {
         Some(&"myapp".to_string())
     );
 }
+
+/// A real executor over a scratch root whose `jail/escape` points at `outside`.
+fn escape_fixture() -> (tempfile::TempDir, TemplateExecutor) {
+    let dir = tempfile::tempdir().expect("scratch dir");
+    let context = dir.path().join("context");
+    let jail = dir.path().join("jail");
+    let outside = dir.path().join("outside");
+    for d in [&context, &jail, &outside] {
+        fs::create_dir(d).unwrap();
+    }
+    fs::write(context.join("file.txt"), "payload").unwrap();
+    std::os::unix::fs::symlink(&outside, jail.join("escape")).unwrap();
+
+    let executor = TemplateExecutor::new(BuildContext::new(&context, &jail, "test"));
+    (dir, executor)
+}
+
+fn outside_is_empty(dir: &tempfile::TempDir) -> bool {
+    fs::read_dir(dir.path().join("outside"))
+        .unwrap()
+        .next()
+        .is_none()
+}
+
+#[test]
+fn workdir_creates_inside_the_jail() {
+    let (dir, mut executor) = escape_fixture();
+    executor
+        .execute_instruction(&Instruction::Workdir("/app/data".into()))
+        .unwrap();
+    assert!(dir.path().join("jail/app/data").is_dir());
+}
+
+#[test]
+fn workdir_and_volume_refuse_symlink_escapes() {
+    let (dir, mut executor) = escape_fixture();
+    for instruction in [
+        Instruction::Workdir("/escape/pwned".into()),
+        Instruction::Volume("/escape/pwned".into()),
+    ] {
+        assert!(executor.execute_instruction(&instruction).is_err());
+    }
+    assert!(outside_is_empty(&dir));
+}
+
+#[test]
+fn copy_refuses_symlink_escapes() {
+    let (dir, mut executor) = escape_fixture();
+    let copy = Instruction::Copy(CopySpec::new("file.txt", "/escape/file.txt"));
+    assert!(executor.execute_instruction(&copy).is_err());
+    assert!(outside_is_empty(&dir));
+}
+
+#[test]
+fn copy_lands_inside_the_jail() {
+    let (dir, mut executor) = escape_fixture();
+    let copy = Instruction::Copy(CopySpec::new("file.txt", "/etc/file.txt"));
+    executor.execute_instruction(&copy).unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.path().join("jail/etc/file.txt")).unwrap(),
+        "payload"
+    );
+}
+
+#[test]
+fn writes_refuse_a_missing_jail_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = BuildContext::new(dir.path(), &dir.path().join("gone"), "test");
+    let mut executor = TemplateExecutor::new(ctx);
+    assert!(
+        executor
+            .execute_instruction(&Instruction::Workdir("/app".into()))
+            .is_err()
+    );
+    assert!(!dir.path().join("gone").exists());
+}
+
+#[test]
+fn owners_resolve_against_the_jail_not_the_host() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("etc")).unwrap();
+    fs::write(
+        dir.path().join("etc/passwd"),
+        "# jail users\nroot:*:0:0::0:0:Charlie &:/root:/bin/sh\napp:*:1042:1042::0:0:App:/home/app:/bin/sh\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("etc/group"),
+        "wheel:*:0:root\napp:*:1042:\nwww:*:80:\n",
+    )
+    .unwrap();
+
+    let root = dir.path();
+    assert_eq!(resolve_owner(root, "app").unwrap(), (Some(1042), None));
+    assert_eq!(
+        resolve_owner(root, "app:www").unwrap(),
+        (Some(1042), Some(80))
+    );
+    assert_eq!(resolve_owner(root, ":wheel").unwrap(), (None, Some(0)));
+    assert_eq!(
+        resolve_owner(root, "2000:2001").unwrap(),
+        (Some(2000), Some(2001))
+    );
+    // Exists on most hosts, not in this jail: must not borrow the host's id.
+    assert!(resolve_owner(root, "nobody").is_err());
+    assert!(resolve_owner(root, "app:nogroup").is_err());
+}

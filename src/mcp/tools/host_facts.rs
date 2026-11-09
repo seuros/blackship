@@ -212,7 +212,9 @@ fn kernel_facts() -> Value {
 /// name and returns a `long`, no pointers are involved, and
 /// `_SC_NPROCESSORS_ONLN` is always a valid name. A negative or zero return
 /// means "indeterminate", which is clamped to one rather than propagated.
+#[allow(unsafe_code)] // sysconf(3): nix only binds _NPROCESSORS_ONLN on Linux.
 fn online_cpus() -> i64 {
+    // SAFETY: integer in, `long` out; see above.
     let count = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
     if count > 0 { count } else { 1 }
 }

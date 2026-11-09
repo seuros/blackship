@@ -17,6 +17,7 @@
 #include <netgraph/ng_message.h>
 #include <netgraph/ng_bridge.h>
 #include <netgraph/ng_eiface.h>
+#include <stddef.h>
 #include <stdio.h>
 
 int main(void) {
@@ -61,6 +62,10 @@ int main(void) {
 	    sizeof(struct ifbifconf));
 	printf("pub const SIZEOF_IFBRPARAM: usize = %zu;\n",
 	    sizeof(struct ifbrparam));
+	printf("pub const SIZEOF_IFBIF_VLAN_REQ: usize = %zu;\n",
+	    sizeof(struct ifbif_vlan_req));
+	printf("pub const OFFSETOF_IFBIF_VLAN_REQ_BV_SET: usize = %zu;\n",
+	    offsetof(struct ifbif_vlan_req, bv_set));
 
 #define EMIT_USIZE(name) \
 	printf("pub const %s: usize = %zu;\n", #name, (size_t)(name))
@@ -122,6 +127,18 @@ int main(void) {
 	    (unsigned)REAPER_KILL_SUBTREE);
 	printf("pub const SIZEOF_PROCCTL_REAPER_KILL: usize = %zu;\n",
 	    sizeof(struct procctl_reaper_kill));
+
+	/* <sys/procctl.h> -- reaper descendant listing */
+	printf("pub const REAPER_PIDINFO_VALID: u32 = %u;\n",
+	    (unsigned)REAPER_PIDINFO_VALID);
+	printf("pub const REAPER_PIDINFO_CHILD: u32 = %u;\n",
+	    (unsigned)REAPER_PIDINFO_CHILD);
+	printf("pub const SIZEOF_PROCCTL_REAPER_PIDINFO: usize = %zu;\n",
+	    sizeof(struct procctl_reaper_pidinfo));
+	printf("pub const SIZEOF_PROCCTL_REAPER_PIDS: usize = %zu;\n",
+	    sizeof(struct procctl_reaper_pids));
+	printf("pub const OFFSETOF_PROCCTL_REAPER_PIDS_RP_PIDS: usize = %zu;\n",
+	    offsetof(struct procctl_reaper_pids, rp_pids));
 
 	return ferror(stdout) ? 1 : 0;
 }

@@ -22,7 +22,7 @@ use throttle_machines::token_bucket::{TokenBucket, TokenBucketParams, TokenBucke
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
-    /// Initial state, waiting for start_period to elapse
+    /// Initial state, waiting for `start_period` to elapse
     Starting,
     /// All health checks passing
     Healthy,
@@ -39,12 +39,12 @@ pub enum HealthStatus {
 impl std::fmt::Display for HealthStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HealthStatus::Starting => write!(f, "starting"),
-            HealthStatus::Healthy => write!(f, "healthy"),
-            HealthStatus::Unhealthy => write!(f, "unhealthy"),
-            HealthStatus::Failing => write!(f, "failing"),
-            HealthStatus::Suspended => write!(f, "suspended"),
-            HealthStatus::Unknown => write!(f, "unknown"),
+            Self::Starting => write!(f, "starting"),
+            Self::Healthy => write!(f, "healthy"),
+            Self::Unhealthy => write!(f, "unhealthy"),
+            Self::Failing => write!(f, "failing"),
+            Self::Suspended => write!(f, "suspended"),
+            Self::Unknown => write!(f, "unknown"),
         }
     }
 }
@@ -93,20 +93,32 @@ pub struct HealthCheck {
     pub recovery: Option<RecoveryConfig>,
 }
 
-fn default_interval() -> u64 {
+const fn default_interval() -> u64 {
     30
 }
 
-fn default_timeout() -> u64 {
+const fn default_timeout() -> u64 {
     10
 }
 
-fn default_start_period() -> u64 {
+const fn default_start_period() -> u64 {
     60
 }
 
-fn default_retries() -> u32 {
+const fn default_retries() -> u32 {
     3
+}
+
+/// Try to take a rate-limit token for one check; refills are tracked either way.
+fn take_rate_token(state: &mut CheckState, params: TokenBucketParams, now_secs: f64) -> bool {
+    let tb_state = TokenBucketState {
+        tokens: state.rate_limit_tokens,
+        last_refill: state.rate_limit_last_refill,
+    };
+    let rate_result = TokenBucket::check(tb_state, now_secs, params);
+    state.rate_limit_tokens = rate_result.state.tokens;
+    state.rate_limit_last_refill = now_secs;
+    rate_result.allowed
 }
 
 #[cfg(test)]
@@ -268,7 +280,7 @@ pub struct HealthChecker {
     config: HealthCheckConfig,
     /// Current health status
     status: HealthStatus,
-    /// Start time (for start_period tracking)
+    /// Start time (for `start_period` tracking)
     started_at: Instant,
     /// State for each check
     check_states: Vec<CheckState>,
@@ -295,7 +307,7 @@ impl HealthChecker {
         rate_limit_refill_rate: f64,
     ) -> Self {
         let check_count = config.checks.len();
-        let interval = config.checks.first().map(|c| c.interval).unwrap_or(30);
+        let interval = config.checks.first().map_or(30, |c| c.interval);
 
         // Initialize circuit breakers for each health check
         let circuit_breakers = config
@@ -336,13 +348,13 @@ impl HealthChecker {
     }
 
     /// Set jail ID for executing checks inside jail
-    pub fn with_jid(mut self, jid: i32) -> Self {
+    pub const fn with_jid(mut self, jid: i32) -> Self {
         self.jid = Some(jid);
         self
     }
 
     /// Get current health status
-    pub fn status(&self) -> HealthStatus {
+    pub const fn status(&self) -> HealthStatus {
         self.status
     }
 
@@ -362,12 +374,12 @@ impl HealthChecker {
     }
 
     /// Get the check interval
-    pub fn interval(&self) -> Duration {
+    pub const fn interval(&self) -> Duration {
         self.check_interval
     }
 
     /// Check if health checking is enabled
-    pub fn is_enabled(&self) -> bool {
+    pub const fn is_enabled(&self) -> bool {
         self.config.enabled && !self.config.checks.is_empty()
     }
 
@@ -386,25 +398,7 @@ impl HealthChecker {
             return Ok(self.status);
         }
 
-        if self.jid.is_none()
-            && self
-                .config
-                .checks
-                .iter()
-                .any(|c| c.target == CheckTarget::Jail)
-            && let Ok(jid) = jail_getid(&self.jail_name)
-        {
-            self.jid = Some(jid);
-
-            if let Some(handle) = &self.warden_handle
-                && let Err(e) = handle.register_jail(&self.jail_name, jid, None)
-            {
-                eprintln!(
-                    "Warning: Failed to re-register jail '{}' with Warden: {}",
-                    self.jail_name, e
-                );
-            }
-        }
+        self.resolve_jid_if_needed();
 
         let previous_status = self.status;
         let mut any_failing = false;
@@ -428,8 +422,7 @@ impl HealthChecker {
             let breaker_closed = self
                 .circuit_breakers
                 .get(&check.name)
-                .map(breaker_machines::CircuitBreaker::is_closed)
-                .unwrap_or(true);
+                .is_none_or(breaker_machines::CircuitBreaker::is_closed);
 
             if !breaker_closed {
                 // Circuit is open, return suspended result without executing
@@ -446,30 +439,15 @@ impl HealthChecker {
             }
 
             // Check rate limit before executing
-            let state = &self.check_states[idx];
-            let tb_state = TokenBucketState {
-                tokens: state.rate_limit_tokens,
-                last_refill: state.rate_limit_last_refill,
-            };
             let tb_params = TokenBucketParams {
                 capacity: self.rate_limit_capacity,
                 refill_rate: self.rate_limit_refill_rate,
             };
-            let rate_result = TokenBucket::check(tb_state, now_secs, tb_params);
-
-            if !rate_result.allowed {
-                // Rate limited - skip this check and keep previous result
-                // Update token state even when rate limited (for refill tracking)
-                self.check_states[idx].rate_limit_tokens = rate_result.state.tokens;
-                self.check_states[idx].rate_limit_last_refill = now_secs;
-                // Keep the previous result by pushing None (handled below)
+            if !take_rate_token(&mut self.check_states[idx], tb_params, now_secs) {
+                // Rate limited - keep the previous result by pushing None (handled below)
                 results.push(None);
                 continue;
             }
-
-            // Update rate limiter state after consuming a token
-            self.check_states[idx].rate_limit_tokens = rate_result.state.tokens;
-            self.check_states[idx].rate_limit_last_refill = now_secs;
 
             let result = self.execute_check(check)?;
             let duration_secs = result.duration.as_secs_f64();
@@ -497,16 +475,7 @@ impl HealthChecker {
             results.push(Some(result));
         }
 
-        // Update circuit breakers
-        for (idx, success, duration) in breaker_updates {
-            if let Some(breaker) = self.circuit_breakers.get_mut(&self.config.checks[idx].name) {
-                if success {
-                    breaker.record_success(duration);
-                } else {
-                    breaker.record_failure(duration);
-                }
-            }
-        }
+        self.record_breaker_outcomes(breaker_updates);
 
         // Store results (only update if we have a new result, otherwise keep previous)
         for (idx, result) in results.into_iter().enumerate() {
@@ -541,6 +510,42 @@ impl HealthChecker {
         }
 
         Ok(self.status)
+    }
+
+    /// Pick up the JID once the jail runs and re-register with the Warden.
+    fn resolve_jid_if_needed(&mut self) {
+        if self.jid.is_none()
+            && self
+                .config
+                .checks
+                .iter()
+                .any(|c| c.target == CheckTarget::Jail)
+            && let Ok(jid) = jail_getid(&self.jail_name)
+        {
+            self.jid = Some(jid);
+
+            if let Some(handle) = &self.warden_handle
+                && let Err(e) = handle.register_jail(&self.jail_name, jid, None)
+            {
+                eprintln!(
+                    "Warning: Failed to re-register jail '{}' with Warden: {}",
+                    self.jail_name, e
+                );
+            }
+        }
+    }
+
+    /// Feed each executed check's outcome to its circuit breaker.
+    fn record_breaker_outcomes(&mut self, outcomes: Vec<(usize, bool, f64)>) {
+        for (idx, success, duration) in outcomes {
+            if let Some(breaker) = self.circuit_breakers.get_mut(&self.config.checks[idx].name) {
+                if success {
+                    breaker.record_success(duration);
+                } else {
+                    breaker.record_failure(duration);
+                }
+            }
+        }
     }
 
     /// Execute a single health check
@@ -596,7 +601,7 @@ impl HealthChecker {
 
     /// Execute a check command inside the jail with timeout enforcement
     ///
-    /// Uses native jail_attach(2) syscall instead of spawning jexec process
+    /// Uses native `jail_attach(2)` syscall instead of spawning jexec process
     fn execute_in_jail(&self, jid: i32, command: &str, timeout: u64) -> Result<(bool, String)> {
         // Use native jexec with timeout - runs sh -c "<command>" inside jail
         match jexec_with_timeout(jid, &["sh", "-c", command], timeout) {
@@ -617,6 +622,34 @@ impl HealthChecker {
     }
 
     /// Trigger recovery action
+    /// Remove the jail as a recovery step; false when it was already gone.
+    fn stop_for_recovery(&mut self, failure: &str) -> Result<bool> {
+        let jid = match jail_getid(&self.jail_name) {
+            Ok(jid) => jid,
+            Err(e) => {
+                eprintln!(
+                    "Recovery: Jail '{}' not found or already stopped: {}",
+                    self.jail_name, e
+                );
+                return Ok(false);
+            }
+        };
+        println!(
+            "Recovery: Stopping jail '{}' (JID {})...",
+            self.jail_name, jid
+        );
+        if let Err(e) = jail_remove(jid) {
+            eprintln!("Recovery: Failed to stop jail '{}': {}", self.jail_name, e);
+            return Err(Error::HealthCheckFailed {
+                jail: self.jail_name.clone(),
+                check: "recovery".to_string(),
+                message: format!("{failure}: {e}"),
+            });
+        }
+        self.jid = None;
+        Ok(true)
+    }
+
     fn trigger_recovery(&mut self, check_idx: usize, config: &RecoveryConfig) -> Result<()> {
         let state = &mut self.check_states[check_idx];
 
@@ -630,10 +663,7 @@ impl HealthChecker {
         }
 
         if !config.should_attempt(state.last_recovery_at) {
-            let waited = state
-                .last_recovery_at
-                .map(|t| t.elapsed().as_secs())
-                .unwrap_or(0);
+            let waited = state.last_recovery_at.map_or(0, |t| t.elapsed().as_secs());
             eprintln!(
                 "Health check '{}' for jail '{}' is in recovery cooldown ({}s of {}s elapsed)",
                 self.config.checks[check_idx].name, self.jail_name, waited, config.cooldown
@@ -663,64 +693,19 @@ impl HealthChecker {
                 self.jid = None;
             }
             RecoveryAction::Restart => {
-                // Stop the jail first
-                match jail_getid(&self.jail_name) {
-                    Ok(jid) => {
-                        println!(
-                            "Recovery: Stopping jail '{}' (JID {})...",
-                            self.jail_name, jid
-                        );
-                        if let Err(e) = jail_remove(jid) {
-                            eprintln!("Recovery: Failed to stop jail '{}': {}", self.jail_name, e);
-                            return Err(Error::HealthCheckFailed {
-                                jail: self.jail_name.clone(),
-                                check: "recovery".to_string(),
-                                message: format!("Failed to stop jail for restart: {e}"),
-                            });
-                        }
-                        // Clear the stored JID since the jail is now stopped
-                        self.jid = None;
-                        println!(
-                            "Recovery: Jail '{}' stopped. Manual restart required via 'blackship up {}'",
-                            self.jail_name, self.jail_name
-                        );
-                        println!(
-                            "Recovery: Note: For automatic restart, use the 'supervise' command with Warden"
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "Recovery: Jail '{}' not found or already stopped: {}",
-                            self.jail_name, e
-                        );
-                    }
+                if self.stop_for_recovery("Failed to stop jail for restart")? {
+                    println!(
+                        "Recovery: Jail '{}' stopped. Manual restart required via 'blackship up {}'",
+                        self.jail_name, self.jail_name
+                    );
+                    println!(
+                        "Recovery: Note: For automatic restart, use the 'supervise' command with Warden"
+                    );
                 }
             }
             RecoveryAction::Stop => {
-                match jail_getid(&self.jail_name) {
-                    Ok(jid) => {
-                        println!(
-                            "Recovery: Stopping jail '{}' (JID {})...",
-                            self.jail_name, jid
-                        );
-                        if let Err(e) = jail_remove(jid) {
-                            eprintln!("Recovery: Failed to stop jail '{}': {}", self.jail_name, e);
-                            return Err(Error::HealthCheckFailed {
-                                jail: self.jail_name.clone(),
-                                check: "recovery".to_string(),
-                                message: format!("Failed to stop jail: {e}"),
-                            });
-                        }
-                        // Clear the stored JID since the jail is now stopped
-                        self.jid = None;
-                        println!("Recovery: Jail '{}' stopped successfully", self.jail_name);
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "Recovery: Jail '{}' not found or already stopped: {}",
-                            self.jail_name, e
-                        );
-                    }
+                if self.stop_for_recovery("Failed to stop jail")? {
+                    println!("Recovery: Jail '{}' stopped successfully", self.jail_name);
                 }
             }
             RecoveryAction::Command(cmd) => {
@@ -737,15 +722,15 @@ impl HealthChecker {
                         message: e.to_string(),
                     })?;
 
-                if !output.status.success() {
-                    eprintln!(
-                        "Recovery command failed: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    );
-                } else {
+                if output.status.success() {
                     println!(
                         "Recovery: Command executed successfully for jail '{}'",
                         self.jail_name
+                    );
+                } else {
+                    eprintln!(
+                        "Recovery command failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
                     );
                 }
             }

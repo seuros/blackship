@@ -53,7 +53,7 @@ fn live_jail_is_left_alone() {
         &["epair0a"],
         &["web"],
     );
-    assert!(classify(&s).is_empty());
+    assert_eq!(classify(&s), Vec::<Orphan>::new());
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn drain_anchor_of_a_live_jail_is_left_loaded() {
     let mut s = survey(&["web"], vec![running_scope("web")], vec![], &[], &[]);
     s.drain_anchors = vec!["blackship/drain/web".to_string()];
 
-    assert!(classify(&s).is_empty());
+    assert_eq!(classify(&s), Vec::<Orphan>::new());
 }
 
 #[test]

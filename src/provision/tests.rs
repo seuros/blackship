@@ -8,17 +8,8 @@ fn test_arch_detection() {
 
 #[test]
 fn test_manifest_parsing() {
-    let provisioner = Provisioner {
-        mirror_url: String::new(),
-        releases_dir: PathBuf::new(),
-        cache_dir: PathBuf::new(),
-        archives: vec![],
-        arch: Arch::Amd64,
-        retry_config: RetryConfig::default(),
-    };
-
     let manifest = "base.txz\tabc123\t100\t1000\nkernel.txz\tdef456\t50\t500";
-    let checksums = provisioner.parse_manifest(manifest);
+    let checksums = Provisioner::parse_manifest(manifest);
 
     assert_eq!(checksums.get("base"), Some(&"abc123".to_string()));
     assert_eq!(checksums.get("kernel"), Some(&"def456".to_string()));

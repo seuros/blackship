@@ -44,6 +44,8 @@ mod phase_snapshot {
     use super::{DynamicScopeMachine, ScopeCtx, ScopeMachineSnapshot, ScopeMachineState};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    // serde's `with` contract hands the field over by reference.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S>(phase: &ScopeMachineState, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -74,7 +76,7 @@ pub enum QosPhase {
 }
 
 impl QosPhase {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Startup => "startup",
@@ -220,7 +222,7 @@ impl ScopeRecord {
     }
 
     /// True when the record claims something that must be released on teardown.
-    pub fn holds_resources(&self) -> bool {
+    pub const fn holds_resources(&self) -> bool {
         self.zfs_dataset.is_some()
             || self.has_vnet_record
             || self.rctl_subject.is_some()
@@ -239,7 +241,7 @@ impl ScopeStore {
         Self::new(manifest::data_root(config).join("scope"))
     }
 
-    pub fn new(root: PathBuf) -> Self {
+    pub const fn new(root: PathBuf) -> Self {
         Self { root }
     }
 
@@ -285,7 +287,7 @@ impl ScopeStore {
             }
             match read_toml::<ScopeRecord>(&path, "scope record") {
                 Ok(record) => records.push(record),
-                Err(e) => eprintln!("Warning: skipping scope record {path:?}: {e}"),
+                Err(e) => eprintln!("Warning: skipping scope record {}: {e}", path.display()),
             }
         }
         records.sort_by(|a, b| a.name.cmp(&b.name));
@@ -318,7 +320,8 @@ fn validate_name(name: &str) -> Result<()> {
 pub fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
         .unwrap_or_default()
 }
 

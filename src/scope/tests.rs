@@ -1,17 +1,17 @@
 use super::*;
 
-fn temp_root() -> PathBuf {
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("blackship-scope-{unique}"))
+fn temp_root() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("blackship-scope-")
+        .tempdir()
+        .expect("scratch dir")
 }
 
 #[test]
 fn round_trips_through_toml() {
-    let root = temp_root();
-    let store = ScopeStore::new(root.clone());
+    let tmp = temp_root();
+    let root = tmp.path().to_path_buf();
+    let store = ScopeStore::new(root);
 
     let mut record = ScopeRecord::new("demo-web");
     record.jid = Some(42);
@@ -43,13 +43,12 @@ fn round_trips_through_toml() {
     assert!(store.delete("demo-web").unwrap());
     assert!(store.get("demo-web").unwrap().is_none());
     assert!(!store.delete("demo-web").unwrap());
-
-    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
 fn list_skips_non_toml_and_sorts() {
-    let root = temp_root();
+    let tmp = temp_root();
+    let root = tmp.path().to_path_buf();
     let store = ScopeStore::new(root.clone());
     store.save(&ScopeRecord::new("zeta")).unwrap();
     store.save(&ScopeRecord::new("alpha")).unwrap();
@@ -57,14 +56,13 @@ fn list_skips_non_toml_and_sorts() {
 
     let names: Vec<String> = store.list().unwrap().into_iter().map(|r| r.name).collect();
     assert_eq!(names, vec!["alpha", "zeta"]);
-
-    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
 fn update_creates_then_mutates() {
-    let root = temp_root();
-    let store = ScopeStore::new(root.clone());
+    let tmp = temp_root();
+    let root = tmp.path().to_path_buf();
+    let store = ScopeStore::new(root);
 
     let created = store.update("demo", |_| {}).unwrap();
     assert_eq!(created.phase, ScopeMachineState::Provisioning);
@@ -80,13 +78,12 @@ fn update_creates_then_mutates() {
     assert_eq!(loaded.phase, ScopeMachineState::Running);
     assert_eq!(loaded.jid, Some(7));
     assert_eq!(loaded.created_at, created.created_at);
-
-    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
 fn rejects_path_traversal() {
-    let store = ScopeStore::new(temp_root());
+    let tmp = temp_root();
+    let store = ScopeStore::new(tmp.path().to_path_buf());
     assert!(store.get("../escape").is_err());
     assert!(store.get("sub/jail").is_err());
     assert!(store.get("").is_err());
@@ -95,8 +92,8 @@ fn rejects_path_traversal() {
 #[test]
 fn peak_metrics_keep_maximum() {
     let mut peak = PeakMetrics::default();
-    peak.observe(&[("memoryuse".to_string(), 100)].into_iter().collect());
-    peak.observe(&[("memoryuse".to_string(), 40)].into_iter().collect());
+    peak.observe(&std::iter::once(("memoryuse".to_string(), 100)).collect());
+    peak.observe(&std::iter::once(("memoryuse".to_string(), 40)).collect());
     peak.observe(
         &[("memoryuse".to_string(), 250), ("nthr".to_string(), 12)]
             .into_iter()
@@ -134,8 +131,9 @@ fn advance_rejects_illegal_transitions() {
 
 #[test]
 fn advance_restores_the_machine_from_disk() {
-    let root = temp_root();
-    let store = ScopeStore::new(root.clone());
+    let tmp = temp_root();
+    let root = tmp.path().to_path_buf();
+    let store = ScopeStore::new(root);
 
     let mut record = ScopeRecord::new("demo");
     record.advance(ScopeMachineEvent::Provisioned).unwrap();
@@ -145,13 +143,12 @@ fn advance_restores_the_machine_from_disk() {
     assert!(loaded.advance(ScopeMachineEvent::Provisioned).is_err());
     loaded.advance(ScopeMachineEvent::Drain).unwrap();
     assert_eq!(loaded.phase, ScopeMachineState::Draining);
-
-    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
 fn rejects_a_phase_snapshot_from_another_machine() {
-    let root = temp_root();
+    let tmp = temp_root();
+    let root = tmp.path().to_path_buf();
     let store = ScopeStore::new(root.clone());
 
     let mut record = ScopeRecord::new("demo");
@@ -165,8 +162,6 @@ fn rejects_a_phase_snapshot_from_another_machine() {
     fs::write(&path, tampered).unwrap();
 
     assert!(store.get("demo").is_err());
-
-    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

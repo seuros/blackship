@@ -31,8 +31,12 @@ fn test_should_attempt_across_cooldown_boundary() {
 
     let now = std::time::Instant::now();
     assert!(!config.should_attempt(Some(now)));
-    assert!(!config.should_attempt(Some(now - std::time::Duration::from_secs(59))));
-    assert!(config.should_attempt(Some(now - std::time::Duration::from_secs(60))));
+    assert!(!config.should_attempt(Some(
+        now.checked_sub(std::time::Duration::from_secs(59)).unwrap()
+    )));
+    assert!(config.should_attempt(Some(
+        now.checked_sub(std::time::Duration::from_secs(60)).unwrap()
+    )));
 
     let immediate = RecoveryConfig::restart().with_cooldown(0);
     assert!(immediate.should_attempt(Some(now)));

@@ -122,7 +122,7 @@ impl BuildContext {
     }
 
     /// Enable verbose output
-    pub fn verbose(mut self, verbose: bool) -> Self {
+    pub const fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
@@ -143,7 +143,7 @@ impl BuildContext {
     }
 
     /// Get all environment variables
-    pub fn env(&self) -> &HashMap<String, String> {
+    pub const fn env(&self) -> &HashMap<String, String> {
         &self.env
     }
 
@@ -168,7 +168,7 @@ impl BuildContext {
     }
 
     /// Check if verbose mode is enabled
-    pub fn is_verbose(&self) -> bool {
+    pub const fn is_verbose(&self) -> bool {
         self.verbose
     }
 
@@ -274,9 +274,9 @@ impl BuildContext {
     /// Substitute variables in a string
     ///
     /// Supports:
-    /// - ${ARG_NAME} - Build arguments
-    /// - $ARG_NAME - Build arguments (simple form)
-    /// - ${JAIL_NAME} - Current jail name
+    /// - ${`ARG_NAME`} - Build arguments
+    /// - $`ARG_NAME` - Build arguments (simple form)
+    /// - ${`JAIL_NAME`} - Current jail name
     /// - ${WORKDIR} - Current working directory
     pub fn substitute(&self, input: &str) -> String {
         if !input.contains('$') {

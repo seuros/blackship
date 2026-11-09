@@ -1,4 +1,5 @@
 use super::*;
+use std::assert_matches;
 
 #[test]
 fn test_hook_phase_display() {
@@ -61,7 +62,7 @@ fn test_execute_phase_rejects_missing_jid() {
     let err = runner
         .execute_phase(HookPhase::PostStart, &ctx)
         .expect_err("post_start without a JID must fail fast");
-    assert!(matches!(err, Error::HookFailed { .. }));
+    assert_matches!(err, Error::HookFailed { .. });
 
     // A phase that does not need a jail still runs with the same context.
     let runner = HookRunner::new(vec![Hook::new(

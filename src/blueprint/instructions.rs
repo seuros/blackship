@@ -52,8 +52,7 @@ impl ExposePort {
         let port = parts.first()?.parse().ok()?;
         let protocol = parts
             .get(1)
-            .map(std::string::ToString::to_string)
-            .unwrap_or_else(default_protocol);
+            .map_or_else(default_protocol, std::string::ToString::to_string);
         // Only allow known protocols to prevent injection if wired into PF later
         if protocol != "tcp" && protocol != "udp" && protocol != "sctp" {
             return None;
@@ -122,22 +121,22 @@ pub enum Instruction {
 
 impl Instruction {
     /// Get instruction name
-    pub fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
-            Instruction::From(_) => "FROM",
-            Instruction::Arg(_) => "ARG",
-            Instruction::Env(_, _) => "ENV",
-            Instruction::Run(_) => "RUN",
-            Instruction::Copy(_) => "COPY",
-            Instruction::Workdir(_) => "WORKDIR",
-            Instruction::Expose(_) => "EXPOSE",
-            Instruction::Cmd(_) => "CMD",
-            Instruction::Entrypoint(_) => "ENTRYPOINT",
-            Instruction::Stop(_) => "STOP",
-            Instruction::User(_) => "USER",
-            Instruction::Label(_, _) => "LABEL",
-            Instruction::Volume(_) => "VOLUME",
-            Instruction::Comment(_) => "#",
+            Self::From(_) => "FROM",
+            Self::Arg(_) => "ARG",
+            Self::Env(_, _) => "ENV",
+            Self::Run(_) => "RUN",
+            Self::Copy(_) => "COPY",
+            Self::Workdir(_) => "WORKDIR",
+            Self::Expose(_) => "EXPOSE",
+            Self::Cmd(_) => "CMD",
+            Self::Entrypoint(_) => "ENTRYPOINT",
+            Self::Stop(_) => "STOP",
+            Self::User(_) => "USER",
+            Self::Label(_, _) => "LABEL",
+            Self::Volume(_) => "VOLUME",
+            Self::Comment(_) => "#",
         }
     }
 }

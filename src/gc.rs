@@ -39,7 +39,7 @@ pub struct Orphan {
 }
 
 impl Orphan {
-    pub fn kind_label(&self) -> &'static str {
+    pub const fn kind_label(&self) -> &'static str {
         match self.kind {
             OrphanKind::DeadScope(_) => "scope",
             OrphanKind::StrayVnet(_) => "vnet",
@@ -72,51 +72,9 @@ pub fn classify(survey: &Survey) -> Vec<Orphan> {
     let mut orphans = Vec::new();
 
     for scope in &survey.scopes {
-        if survey.live.contains(&scope.name) {
-            continue;
+        if !survey.live.contains(&scope.name) {
+            orphans.push(dead_scope_orphan(scope));
         }
-        if !scope.holds_resources() && scope.jid.is_none() {
-            orphans.push(Orphan {
-                jail: scope.name.clone(),
-                kind: OrphanKind::DeadScope(Box::new(scope.clone())),
-                reason: "scope record holds no resources".to_string(),
-                resources: Vec::new(),
-                requires_force: false,
-            });
-            continue;
-        }
-
-        let mut resources = Vec::new();
-        if let Some(subject) = &scope.rctl_subject {
-            resources.push(format!("rctl {subject}"));
-        }
-        if scope.has_vnet_record {
-            resources.push("vnet".to_string());
-        }
-        if let Some(anchor) = &scope.drain_anchor {
-            resources.push(format!("pf anchor {anchor}"));
-        }
-        for mount in &scope.mounts {
-            resources.push(format!("mount {}", mount.display()));
-        }
-        for ip in &scope.allocated_ips {
-            resources.push(format!("lease {ip}"));
-        }
-        if let Some(dataset) = &scope.zfs_dataset {
-            resources.push(if scope.ephemeral {
-                format!("dataset {dataset} (ephemeral)")
-            } else {
-                format!("dataset {dataset} (retained)")
-            });
-        }
-
-        orphans.push(Orphan {
-            jail: scope.name.clone(),
-            kind: OrphanKind::DeadScope(Box::new(scope.clone())),
-            reason: format!("jail is not running, scope phase {}", scope.phase.name()),
-            resources,
-            requires_force: false,
-        });
     }
 
     for record in &survey.vnet {
@@ -183,6 +141,51 @@ pub fn classify(survey: &Survey) -> Vec<Orphan> {
     }
 
     orphans
+}
+
+/// The orphan a dead jail's scope record stands for.
+fn dead_scope_orphan(scope: &ScopeRecord) -> Orphan {
+    if !scope.holds_resources() && scope.jid.is_none() {
+        return Orphan {
+            jail: scope.name.clone(),
+            kind: OrphanKind::DeadScope(Box::new(scope.clone())),
+            reason: "scope record holds no resources".to_string(),
+            resources: Vec::new(),
+            requires_force: false,
+        };
+    }
+
+    let mut resources = Vec::new();
+    if let Some(subject) = &scope.rctl_subject {
+        resources.push(format!("rctl {subject}"));
+    }
+    if scope.has_vnet_record {
+        resources.push("vnet".to_string());
+    }
+    if let Some(anchor) = &scope.drain_anchor {
+        resources.push(format!("pf anchor {anchor}"));
+    }
+    for mount in &scope.mounts {
+        resources.push(format!("mount {}", mount.display()));
+    }
+    for ip in &scope.allocated_ips {
+        resources.push(format!("lease {ip}"));
+    }
+    if let Some(dataset) = &scope.zfs_dataset {
+        resources.push(if scope.ephemeral {
+            format!("dataset {dataset} (ephemeral)")
+        } else {
+            format!("dataset {dataset} (retained)")
+        });
+    }
+
+    Orphan {
+        jail: scope.name.clone(),
+        kind: OrphanKind::DeadScope(Box::new(scope.clone())),
+        reason: format!("jail is not running, scope phase {}", scope.phase.name()),
+        resources,
+        requires_force: false,
+    }
 }
 
 /// Owns the stores a reap needs, plus the lock that serializes it.

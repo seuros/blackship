@@ -1,10 +1,12 @@
 use super::*;
+use std::assert_matches;
 
-/// A unique scratch directory for one test.
-fn scratch(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("blackship-elicit-{}-{tag}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create scratch dir");
-    dir
+/// A scratch directory, removed when the guard drops.
+fn scratch(tag: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("blackship-elicit-{tag}-"))
+        .tempdir()
+        .expect("scratch dir")
 }
 
 /// An answer carrying the given form fields.
@@ -33,7 +35,7 @@ fn accept_without_confirm_is_not_an_approval() {
         false,
     );
 
-    assert!(matches!(result, Verdict::Refuse(_)), "got {result:?}");
+    assert_matches!(result, Verdict::Refuse(_), "got {result:?}");
 }
 
 #[test]
@@ -43,7 +45,7 @@ fn accept_with_no_content_at_all_is_not_an_approval() {
         content: None,
     };
 
-    assert!(matches!(verdict(&bare, false), Verdict::Refuse(_)));
+    assert_matches!(verdict(&bare, false), Verdict::Refuse(_));
 }
 
 #[test]
@@ -53,7 +55,7 @@ fn confirm_alone_does_not_clobber_an_existing_file() {
         true,
     );
 
-    assert!(matches!(result, Verdict::Refuse(_)), "got {result:?}");
+    assert_matches!(result, Verdict::Refuse(_), "got {result:?}");
 }
 
 #[test]
@@ -80,13 +82,14 @@ fn decline_and_cancel_both_refuse() {
             },
             false,
         );
-        assert!(matches!(result, Verdict::Refuse(_)), "got {result:?}");
+        assert_matches!(result, Verdict::Refuse(_), "got {result:?}");
     }
 }
 
 #[test]
 fn a_write_verdict_puts_the_content_on_disk() {
-    let target = scratch("write").join("blackship.toml");
+    let tmp = scratch("write");
+    let target = tmp.path().to_path_buf().join("blackship.toml");
     let _ = std::fs::remove_file(&target);
 
     let report = apply(
@@ -109,7 +112,8 @@ fn a_write_verdict_puts_the_content_on_disk() {
 
 #[test]
 fn a_refuse_verdict_leaves_no_file_behind() {
-    let dir = scratch("refuse");
+    let tmp = scratch("refuse");
+    let dir = tmp.path().to_path_buf();
     let target = dir.join("blackship.toml");
     let _ = std::fs::remove_file(&target);
 
@@ -128,7 +132,8 @@ fn a_refuse_verdict_leaves_no_file_behind() {
 
 #[test]
 fn a_file_that_appears_after_approval_is_still_not_clobbered() {
-    let target = scratch("race").join("blackship.toml");
+    let tmp = scratch("race");
+    let target = tmp.path().to_path_buf().join("blackship.toml");
     std::fs::write(&target, "pre-existing\n").expect("seed target");
 
     let report = apply(
@@ -150,7 +155,8 @@ fn a_file_that_appears_after_approval_is_still_not_clobbered() {
 
 #[test]
 fn the_operator_message_names_the_absolute_path_and_says_the_file_exists() {
-    let target = scratch("message").join("blackship.toml");
+    let tmp = scratch("message");
+    let target = tmp.path().to_path_buf().join("blackship.toml");
 
     let fresh = message(&target, "a manifest", false);
     assert!(fresh.contains(&target.display().to_string()), "{fresh}");
@@ -175,7 +181,8 @@ fn overwrite_is_only_offered_when_the_target_exists() {
 
 #[test]
 fn a_target_under_a_directory_that_does_not_exist_reports_that_directory() {
-    let dir = scratch("absent-parent");
+    let tmp = scratch("absent-parent");
+    let dir = tmp.path().to_path_buf();
     let absent = dir.join("no-such-dir");
     let _ = std::fs::remove_dir_all(&absent);
 
@@ -188,7 +195,8 @@ fn a_target_under_a_directory_that_does_not_exist_reports_that_directory() {
 
 #[test]
 fn a_parent_that_is_a_regular_file_is_reported_as_unusable() {
-    let dir = scratch("file-parent");
+    let tmp = scratch("file-parent");
+    let dir = tmp.path().to_path_buf();
     let blocker = dir.join("not-a-dir");
     std::fs::write(&blocker, "i am a file\n").expect("seed blocker");
 
@@ -216,7 +224,8 @@ fn a_parent_that_is_a_regular_file_is_reported_as_unusable() {
 
 #[test]
 fn refusing_a_missing_parent_leaves_nothing_at_all_on_disk() {
-    let dir = scratch("absent-parent-clean");
+    let tmp = scratch("absent-parent-clean");
+    let dir = tmp.path().to_path_buf();
     let absent = dir.join("still-no-such-dir");
     let _ = std::fs::remove_dir_all(&absent);
     let target = absent.join("blackship.toml");

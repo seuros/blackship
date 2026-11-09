@@ -1,7 +1,10 @@
 //! RCTL (Resource Control) for per-jail resource limits
 //!
 //! Wraps FreeBSD's rctl(4) syscalls to apply resource limits to jails.
-//! Rule format: "jail:<name>:<resource>:<action>=<amount>"
+//! Rule format: `jail:<name>:<resource>:<action>=<amount>`
+
+// FFI module: rctl(2) syscalls.
+#![allow(unsafe_code)]
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -40,7 +43,7 @@ pub struct ResourceConfig {
 }
 
 impl ResourceConfig {
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.memory.is_none()
             && self.vmemory.is_none()
             && self.cpu.is_none()
@@ -54,7 +57,7 @@ impl ResourceConfig {
     }
 
     /// True when only cpuset pinning is configured (no rctl rules needed)
-    pub fn has_rctl_rules(&self) -> bool {
+    pub const fn has_rctl_rules(&self) -> bool {
         self.memory.is_some()
             || self.vmemory.is_some()
             || self.cpu.is_some()
@@ -169,7 +172,7 @@ const MANAGED_RESOURCES: [&str; 7] = [
         reason = "the MCP host_facts tool is this accessor's only caller"
     )
 )]
-pub(crate) fn managed_resources() -> &'static [&'static str] {
+pub const fn managed_resources() -> &'static [&'static str] {
     &MANAGED_RESOURCES
 }
 
@@ -277,8 +280,9 @@ pub fn resolve_cpu_list<'a>(
         return Some(list.clone());
     }
     let want = config.cores? as usize;
+    // SAFETY: plain integer arg.
     let ncpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
-    let ncpu = if ncpu > 0 { ncpu as usize } else { 1 };
+    let ncpu = usize::try_from(ncpu).ok().filter(|&n| n > 0).unwrap_or(1);
 
     let mut load = vec![0usize; ncpu];
     for pin in other_pins {
@@ -294,12 +298,13 @@ pub fn resolve_cpu_list<'a>(
     let mut cores: Vec<usize> = (0..ncpu).collect();
     cores.sort_by_key(|&c| (load[c], c));
     cores.truncate(want.min(ncpu));
-    cores.sort();
+    cores.sort_unstable();
     let mut list = String::with_capacity(cores.len() * 3);
     for core in cores {
         if !list.is_empty() {
             list.push(',');
         }
+        // Writing to a String cannot fail.
         let _ = write!(list, "{core}");
     }
     Some(list)
@@ -360,6 +365,7 @@ pub fn apply_limits(jail_name: &str, config: &ResourceConfig) -> Result<()> {
 pub fn remove_limits(jail_name: &str) {
     // Remove all rules matching this jail
     let filter = format!("jail:{jail_name}");
+    // ESRCH (no rules) and ENOSYS (no RACCT) are expected.
     let _ = rctl_remove_rule(&filter);
 }
 
@@ -377,10 +383,11 @@ fn rctl_string_syscall(
 ) -> Result<()> {
     let arg_bytes = arg.as_bytes();
 
+    // SAFETY: live input with its length; NULL output with length 0.
     let ret = unsafe {
         libc::syscall(
             syscall_num,
-            arg_bytes.as_ptr() as *const libc::c_void,
+            arg_bytes.as_ptr().cast::<libc::c_void>(),
             arg_bytes.len(),
             std::ptr::null_mut::<libc::c_void>(),
             0usize,
@@ -413,12 +420,13 @@ fn rctl_get_racct(filter: &str) -> Result<std::collections::HashMap<String, u64>
     let filter_bytes = filter.as_bytes();
     let mut outbuf = [0u8; 4096];
 
+    // SAFETY: live buffers, each passed with its own length.
     let ret = unsafe {
         libc::syscall(
             SYS_RCTL_GET_RACCT,
-            filter_bytes.as_ptr() as *const libc::c_void,
+            filter_bytes.as_ptr().cast::<libc::c_void>(),
             filter_bytes.len(),
-            outbuf.as_mut_ptr() as *mut libc::c_void,
+            outbuf.as_mut_ptr().cast::<libc::c_void>(),
             outbuf.len(),
         )
     };

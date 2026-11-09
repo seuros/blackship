@@ -40,10 +40,10 @@ pub enum HookPhase {
 
 impl HookPhase {
     /// Check if this phase requires a running jail
-    pub fn requires_running_jail(&self) -> bool {
+    pub const fn requires_running_jail(self) -> bool {
         matches!(
             self,
-            HookPhase::PostStart | HookPhase::PreStop | HookPhase::PreEva | HookPhase::PostEva
+            Self::PostStart | Self::PreStop | Self::PreEva | Self::PostEva
         )
     }
 }
@@ -51,14 +51,14 @@ impl HookPhase {
 impl std::fmt::Display for HookPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            HookPhase::PreCreate => "pre_create",
-            HookPhase::PostCreate => "post_create",
-            HookPhase::PreStart => "pre_start",
-            HookPhase::PostStart => "post_start",
-            HookPhase::PreStop => "pre_stop",
-            HookPhase::PostStop => "post_stop",
-            HookPhase::PreEva => "pre_eva",
-            HookPhase::PostEva => "post_eva",
+            Self::PreCreate => "pre_create",
+            Self::PostCreate => "post_create",
+            Self::PreStart => "pre_start",
+            Self::PostStart => "post_start",
+            Self::PreStop => "pre_stop",
+            Self::PostStop => "post_stop",
+            Self::PreEva => "pre_eva",
+            Self::PostEva => "post_eva",
         };
         write!(f, "{s}")
     }
@@ -115,7 +115,7 @@ pub struct Hook {
     pub description: Option<String>,
 }
 
-fn default_timeout() -> u64 {
+const fn default_timeout() -> u64 {
     30
 }
 
@@ -193,7 +193,7 @@ impl HookContext {
     }
 
     /// Set jail ID
-    pub fn with_jid(mut self, jid: i32) -> Self {
+    pub const fn with_jid(mut self, jid: i32) -> Self {
         self.jid = Some(jid);
         self
     }
@@ -208,11 +208,12 @@ impl HookContext {
     /// Substitute variables in a string
     ///
     /// Supported variables:
-    /// - ${jail_name} - Jail name
-    /// - ${jail_path} - Jail filesystem path
-    /// - ${jail_ip} - Jail IP address
-    /// - ${jid} - Jail ID
-    /// - ${custom_var} - Custom variables from extra
+    /// - `${jail_name}` - Jail name
+    /// - `${jail_path}` - Jail filesystem path
+    /// - `${jail_ip}` - Jail IP address
+    /// - `${jid}` - Jail ID
+    /// - `${custom_var}` - Custom variables from extra
+    #[allow(clippy::literal_string_with_formatting_args)] // `${name}` is the hook template syntax, not a format string
     pub fn substitute(&self, input: &str) -> String {
         if !input.contains('$') {
             return input.to_string();
@@ -294,7 +295,7 @@ pub struct HookRunner {
 
 impl HookRunner {
     /// Create a new hook runner
-    pub fn new(hooks: Vec<Hook>) -> Self {
+    pub const fn new(hooks: Vec<Hook>) -> Self {
         Self {
             hooks,
             verbose: false,
@@ -302,7 +303,7 @@ impl HookRunner {
     }
 
     /// Enable verbose output
-    pub fn verbose(mut self, verbose: bool) -> Self {
+    pub const fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
@@ -385,25 +386,20 @@ impl HookRunner {
         }
 
         match hook.target {
-            HookTarget::Host => self.execute_on_host(&command, &args, hook.timeout),
+            HookTarget::Host => Self::execute_on_host(&command, &args, hook.timeout),
             HookTarget::Jail => {
                 let jid = context.jid.ok_or_else(|| Error::HookFailed {
                     phase: hook.phase.to_string(),
                     command: command.clone(),
                     message: "Cannot execute jail hook: jail is not running".to_string(),
                 })?;
-                self.execute_in_jail(jid, &command, &args, hook.timeout)
+                Self::execute_in_jail(jid, &command, &args, hook.timeout)
             }
         }
     }
 
     /// Execute a command on the host with timeout enforcement
-    fn execute_on_host(
-        &self,
-        command: &str,
-        args: &[String],
-        timeout_secs: u64,
-    ) -> Result<HookResult> {
+    fn execute_on_host(command: &str, args: &[String], timeout_secs: u64) -> Result<HookResult> {
         let mut cmd = Command::new(command);
         cmd.args(args);
 
@@ -428,9 +424,8 @@ impl HookRunner {
 
     /// Execute a command inside a jail with timeout enforcement
     ///
-    /// Uses native jail_attach(2) syscall instead of spawning jexec process
+    /// Uses native `jail_attach(2)` syscall instead of spawning jexec process
     fn execute_in_jail(
-        &self,
         jid: i32,
         command: &str,
         args: &[String],
@@ -462,7 +457,7 @@ impl HookRunner {
 /// Filter hooks by phase
 ///
 /// Utility function for filtering hooks when you need to process
-/// hooks for a specific phase outside of HookRunner.
+/// hooks for a specific phase outside of `HookRunner`.
 ///
 /// # Example
 /// ```ignore

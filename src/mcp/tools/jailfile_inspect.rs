@@ -81,7 +81,7 @@ impl McpState {
 }
 
 /// Stable lowercase name for a format, for JSON output.
-pub(in crate::mcp) fn format_name(format: JailfileFormat) -> &'static str {
+pub(in crate::mcp) const fn format_name(format: JailfileFormat) -> &'static str {
     match format {
         JailfileFormat::Auto => "auto",
         JailfileFormat::Line => "line",

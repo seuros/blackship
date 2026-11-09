@@ -11,16 +11,16 @@ use crate::manifest;
 
 pub fn handle_migrate(
     config_path: &Path,
-    jail: String,
-    target: String,
+    jail: &str,
+    target: &str,
     remote_dataset: Option<String>,
     keep: bool,
 ) -> Result<()> {
     let config = manifest::load(config_path)?;
     let zfs = super::snapshot::require_zfs(&config)?;
     let (service_name, full_name) = config
-        .resolve_jail_names(&jail)
-        .ok_or_else(|| Error::JailNotFound(jail.clone()))?;
+        .resolve_jail_names(jail)
+        .ok_or_else(|| Error::JailNotFound(jail.to_string()))?;
 
     if crate::jail::jail_getid(&full_name).is_ok() {
         return Err(Error::JailOperation(format!(
@@ -34,7 +34,7 @@ pub fn handle_migrate(
 
     // Preflight: target reachable, remote dataset absent.
     let probe = Command::new("/usr/bin/ssh")
-        .args(["-o", "BatchMode=yes", &target])
+        .args(["-o", "BatchMode=yes", target])
         .args(["zfs", "list", "-H", "-o", "name", &remote_dataset])
         .output()
         .map_err(|e| Error::JailOperation(format!("Failed to run ssh: {e}")))?;
@@ -44,7 +44,7 @@ pub fn handle_migrate(
         )));
     }
     let reachable = Command::new("/usr/bin/ssh")
-        .args(["-o", "BatchMode=yes", &target, "true"])
+        .args(["-o", "BatchMode=yes", target, "true"])
         .status()
         .map_err(|e| Error::JailOperation(format!("Failed to run ssh: {e}")))?;
     if !reachable.success() {
@@ -69,7 +69,7 @@ pub fn handle_migrate(
         .take()
         .ok_or_else(|| Error::JailOperation("Failed to capture zfs send output".to_string()))?;
     let receive = Command::new("/usr/bin/ssh")
-        .args(["-o", "BatchMode=yes", &target])
+        .args(["-o", "BatchMode=yes", target])
         .args(["zfs", "receive", "-u", &remote_dataset])
         .stdin(Stdio::from(send_out))
         .status()

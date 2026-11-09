@@ -32,6 +32,7 @@ impl Bridge {
 
         // Bring interface up using native ioctl
         if let Err(e) = ioctl::set_interface_up(name, true) {
+            // Rollback; keep the original error.
             let _ = ioctl::destroy_interface(name);
             return Err(e);
         }
@@ -132,7 +133,7 @@ impl Bridge {
     /// Disable hardware VLAN filtering on an interface
     ///
     /// Some NICs (especially Broadcom) have buggy VLAN hardware filtering.
-    /// Uses native SIOCGIFCAP/SIOCSIFCAP ioctls to clear IFCAP_VLAN_HWFILTER.
+    /// Uses native SIOCGIFCAP/SIOCSIFCAP ioctls to clear `IFCAP_VLAN_HWFILTER`.
     pub fn disable_hwfilter(interface: &str) -> Result<()> {
         ioctl::disable_hwfilter(interface)
     }
@@ -150,8 +151,8 @@ impl Bridge {
     }
 }
 
-/// Destroy an if_bridge or ng_bridge. Without `force`, an if_bridge with members
-/// is an error; for ng_bridge force is implicit (NGM_SHUTDOWN tears down peers).
+/// Destroy an `if_bridge` or `ng_bridge`. Without `force`, an `if_bridge` with members
+/// is an error; for `ng_bridge` force is implicit (`NGM_SHUTDOWN` tears down peers).
 pub fn destroy_bridge(name: &str, force: bool) -> Result<()> {
     if Bridge::exists(name)? {
         let bridge = Bridge::open(name)?;

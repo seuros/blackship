@@ -1,12 +1,11 @@
 use super::*;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::assert_matches;
 
-fn temp_store_root() -> PathBuf {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("blackship-network-store-{unique}"))
+fn temp_store_root() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("blackship-network-store-")
+        .tempdir()
+        .expect("scratch dir")
 }
 
 #[test]
@@ -20,7 +19,8 @@ fn test_network_name_validation() {
 
 #[test]
 fn test_store_round_trip() {
-    let root = temp_store_root();
+    let tmp = temp_store_root();
+    let root = tmp.path().to_path_buf();
     let store = NetworkStore {
         root: root.join("networks"),
     };
@@ -41,13 +41,12 @@ fn test_store_round_trip() {
 
     assert!(store.delete("default").unwrap());
     assert_eq!(store.get("default").unwrap(), None);
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn test_duplicate_create_fails() {
-    let root = temp_store_root();
+    let tmp = temp_store_root();
+    let root = tmp.path().to_path_buf();
     let store = NetworkStore {
         root: root.join("networks"),
     };
@@ -62,14 +61,13 @@ fn test_duplicate_create_fails() {
 
     store.create(&record).unwrap();
     let err = store.create(&record).unwrap_err();
-    assert!(matches!(err, Error::NetworkAlreadyExists(ref name) if name == "default"));
-
-    fs::remove_dir_all(root).unwrap();
+    assert_matches!(err, Error::NetworkAlreadyExists(ref name) if name == "default");
 }
 
 #[test]
 fn test_network_leases_round_trip() {
-    let root = temp_store_root();
+    let tmp = temp_store_root();
+    let root = tmp.path().to_path_buf();
     let store = NetworkLeaseStore {
         root: root.join("network-leases"),
     };
@@ -86,14 +84,16 @@ fn test_network_leases_round_trip() {
     );
 
     assert!(store.release("default", "demo-web").unwrap());
-    assert!(store.list("default").unwrap().is_empty());
-
-    fs::remove_dir_all(root).unwrap();
+    assert_eq!(
+        store.list("default").unwrap(),
+        Vec::<NetworkLeaseRecord>::new()
+    );
 }
 
 #[test]
 fn test_vnet_state_round_trip() {
-    let root = temp_store_root();
+    let tmp = temp_store_root();
+    let root = tmp.path().to_path_buf();
     let store = VnetStateStore {
         root: root.join("vnet"),
     };
@@ -110,13 +110,12 @@ fn test_vnet_state_round_trip() {
     assert_eq!(store.get("demo-web").unwrap(), Some(record));
     assert!(store.delete("demo-web").unwrap());
     assert_eq!(store.get("demo-web").unwrap(), None);
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn test_allocator_ignores_static_ip_for_missing_runtime_network() {
-    let root = temp_store_root();
+    let tmp = temp_store_root();
+    let root = tmp.path().to_path_buf();
     fs::create_dir_all(&root).unwrap();
     let config: manifest::BlackshipConfig = toml::from_str(&format!(
         r#"
@@ -138,6 +137,4 @@ ip = "10.0.1.10"
 
     let result = build_runtime_allocator(Some(&config));
     assert!(result.is_ok());
-
-    fs::remove_dir_all(root).unwrap();
 }

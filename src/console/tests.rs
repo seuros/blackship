@@ -5,7 +5,7 @@ fn test_exec_options_default() {
     let opts = ExecOptions::default();
     assert_eq!(opts.user, "root");
     assert!(opts.workdir.is_none());
-    assert!(opts.env.is_empty());
+    assert_eq!(opts.env, Vec::<(String, String)>::new());
 }
 
 #[test]

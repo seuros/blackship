@@ -7,8 +7,8 @@ use crate::error::Result;
 use crate::manifest::BlackshipConfig;
 use crate::{error, export, jail, manifest, zfs};
 
-/// Require ZFS to be enabled and return a ready ZfsManager.
-pub(crate) fn require_zfs(config: &BlackshipConfig) -> Result<zfs::ZfsManager> {
+/// Require ZFS to be enabled and return a ready `ZfsManager`.
+pub fn require_zfs(config: &BlackshipConfig) -> Result<zfs::ZfsManager> {
     if !config.config.zfs_enabled {
         return Err(error::Error::ZfsNotEnabled);
     }
@@ -38,11 +38,7 @@ fn resolve_jail(config: &BlackshipConfig, jail: &str) -> Result<(String, String)
 /// Stage the jail's definition (and Jailfile, when known) inside the dataset
 /// at .blackship/ so snapshots, exports, and zfs send carry everything needed
 /// to reconstruct the jail elsewhere.
-pub(crate) fn stage_config_in_dataset(
-    config: &BlackshipConfig,
-    service_name: &str,
-    full_name: &str,
-) {
+pub fn stage_config_in_dataset(config: &BlackshipConfig, service_name: &str, full_name: &str) {
     let Some(jail_def) = config.get_jail(service_name) else {
         return;
     };
@@ -69,33 +65,31 @@ pub(crate) fn stage_config_in_dataset(
         .or_else(|| jail_def.build.as_ref().map(|dir| dir.join("Jailfile")));
     if let Some(jailfile) = jailfile
         && jailfile.exists()
+        && let Err(e) = std::fs::copy(&jailfile, stage.join("Jailfile"))
     {
-        let _ = std::fs::copy(&jailfile, stage.join("Jailfile"));
+        eprintln!("Warning: failed to stage Jailfile: {e}");
     }
 }
 
 /// Freeze a jail into a reusable release via snapshot + clone + promote.
-pub fn handle_commit(config_path: &Path, jail: String, release: String) -> Result<()> {
+pub fn handle_commit(config_path: &Path, jail: &str, release: &str) -> Result<()> {
     let config = manifest::load(config_path)?;
     let zfs = require_zfs(&config)?;
-    let (service_name, full_name) = resolve_jail(&config, &jail)?;
-    manifest::validate_name("release", &release)?;
+    let (service_name, full_name) = resolve_jail(&config, jail)?;
     stage_config_in_dataset(&config, &service_name, &full_name);
 
-    let release_path = config.config.releases_dir.join(&release);
-    if release_path.exists() {
-        return Err(error::Error::Zfs(format!(
-            "Release path '{}' already exists",
-            release_path.display()
-        )));
-    }
-
-    zfs.commit_jail_to_release(&full_name, &release, &release_path)?;
+    let host = crate::host::Host::from_config(Some(config));
+    let committed = crate::release::commit_dataset(
+        host.layout(),
+        &zfs,
+        &zfs.jail_dataset_name(&full_name),
+        release,
+    )?;
     println!(
         "Committed jail '{}' as release '{}' ({})",
         full_name,
         release,
-        release_path.display()
+        committed.path.display()
     );
     println!("Use it with: FROM {release}  (Jailfile) or release = \"{release}\"");
     Ok(())
@@ -130,7 +124,11 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
                         })
                     })
                     .collect();
-                println!("{}", serde_json::to_string_pretty(&json_data).unwrap());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json_data)
+                        .expect("serde_json::Value always serializes")
+                );
             } else if snapshots.is_empty() {
                 println!("No snapshots for jail '{full_name}'.");
             } else {
@@ -175,7 +173,7 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
     Ok(())
 }
 
-pub fn handle_clone(config_path: &Path, source: String, name: String) -> Result<()> {
+pub fn handle_clone(config_path: &Path, source: &str, name: &str) -> Result<()> {
     let config = manifest::load(config_path)?;
     let zfs = require_zfs(&config)?;
 
@@ -189,15 +187,15 @@ pub fn handle_clone(config_path: &Path, source: String, name: String) -> Result<
 
     let (_source_service, source_full) = resolve_jail(&config, source_jail)?;
 
-    if config.resolve_jail_names(&name).is_some() {
+    if config.resolve_jail_names(name).is_some() {
         return Err(error::Error::JailOperation(format!(
             "Jail '{name}' already exists in config"
         )));
     }
 
-    manifest::validate_name("jail", &name)?;
+    manifest::validate_name("jail", name)?;
 
-    let new_full_name = config.jail_name(&name);
+    let new_full_name = config.jail_name(name);
     let new_path = zfs.clone_from_snapshot(&source_full, snapshot, &new_full_name)?;
 
     println!("Cloned '{source_full}@{snapshot}' to new jail '{new_full_name}'");
@@ -212,16 +210,16 @@ pub fn handle_clone(config_path: &Path, source: String, name: String) -> Result<
 
 pub fn handle_export(
     config_path: &Path,
-    jail: String,
+    jail: &str,
     output: Option<std::path::PathBuf>,
     zfs_send: bool,
 ) -> Result<()> {
     let config = manifest::load(config_path)?;
 
-    let (service_name, full_name) = resolve_jail(&config, &jail)?;
+    let (service_name, full_name) = resolve_jail(&config, jail)?;
     let jail_def = config
         .get_jail(&service_name)
-        .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
+        .ok_or_else(|| error::Error::JailNotFound(jail.to_string()))?;
 
     let jail_path = jail_def.effective_path(&config.config, &full_name);
 
@@ -237,7 +235,11 @@ pub fn handle_export(
 
     if zfs_send {
         require_zfs(&config)?; // validates zfs_enabled + zpool present
-        let pool = config.config.zpool.as_ref().unwrap();
+        let pool = config
+            .config
+            .zpool
+            .as_ref()
+            .expect("require_zfs checked zpool is set");
         let dataset = format!("{}/{}/jails/{}", pool, config.config.dataset, full_name);
         export::export_jail_zfs(&full_name, &dataset, &output_path, hostname, ip.as_deref())?;
     } else {
@@ -255,14 +257,14 @@ pub fn handle_export(
 
 pub fn handle_import(
     config_path: &Path,
-    file: std::path::PathBuf,
-    name: Option<String>,
+    file: &Path,
+    name: Option<&str>,
     force: bool,
 ) -> Result<()> {
     let config = manifest::load(config_path)?;
 
-    let metadata = export::read_metadata(&file)?;
-    let target_name = name.as_deref().unwrap_or(metadata.name.as_str());
+    let metadata = export::read_metadata(file)?;
+    let target_name = name.unwrap_or(metadata.name.as_str());
     manifest::validate_name("jail", target_name)?;
     let full_name = config.jail_name(target_name);
     let target_path = config.config.jail_root(&full_name);
@@ -282,7 +284,7 @@ pub fn handle_import(
         .map(|zpool| format!("{}/{}/jails/{}", zpool, config.config.dataset, full_name));
 
     let imported_name = export::import_jail(
-        &file,
+        file,
         &target_path,
         Some(target_name),
         zfs_dataset.as_deref(),

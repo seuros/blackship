@@ -18,6 +18,8 @@ use serde_json::json;
 use toml::{Table, Value as TomlValue};
 
 use super::super::McpState;
+use super::insert_string;
+use super::json_output;
 use super::super::elicit;
 use crate::blueprint::parser::{JailfileFormat, parse_jailfile_as};
 
@@ -155,7 +157,7 @@ impl McpState {
             .map_err(|e| ToolError::Execution(format!("Failed to render Jailfile: {e}")))?;
 
         if let Err(e) = parse_jailfile_as(&rendered, JailfileFormat::Toml) {
-            let text = serde_json::to_string_pretty(&json!({
+            return json_output(&json!({
                 "path": path.display().to_string(),
                 "written": false,
                 "reason": "The rendered Jailfile does not parse, so the operator was not asked. \
@@ -163,10 +165,7 @@ impl McpState {
                 "format": "toml",
                 "diagnostics": [{ "message": e.to_string() }],
                 "rendered": rendered,
-            }))
-            .map_err(|e| ToolError::Execution(format!("Failed to serialize result: {e}")))?;
-
-            return Ok(ToolOutput::text(text));
+            }));
         }
 
         let outcome =
@@ -178,10 +177,7 @@ impl McpState {
             object.insert("rendered".to_string(), json!(rendered));
         }
 
-        let text = serde_json::to_string_pretty(&payload)
-            .map_err(|e| ToolError::Execution(format!("Failed to serialize result: {e}")))?;
-
-        Ok(ToolOutput::text(text))
+        json_output(&payload)
     }
 }
 
@@ -350,12 +346,6 @@ fn start_table(start: &StartParams) -> Table {
     table
 }
 
-/// Insert `key` only when the caller supplied a value.
-fn insert_string(table: &mut Table, key: &str, value: Option<&str>) {
-    if let Some(value) = value {
-        table.insert(key.to_string(), TomlValue::String(value.to_string()));
-    }
-}
 
 pub fn mount(router: McpToolRouter<McpState>) -> McpToolRouter<McpState> {
     router.with_tool(

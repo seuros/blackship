@@ -12,6 +12,7 @@ use crate::network::{VnetConfig, VnetSetup};
 use crate::scope::{ScopeMachineEvent, ScopeRecord};
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use throttle_machines::gate::Gate;
 use throttle_machines::token_bucket::{TokenBucket, TokenBucketParams, TokenBucketState};
@@ -21,8 +22,13 @@ use super::Bridge;
 /// Reserved params are rejected so manifests cannot bypass jail isolation.
 /// `allow.` is matched by prefix: module-registered params are runtime
 /// sysctl entries no header can enumerate.
-pub(crate) fn is_reserved_param(key: &str) -> bool {
-    use crate::sys::consts::*;
+pub fn is_reserved_param(key: &str) -> bool {
+    use crate::sys::consts::{
+        JAIL_PARAM_CHILDREN_MAX, JAIL_PARAM_DEVFS_RULESET, JAIL_PARAM_ENFORCE_STATFS,
+        JAIL_PARAM_ERRMSG, JAIL_PARAM_HOST_HOSTNAME, JAIL_PARAM_IP4_ADDR, JAIL_PARAM_IP6_ADDR,
+        JAIL_PARAM_JID, JAIL_PARAM_NAME, JAIL_PARAM_NOPERSIST, JAIL_PARAM_PATH, JAIL_PARAM_PERSIST,
+        JAIL_PARAM_SECURELEVEL, JAIL_PARAM_VNET,
+    };
     key.starts_with("allow.")
         || matches!(
             key,
@@ -43,7 +49,7 @@ pub(crate) fn is_reserved_param(key: &str) -> bool {
         )
 }
 
-/// Build the jail_set parameter map shared by creation and eva.
+/// Build the `jail_set` parameter map shared by creation and eva.
 pub(super) fn build_jail_params(
     jail_def: &crate::manifest::JailDef,
     full_name: &str,
@@ -118,6 +124,112 @@ fn copy_resolv_conf_if_absent(jail_root: &std::path::Path) {
         }
     }
 }
+/// Mount devfs into the jail root; jail(2) ignores `mount.devfs`.
+fn mount_jail_devfs(jail_def: &crate::manifest::JailDef, path: &Path) -> Result<()> {
+    let devfs_ruleset = jail_def
+        .devfs_ruleset
+        .unwrap_or(crate::sys::DEVFS_RULESET_JAIL);
+    if devfs_ruleset != 0 {
+        let dev_path = path.join("dev");
+        if !dev_path.join("null").exists() {
+            // A missing dir surfaces as a mount_devfs error just below.
+            std::fs::create_dir_all(&dev_path).ok();
+            if let Err(e) = crate::sys::mount_devfs(&dev_path)
+                .and_then(|()| crate::sys::apply_devfs_ruleset(&dev_path, devfs_ruleset))
+            {
+                crate::sys::unmount_quiet(&dev_path);
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Move the jail side of a VNET pair into the live jail.
+fn attach_vnet(setup: &VnetSetup, full_name: &str, jid: i32, verbose: bool) -> Result<()> {
+    setup.attach_to_jail(jid).inspect_err(|e| {
+        eprintln!("Error: Failed to attach VNET to jail '{full_name}': {e}");
+    })?;
+    if verbose {
+        println!(
+            "  Moved {} into jail {} (JID {})",
+            setup.jail_interface(),
+            full_name,
+            jid
+        );
+        println!(
+            "  Configured {} with {} in jail",
+            setup.jail_interface(),
+            setup.config.ip
+        );
+        println!("  Set default gateway to {}", setup.config.gateway);
+    }
+    Ok(())
+}
+
+/// Run /etc/rc inside the jail (jail(2) has no exec.start). Failures only warn.
+fn run_jail_rc(full_name: &str, jid: i32) {
+    match crate::jail::jexec::jexec_run(jid, &["/bin/sh", "/etc/rc"]) {
+        Ok(exit_code) if exit_code != 0 => {
+            eprintln!("Warning: /etc/rc in jail '{full_name}' exited with {exit_code}");
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("Warning: failed to run /etc/rc in jail '{full_name}': {e}");
+        }
+    }
+}
+
+/// Copies a release userland into a jail root with `cp -a`.
+fn copy_release(release_path: &Path, path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path)
+        .map_err(|e| Error::JailOperation(format!("Failed to create jail directory: {e}")))?;
+
+    let status = std::process::Command::new("/bin/cp")
+        .arg("-a")
+        .arg(format!("{}/.", release_path.display()))
+        .arg(path)
+        .status()
+        .map_err(|e| Error::JailOperation(format!("Failed to execute cp command: {e}")))?;
+    if !status.success() {
+        return Err(Error::JailOperation(format!(
+            "Failed to copy release: cp exited with status {status}"
+        )));
+    }
+
+    // cp -a may have followed a symlink out of the parent.
+    let data_parent = path.parent().unwrap_or_else(|| Path::new("/"));
+    if let (Ok(canonical_path), Ok(canonical_parent)) =
+        (path.canonicalize(), data_parent.canonicalize())
+        && !canonical_path.starts_with(&canonical_parent)
+    {
+        return Err(Error::JailOperation(format!(
+            "Jail path '{}' resolves to '{}' which is outside '{}'",
+            path.display(),
+            canonical_path.display(),
+            canonical_parent.display()
+        )));
+    }
+    Ok(())
+}
+
+/// What a `start_jail` attempt holds so far; `unwind_start` gives it back.
+#[derive(Default)]
+struct StartClaims {
+    /// The jail's ZFS dataset was created by this attempt (not inherited from a build).
+    zfs_dataset: bool,
+    /// IP leased from a network pool.
+    allocated_ip: Option<(String, IpAddr)>,
+    /// Epair or netgraph pair, with its state record on disk.
+    vnet_setup: Option<VnetSetup>,
+    /// Set once jail(2) is attempted: devfs may be mounted and the jail is reported failed.
+    jail_root: Option<PathBuf>,
+    /// The live jail, once jail(2) succeeded.
+    jid: Option<i32>,
+}
+
+/// The `post_stop` hook runner and the jail root it runs against.
+type PostStopHook = (HookRunner, PathBuf);
 
 impl Bridge {
     /// Persist the in-flight scope record. Never fails the jail operation.
@@ -151,13 +263,17 @@ impl Bridge {
         &mut self,
         full_name: &str,
         vnet_setup: Option<VnetSetup>,
-        allocated_ip: &Option<(String, IpAddr)>,
+        allocated_ip: Option<&(String, IpAddr)>,
         created_zfs_dataset: bool,
     ) {
         if let Some(setup) = vnet_setup {
             match setup.cleanup() {
                 Ok(()) => {
-                    let _ = self.vnet_state_store.delete(full_name);
+                    if let Err(e) = self.vnet_state_store.delete(full_name) {
+                        eprintln!(
+                            "Warning: failed to remove VNET state record for '{full_name}': {e}"
+                        );
+                    }
                     self.audit.record(
                         &AuditRecord::new(full_name, AuditEvent::RollbackStep)
                             .with("step", "vnet")
@@ -180,7 +296,9 @@ impl Bridge {
         }
         if let Some((network_name, ip)) = allocated_ip {
             self.ip_allocator.release(network_name, ip);
-            let _ = self.lease_store.release(network_name, full_name);
+            if let Err(e) = self.lease_store.release(network_name, full_name) {
+                eprintln!("Warning: failed to release lease for '{full_name}': {e}");
+            }
             self.audit.record(
                 &AuditRecord::new(full_name, AuditEvent::RollbackStep)
                     .with("step", "lease")
@@ -229,7 +347,9 @@ impl Bridge {
     fn finish_rollback(&self, full_name: &str) {
         match self.scope_store.get(full_name) {
             Ok(Some(scope)) if !scope.holds_resources() => {
-                let _ = self.scope_store.delete(full_name);
+                if let Err(e) = self.scope_store.delete(full_name) {
+                    eprintln!("Warning: failed to remove scope record for '{full_name}': {e}");
+                }
             }
             Ok(Some(_)) => self.mark_scope_failed(full_name),
             Ok(None) => {}
@@ -241,8 +361,9 @@ impl Bridge {
     fn mark_jail_failed(&mut self, full_name: &str, path: &std::path::Path) {
         let jail_config = JailConfig::new(full_name, path);
         let mut instance = JailInstance::new(jail_config);
+        // Fresh instance: Stopped -> Starting -> Failed cannot be rejected.
         instance.start().ok();
-        instance.fail().ok();
+        instance.fail().ok(); // see above
         self.instances.insert(full_name.to_string(), instance);
 
         match self.scope_store.get(full_name) {
@@ -256,8 +377,10 @@ impl Bridge {
         }
         self.audit.event(full_name, AuditEvent::Failed);
 
-        if let Some(handle) = &self.warden_handle {
-            let _ = handle.notify_failure(full_name);
+        if let Some(handle) = &self.warden_handle
+            && let Err(e) = handle.notify_failure(full_name)
+        {
+            eprintln!("Warning: failed to notify Warden about '{full_name}': {e}");
         }
     }
 
@@ -289,7 +412,7 @@ impl Bridge {
 
     /// Fence a dependent off at the firewall without stopping it. The anchor is
     /// left loaded until the jail exits and `gc` reports it.
-    fn isolate_jail(&mut self, name: &str) {
+    fn isolate_jail(&self, name: &str) {
         let Ok((service_name, full_name)) = self.resolve_jail_names(name) else {
             return;
         };
@@ -337,7 +460,7 @@ impl Bridge {
         if let Some(instance) = self.instances.get_mut(&full_name)
             && instance.state() == JailState::Failed
         {
-            instance.recover().ok();
+            instance.recover().ok(); // guarded by the Failed check, cannot be rejected
         }
 
         if jail_getid(&full_name).is_ok() {
@@ -352,14 +475,18 @@ impl Bridge {
 
     /// Start a single jail with cleanup on failure
     pub(super) fn start_jail(&mut self, name: &str) -> Result<()> {
+        const REFILL_RATE: f64 = 1.0;
+
         self.prepare_runtime()?;
 
         // Rate limiting to prevent thundering herd on `up --all`
         let capacity = self.jail_start_capacity;
-        const REFILL_RATE: f64 = 1.0;
 
         loop {
-            let mut state = self.rate_limiter.lock().unwrap();
+            let mut state = self
+                .rate_limiter
+                .lock()
+                .expect("rate limiter mutex poisoned");
             let (tokens, last_refill) = *state;
             let now = Instant::now();
             let now_secs = now.duration_since(self.rate_limiter_epoch).as_secs_f64();
@@ -404,62 +531,208 @@ impl Bridge {
         self.persist_scope(&mut scope);
         self.audit.event(&full_name, AuditEvent::Created);
 
-        // Track resources for cleanup on failure
-        let mut created_zfs_dataset = false;
+        let mut claims = StartClaims::default();
+        if let Err(e) = self.provision_and_start(&service_name, &full_name, &mut scope, &mut claims)
+        {
+            self.unwind_start(&full_name, claims);
+            return Err(e);
+        }
+        Ok(())
+    }
 
+    /// Everything `start_jail` does once the scope record exists. Each resource
+    /// lands in `claims` as soon as it is held, so `start_jail` can unwind it.
+    fn provision_and_start(
+        &mut self,
+        service_name: &str,
+        full_name: &str,
+        scope: &mut ScopeRecord,
+        claims: &mut StartClaims,
+    ) -> Result<()> {
+        let jail_def = self
+            .config
+            .get_jail(service_name)
+            .ok_or_else(|| Error::JailNotFound(service_name.to_string()))?;
+
+        let path = self.claim_jail_root(jail_def, full_name, scope, claims)?;
+        self.prepare_jail_root(jail_def, full_name, &path)?;
+
+        // Phase 3: the IP. Inline because `jail_def` borrows `self.config`.
+        let effective_ip: Option<IpAddr> = if let Some(network) = &jail_def.network {
+            if let Some(static_ip) = network.ip {
+                if let Some(net_name) = network
+                    .networks
+                    .iter()
+                    .find(|net_name| !self.runtime_networks.contains_key(*net_name))
+                {
+                    return Err(Error::Network(format!(
+                        "Jail '{full_name}' references unknown network '{net_name}'"
+                    )));
+                }
+                Some(static_ip)
+            } else if let Some(first_network) = network.networks.first() {
+                let ip = crate::network::allocate_and_record(
+                    &mut self.ip_allocator,
+                    &self.lease_store,
+                    first_network,
+                    full_name,
+                )?;
+                claims.allocated_ip = Some((first_network.clone(), ip));
+                scope.allocated_ips.push(ip);
+                self.persist_scope(scope);
+                self.audit.record(
+                    &AuditRecord::new(full_name, AuditEvent::Provisioned)
+                        .with("step", "lease")
+                        .with("ip", ip)
+                        .with("network", first_network),
+                );
+                if self.verbose {
+                    println!("  Auto-allocated IP {ip} from network '{first_network}'");
+                }
+                Some(ip)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let hook_runner = HookRunner::new(jail_def.hooks.clone()).verbose(self.verbose);
+        let mut hook_context = HookContext::new(full_name, &path);
+
+        if let Some(ip) = effective_ip {
+            hook_context = hook_context.with_ip(ip.to_string());
+        }
+
+        hook_runner.execute_phase(HookPhase::PreStart, &hook_context)?;
+
+        let is_vnet = jail_def.network.as_ref().is_some_and(|n| n.vnet);
+
+        if is_vnet && let Some(network) = &jail_def.network {
+            self.claim_vnet(network, full_name, effective_ip, scope, claims)?;
+        }
+
+        let params = build_jail_params(jail_def, full_name, is_vnet, effective_ip)?;
+
+        mount_jail_devfs(jail_def, &path)?;
+
+        if jail_def.network.as_ref().is_some_and(|n| n.shared) {
+            copy_resolv_conf_if_absent(&path);
+        }
+
+        let (jid, jail_handle) = self.create_jail(full_name, &path, &params, scope, claims)?;
+        self.apply_startup_limits(jail_def, service_name, full_name, jid, scope)?;
+
+        if let Some(setup) = &claims.vnet_setup {
+            attach_vnet(setup, full_name, jid, self.verbose)?;
+        }
+
+        // Nothing past this point fails: hand the claims over to the bridge.
+        if let Some(setup) = claims.vnet_setup.take() {
+            self.vnet_setups.insert(full_name.to_string(), setup);
+        }
+        if let Some(alloc) = claims.allocated_ip.take() {
+            self.allocated_ips.insert(full_name.to_string(), alloc);
+        }
+
+        // After networking, so services can bind their addresses.
+        if jail_def.init.unwrap_or(true) {
+            run_jail_rc(full_name, jid);
+        }
+
+        let hook_context = hook_context.with_jid(jid);
+
+        if let Err(e) = hook_runner.execute_phase(HookPhase::PostStart, &hook_context) {
+            eprintln!("Warning: post_start hook failed for jail '{full_name}': {e}");
+            eprintln!("Jail is running but may not be fully configured.");
+        }
+
+        let mut jail_config = JailConfig::new(full_name, &path);
+        if let Some(hostname) = &jail_def.hostname {
+            jail_config = jail_config.hostname(hostname);
+        }
+        if let Some(ip) = effective_ip {
+            jail_config = jail_config.ip(ip);
+        }
+        self.record_running(full_name, jail_config, jid, jail_handle, scope);
+
+        Ok(())
+    }
+
+    /// Phase 1: the jail root; a dataset created here is claimed first.
+    fn claim_jail_root(
+        &self,
+        jail_def: &crate::manifest::JailDef,
+        full_name: &str,
+        scope: &mut ScopeRecord,
+        claims: &mut StartClaims,
+    ) -> Result<PathBuf> {
         // Create ZFS dataset if needed (a prior `build` may already own it).
         // A clone-ready release provisions the whole root in one zfs clone.
         let path = if let Some(zfs) = &self.zfs {
             if jail_def.path.is_none() {
-                if zfs.jail_dataset_exists(&full_name)? {
-                    zfs.jail_path(&full_name)
+                if zfs.jail_dataset_exists(full_name)? {
+                    zfs.jail_path(full_name)
                 } else if let Some(release) = jail_def
                     .release
                     .as_ref()
                     .filter(|release| zfs.release_is_cloneable(release))
                 {
-                    created_zfs_dataset = true;
                     println!("Provisioning jail '{full_name}' by cloning release '{release}'...");
-                    zfs.clone_jail_from_release(release, &full_name)?
+                    let path = zfs.clone_jail_from_release(release, full_name)?;
+                    claims.zfs_dataset = true;
+                    path
                 } else {
-                    created_zfs_dataset = true;
-                    zfs.create_jail_dataset(&full_name)?
+                    let path = zfs.create_jail_dataset(full_name)?;
+                    claims.zfs_dataset = true;
+                    path
                 }
             } else {
-                jail_def.effective_path(&self.config.config, &full_name)
+                jail_def.effective_path(&self.config.config, full_name)
             }
         } else {
-            jail_def.effective_path(&self.config.config, &full_name)
+            jail_def.effective_path(&self.config.config, full_name)
         };
 
-        if created_zfs_dataset && let Some(zfs) = &self.zfs {
-            let dataset = zfs.jail_dataset_name(&full_name);
+        if claims.zfs_dataset
+            && let Some(zfs) = &self.zfs
+        {
+            let dataset = zfs.jail_dataset_name(full_name);
             scope.zfs_origin = zfs.dataset_origin(&dataset);
             scope.zfs_dataset = Some(dataset.clone());
             scope.ephemeral = jail_def.ephemeral.unwrap_or(true);
-            self.persist_scope(&mut scope);
+            self.persist_scope(scope);
             self.audit.record(
-                &AuditRecord::new(&full_name, AuditEvent::Provisioned)
+                &AuditRecord::new(full_name, AuditEvent::Provisioned)
                     .with("step", "zfs")
                     .with("dataset", dataset),
             );
         }
 
+        Ok(path)
+    }
+
+    /// Phase 2: symlink checks, userland, DNS. Claims nothing.
+    fn prepare_jail_root(
+        &self,
+        jail_def: &crate::manifest::JailDef,
+        full_name: &str,
+        path: &Path,
+    ) -> Result<()> {
         // Validate no ancestor of the jail path is a symlink
         if let Some(parent) = path.parent()
             && parent.exists()
         {
             crate::blueprint::context::reject_symlink_ancestors(
                 &self.config.config.data_dir,
-                &path,
+                path,
             )?;
         }
 
         // A pre-existing symlink here would redirect jail ops to arbitrary host paths.
-        if let Ok(meta) = std::fs::symlink_metadata(&path)
+        if let Ok(meta) = std::fs::symlink_metadata(path)
             && meta.file_type().is_symlink()
         {
-            self.rollback_start(&full_name, None, &None, created_zfs_dataset);
             return Err(Error::JailOperation(format!(
                 "Jail path '{}' is a symlink, refusing to use it",
                 path.display()
@@ -470,333 +743,193 @@ impl Bridge {
         // A freshly created ZFS dataset exists but holds no userland, so
         // checking for ./bin instead of bare existence catches both cases.
         if !path.join("bin").exists() {
-            if let Some(release) = &jail_def.release {
-                crate::manifest::validate_name("release", release)?;
-                let release_path = self.config.config.releases_dir.join(release);
-                if release_path.exists() {
-                    println!("Provisioning jail '{full_name}' from release '{release}'...");
-
-                    if let Err(e) = std::fs::create_dir_all(&path) {
-                        self.rollback_start(&full_name, None, &None, created_zfs_dataset);
-                        return Err(Error::JailOperation(format!(
-                            "Failed to create jail directory: {e}"
-                        )));
-                    }
-
-                    let status = std::process::Command::new("/bin/cp")
-                        .arg("-a")
-                        .arg(format!("{}/.", release_path.display()))
-                        .arg(&path)
-                        .status();
-
-                    match status {
-                        Ok(s) if s.success() => {
-                            // cp -a may have followed a symlink out of the parent.
-                            let data_parent =
-                                path.parent().unwrap_or_else(|| std::path::Path::new("/"));
-                            if let (Ok(canonical_path), Ok(canonical_parent)) =
-                                (path.canonicalize(), data_parent.canonicalize())
-                                && !canonical_path.starts_with(&canonical_parent)
-                            {
-                                let _ = std::fs::remove_dir_all(&path);
-                                self.rollback_start(&full_name, None, &None, created_zfs_dataset);
-                                return Err(Error::JailOperation(format!(
-                                    "Jail path '{}' resolves to '{}' which is outside '{}'",
-                                    path.display(),
-                                    canonical_path.display(),
-                                    canonical_parent.display()
-                                )));
-                            }
-                            println!("Jail '{full_name}' provisioned from release '{release}'");
-                        }
-                        Ok(s) => {
-                            let _ = std::fs::remove_dir_all(&path);
-                            self.rollback_start(&full_name, None, &None, created_zfs_dataset);
-                            return Err(Error::JailOperation(format!(
-                                "Failed to copy release: cp exited with status {s}"
-                            )));
-                        }
-                        Err(e) => {
-                            let _ = std::fs::remove_dir_all(&path);
-                            self.rollback_start(&full_name, None, &None, created_zfs_dataset);
-                            return Err(Error::JailOperation(format!(
-                                "Failed to execute cp command: {e}"
-                            )));
-                        }
-                    }
-                } else {
-                    let msg = format!(
-                        "Release '{}' not found at {}. Run 'blackship bootstrap {}' first.",
-                        release,
-                        release_path.display(),
-                        release
-                    );
-                    self.rollback_start(&full_name, None, &None, created_zfs_dataset);
-                    return Err(Error::JailOperation(msg));
-                }
-            } else {
-                if created_zfs_dataset && let Some(zfs) = &self.zfs {
-                    let _ = zfs.destroy_jail_dataset(&full_name);
-                }
-                return Err(Error::JailPathNotFound(path));
+            let Some(release) = &jail_def.release else {
+                return Err(Error::JailPathNotFound(path.to_path_buf()));
+            };
+            crate::manifest::validate_name("release", release)?;
+            let release_path = self.config.config.releases_dir.join(release);
+            if !release_path.exists() {
+                return Err(Error::JailOperation(format!(
+                    "Release '{}' not found at {}. Run 'blackship bootstrap {}' first.",
+                    release,
+                    release_path.display(),
+                    release
+                )));
             }
+            println!("Provisioning jail '{full_name}' from release '{release}'...");
+            if let Err(e) = copy_release(&release_path, path) {
+                // Rollback; keep the original error.
+                let _ = std::fs::remove_dir_all(path);
+                return Err(e);
+            }
+            println!("Jail '{full_name}' provisioned from release '{release}'");
         }
 
         // Configure DNS before starting the jail
-        if let Some(network) = &jail_def.network
-            && let Err(e) = self.configure_dns(&path, &network.dns)
-        {
-            self.rollback_start(&full_name, None, &None, created_zfs_dataset);
-            return Err(e);
+        if let Some(network) = &jail_def.network {
+            super::dns::configure_dns(path, &network.dns)?;
         }
 
-        // Determine IP address for this jail
-        let mut allocated_ip: Option<(String, IpAddr)> = None;
-        let effective_ip: Option<IpAddr> = if let Some(network) = &jail_def.network {
-            if let Some(static_ip) = network.ip {
-                for net_name in &network.networks {
-                    if !self.runtime_networks.contains_key(net_name) {
-                        let msg =
-                            format!("Jail '{full_name}' references unknown network '{net_name}'");
-                        self.rollback_start(&full_name, None, &None, created_zfs_dataset);
-                        return Err(Error::Network(msg));
-                    }
-                }
-                Some(static_ip)
-            } else if let Some(first_network) = network.networks.first() {
-                match crate::network::allocate_and_record(
-                    &mut self.ip_allocator,
-                    &self.lease_store,
-                    first_network,
-                    &full_name,
-                ) {
-                    Ok(ip) => {
-                        allocated_ip = Some((first_network.clone(), ip));
-                        scope.allocated_ips.push(ip);
-                        self.persist_scope(&mut scope);
-                        self.audit.record(
-                            &AuditRecord::new(&full_name, AuditEvent::Provisioned)
-                                .with("step", "lease")
-                                .with("ip", ip)
-                                .with("network", first_network),
-                        );
-                        if self.verbose {
-                            println!("  Auto-allocated IP {ip} from network '{first_network}'");
-                        }
-                        Some(ip)
-                    }
-                    Err(e) => {
-                        self.rollback_start(&full_name, None, &None, created_zfs_dataset);
-                        return Err(e);
-                    }
-                }
-            } else {
-                None
-            }
+        Ok(())
+    }
+
+    /// The bridge name and VNET config a jail asks for. Claims nothing.
+    fn vnet_config_for(
+        &self,
+        network: &crate::manifest::JailNetworkConfig,
+        full_name: &str,
+        effective_ip: Option<IpAddr>,
+    ) -> Result<(String, VnetConfig)> {
+        let primary_runtime_network = network
+            .networks
+            .first()
+            .map(|network_name| {
+                self.runtime_networks
+                    .get(network_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::Network(format!(
+                            "Jail '{full_name}' references unknown network '{network_name}'"
+                        ))
+                    })
+            })
+            .transpose()?;
+
+        let bridge_name = network
+            .bridge
+            .clone()
+            .or_else(|| {
+                primary_runtime_network
+                    .as_ref()
+                    .and_then(|runtime| runtime.bridge.clone())
+            })
+            .ok_or_else(|| {
+                Error::Network(format!(
+                    "VNET jail '{full_name}' requires a bridge configuration"
+                ))
+            })?;
+
+        let ip_config = if let Some(ip_cidr) = network.ip_cidr.clone() {
+            ip_cidr
         } else {
-            None
+            let ip = network.ip.or(effective_ip).ok_or_else(|| {
+                Error::Network(format!(
+                    "VNET jail '{full_name}' requires an IP address or attached network"
+                ))
+            })?;
+            let prefix_len = primary_runtime_network
+                .as_ref()
+                .map_or(24, |runtime| runtime.subnet.prefix_len());
+            format!("{ip}/{prefix_len}")
         };
 
-        // Setup hook runner and context
-        let hook_runner = HookRunner::new(jail_def.hooks.clone()).verbose(self.verbose);
-        let mut hook_context = HookContext::new(&full_name, &path);
+        let gateway = network
+            .gateway
+            .or_else(|| {
+                primary_runtime_network
+                    .as_ref()
+                    .map(|runtime| runtime.gateway)
+            })
+            .ok_or_else(|| {
+                Error::Network(format!(
+                    "VNET jail '{full_name}' requires a gateway or attached network"
+                ))
+            })?;
 
-        if let Some(ip) = effective_ip {
-            hook_context = hook_context.with_ip(ip.to_string());
+        let mut vnet_config = VnetConfig::new(bridge_name.clone(), ip_config, gateway);
+
+        if let Some(ref mac) = network.mac_address {
+            vnet_config = vnet_config.with_mac_address(mac.clone());
         }
 
-        // Execute pre_start hooks
-        if let Err(e) = hook_runner.execute_phase(HookPhase::PreStart, &hook_context) {
-            self.rollback_start(&full_name, None, &allocated_ip, created_zfs_dataset);
-            return Err(e);
+        if let Some(vlan_id) = network.vlan_id {
+            vnet_config = vnet_config.with_vlan_id(vlan_id);
         }
 
-        // Check if this is a VNET jail
-        let is_vnet = jail_def.network.as_ref().is_some_and(|n| n.vnet);
-
-        // Create VNET setup for VNET jails before creating the jail
-        let mut vnet_setup: Option<VnetSetup> = None;
-        if is_vnet && let Some(network) = &jail_def.network {
-            let primary_runtime_network = network
-                .networks
-                .first()
-                .map(|network_name| {
-                    self.runtime_networks
-                        .get(network_name)
-                        .cloned()
-                        .ok_or_else(|| {
-                            Error::Network(format!(
-                                "Jail '{full_name}' references unknown network '{network_name}'"
-                            ))
-                        })
-                })
-                .transpose()?;
-
-            let bridge_name = network
-                .bridge
-                .clone()
-                .or_else(|| {
-                    primary_runtime_network
-                        .as_ref()
-                        .and_then(|runtime| runtime.bridge.clone())
-                })
-                .ok_or_else(|| {
-                    Error::Network(format!(
-                        "VNET jail '{full_name}' requires a bridge configuration"
-                    ))
-                })?;
-
-            let ip_config = if let Some(ip_cidr) = network.ip_cidr.clone() {
-                ip_cidr
-            } else {
-                let ip = network.ip.or(effective_ip).ok_or_else(|| {
-                    Error::Network(format!(
-                        "VNET jail '{full_name}' requires an IP address or attached network"
-                    ))
-                })?;
-                let prefix_len = primary_runtime_network
-                    .as_ref()
-                    .map(|runtime| runtime.subnet.prefix_len())
-                    .unwrap_or(24);
-                format!("{ip}/{prefix_len}")
-            };
-
-            let gateway = network
-                .gateway
-                .or_else(|| {
-                    primary_runtime_network
-                        .as_ref()
-                        .map(|runtime| runtime.gateway)
-                })
-                .ok_or_else(|| {
-                    Error::Network(format!(
-                        "VNET jail '{full_name}' requires a gateway or attached network"
-                    ))
-                })?;
-
-            let mut vnet_config = VnetConfig::new(bridge_name.clone(), ip_config, gateway);
-
-            if let Some(ref mac) = network.mac_address {
-                vnet_config = vnet_config.with_mac_address(mac.clone());
+        // Explicit backend wins, else inherit the attached network's.
+        let backend = network.backend.unwrap_or_else(|| {
+            match primary_runtime_network
+                .as_ref()
+                .map(|runtime| runtime.backend.as_str())
+            {
+                Some("netgraph") => crate::network::vnet::NetworkBackend::Netgraph,
+                _ => crate::network::vnet::NetworkBackend::Epair,
             }
+        });
+        vnet_config = vnet_config.with_backend(backend);
 
-            if let Some(vlan_id) = network.vlan_id {
-                vnet_config = vnet_config.with_vlan_id(vlan_id);
-            }
+        Ok((bridge_name, vnet_config))
+    }
 
-            // Explicit jail backend wins; otherwise inherit from the
-            // attached named network so netgraph networks just work.
-            let backend = network.backend.unwrap_or_else(|| {
-                match primary_runtime_network
-                    .as_ref()
-                    .map(|runtime| runtime.backend.as_str())
-                {
-                    Some("netgraph") => crate::network::vnet::NetworkBackend::Netgraph,
-                    _ => crate::network::vnet::NetworkBackend::Epair,
-                }
-            });
-            vnet_config = vnet_config.with_backend(backend);
+    /// Phase 4: create the VNET pair, claimed before its state record is written.
+    fn claim_vnet(
+        &self,
+        network: &crate::manifest::JailNetworkConfig,
+        full_name: &str,
+        effective_ip: Option<IpAddr>,
+        scope: &mut ScopeRecord,
+        claims: &mut StartClaims,
+    ) -> Result<()> {
+        let (bridge_name, vnet_config) = self.vnet_config_for(network, full_name, effective_ip)?;
 
-            let setup = match VnetSetup::create(&full_name, vnet_config) {
-                Ok(s) => s,
-                Err(e) => {
-                    self.rollback_start(&full_name, None, &allocated_ip, created_zfs_dataset);
-                    return Err(e);
-                }
-            };
+        let setup = claims
+            .vnet_setup
+            .insert(VnetSetup::create(full_name, vnet_config)?);
 
-            if self.verbose {
-                println!(
-                    "  Created {} <-> {} for VNET jail",
-                    setup.host_interface(),
-                    setup.jail_interface()
-                );
-                println!(
-                    "  Added {} to bridge {}",
-                    setup.host_interface(),
-                    bridge_name
-                );
-            }
-
-            let state_record =
-                setup.state_record(&full_name, network.networks.first().map(String::as_str));
-            if let Err(e) = self.vnet_state_store.save(&state_record) {
-                self.rollback_start(&full_name, Some(setup), &allocated_ip, created_zfs_dataset);
-                return Err(e);
-            }
-
-            scope.has_vnet_record = true;
-            self.persist_scope(&mut scope);
-            self.audit.record(
-                &AuditRecord::new(&full_name, AuditEvent::Provisioned)
-                    .with("step", "vnet")
-                    .with("host_interface", setup.host_interface())
-                    .with("bridge", &bridge_name),
+        if self.verbose {
+            println!(
+                "  Created {} <-> {} for VNET jail",
+                setup.host_interface(),
+                setup.jail_interface()
             );
-
-            vnet_setup = Some(setup);
+            println!(
+                "  Added {} to bridge {}",
+                setup.host_interface(),
+                bridge_name
+            );
         }
 
-        let params = match build_jail_params(jail_def, &full_name, is_vnet, effective_ip) {
-            Ok(p) => p,
-            Err(e) => {
-                self.rollback_start(&full_name, vnet_setup, &allocated_ip, created_zfs_dataset);
-                return Err(e);
-            }
-        };
+        let state_record =
+            setup.state_record(full_name, network.networks.first().map(String::as_str));
+        self.vnet_state_store.save(&state_record)?;
 
-        // Mount devfs into the jail root. The jail(2) syscall does not honor
-        // mount.devfs (that is jail(8) machinery), so this is our job.
-        let devfs_ruleset = jail_def
-            .devfs_ruleset
-            .unwrap_or(crate::sys::DEVFS_RULESET_JAIL);
-        if devfs_ruleset != 0 {
-            let dev_path = path.join("dev");
-            if !dev_path.join("null").exists() {
-                std::fs::create_dir_all(&dev_path).ok();
-                if let Err(e) = crate::sys::mount_devfs(&dev_path)
-                    .and_then(|_| crate::sys::apply_devfs_ruleset(&dev_path, devfs_ruleset))
-                {
-                    crate::sys::unmount_quiet(&dev_path);
-                    self.rollback_start(&full_name, vnet_setup, &allocated_ip, created_zfs_dataset);
-                    return Err(e);
-                }
-            }
-        }
+        scope.has_vnet_record = true;
+        self.persist_scope(scope);
+        self.audit.record(
+            &AuditRecord::new(full_name, AuditEvent::Provisioned)
+                .with("step", "vnet")
+                .with("host_interface", setup.host_interface())
+                .with("bridge", &bridge_name),
+        );
 
-        if jail_def.network.as_ref().is_some_and(|n| n.shared) {
-            copy_resolv_conf_if_absent(&path);
-        }
+        Ok(())
+    }
 
+    /// Phase 5: jail(2). Claims the root before the attempt, the jid after.
+    fn create_jail(
+        &self,
+        full_name: &str,
+        path: &Path,
+        params: &HashMap<String, ParamValue>,
+        scope: &mut ScopeRecord,
+        claims: &mut StartClaims,
+    ) -> Result<(i32, JailHandle)> {
         println!("Starting jail '{full_name}'...");
         // Owning descriptors are only useful while a long-lived supervisor
         // process keeps them open. For one-shot CLI commands like `up`, using
         // an owning descriptor would remove the jail as soon as blackship exits.
         let use_descriptors =
             self.os_version.supports_jail_descriptors() && self.warden_handle.is_some();
-        let (jid, jail_handle) = if use_descriptors {
-            match jail_create_with_descriptor(&path, params) {
-                Ok((jid, desc)) => (jid, Some(JailHandle::Descriptor { fd: desc, jid })),
-                Err(e) => {
-                    eprintln!("Failed to create jail '{full_name}': {e}");
-                    crate::sys::unmount_jail_devfs(&path);
-                    self.rollback_start(&full_name, vnet_setup, &allocated_ip, created_zfs_dataset);
-                    self.mark_jail_failed(&full_name, &path);
-                    return Err(e);
-                }
-            }
+        claims.jail_root = Some(path.to_path_buf());
+        let created = if use_descriptors {
+            jail_create_with_descriptor(path, params)
+                .map(|(jid, fd)| (jid, JailHandle::Descriptor { fd, jid }))
         } else {
-            match jail_create(&path, params) {
-                Ok(jid) => (jid, Some(JailHandle::Jid(jid))),
-                Err(e) => {
-                    eprintln!("Failed to create jail '{full_name}': {e}");
-                    crate::sys::unmount_jail_devfs(&path);
-                    self.rollback_start(&full_name, vnet_setup, &allocated_ip, created_zfs_dataset);
-                    self.mark_jail_failed(&full_name, &path);
-                    return Err(e);
-                }
-            }
+            jail_create(path, params).map(|jid| (jid, JailHandle::Jid(jid)))
         };
+        let (jid, jail_handle) =
+            created.inspect_err(|e| eprintln!("Failed to create jail '{full_name}': {e}"))?;
+        claims.jid = Some(jid);
         println!(
             "Jail '{}' started with JID {}{}",
             full_name,
@@ -809,41 +942,39 @@ impl Bridge {
         );
 
         scope.jid = Some(jid);
-        self.persist_scope(&mut scope);
+        self.persist_scope(scope);
         self.audit.record(
-            &AuditRecord::new(&full_name, AuditEvent::Provisioned)
+            &AuditRecord::new(full_name, AuditEvent::Provisioned)
                 .with("step", "jail_create")
                 .with("jid", jid),
         );
 
+        Ok((jid, jail_handle))
+    }
+
+    /// Phase 6: rctl limits and CPU pinning. Fails closed.
+    fn apply_startup_limits(
+        &self,
+        jail_def: &crate::manifest::JailDef,
+        service_name: &str,
+        full_name: &str,
+        jid: i32,
+        scope: &mut ScopeRecord,
+    ) -> Result<()> {
         // Fail closed: never run without the configured resource limits.
         let startup_profile = jail_def.startup_resources();
-        if !startup_profile.is_empty()
-            && let Err(e) = crate::rctl::apply_limits(&full_name, startup_profile)
-        {
-            eprintln!("Failed to apply resource limits for '{full_name}': {e}, stopping jail");
-            // Remove the jail before releasing ZFS/IP -- never while it is alive.
-            if let Err(remove_err) = jail_remove(jid) {
-                eprintln!(
-                    "Warning: Failed to remove jail '{full_name}' (JID {jid}) during RCTL rollback: {remove_err}"
-                );
-                self.mark_jail_failed(&full_name, &path);
-                return Err(e);
-            }
-            crate::sys::unmount_jail_devfs(&path);
-            self.rollback_start(&full_name, None, &allocated_ip, created_zfs_dataset);
-            self.mark_jail_failed(&full_name, &path);
-            return Err(e);
-        }
-
         if !startup_profile.is_empty() {
+            crate::rctl::apply_limits(full_name, startup_profile).inspect_err(|e| {
+                eprintln!("Failed to apply resource limits for '{full_name}': {e}, stopping jail");
+            })?;
+
             scope.rctl_subject = Some(format!("jail:{full_name}"));
             if jail_def.qos.is_some() {
                 scope.qos_phase = crate::scope::QosPhase::Startup;
             }
-            self.persist_scope(&mut scope);
+            self.persist_scope(scope);
             self.audit.record(
-                &AuditRecord::new(&full_name, AuditEvent::Provisioned)
+                &AuditRecord::new(full_name, AuditEvent::Provisioned)
                     .with("step", "rctl")
                     .with(
                         "qos_phase",
@@ -857,125 +988,89 @@ impl Bridge {
         }
 
         // Pin the jail to its CPU set, spreading across other jails' pins.
-        let other_pins = self
-            .config
-            .jails
-            .iter()
-            .filter(|other| other.name != service_name)
-            .filter_map(|other| other.startup_resources().cpuset.as_deref());
+        let other_pins = self.other_cpuset_pins(service_name);
         if let Some(cpu_list) = crate::rctl::resolve_cpu_list(startup_profile, other_pins) {
-            if let Err(e) = crate::rctl::apply_cpuset(jid, &cpu_list) {
+            crate::rctl::apply_cpuset(jid, &cpu_list).inspect_err(|e| {
                 eprintln!("Failed to pin jail '{full_name}' to CPUs: {e}, stopping jail");
-                if let Err(remove_err) = jail_remove(jid) {
-                    eprintln!(
-                        "Warning: Failed to remove jail '{full_name}' (JID {jid}) during cpuset rollback: {remove_err}"
-                    );
-                    self.mark_jail_failed(&full_name, &path);
-                    return Err(e);
-                }
-                crate::sys::unmount_jail_devfs(&path);
-                self.rollback_start(&full_name, None, &allocated_ip, created_zfs_dataset);
-                self.mark_jail_failed(&full_name, &path);
-                return Err(e);
-            }
+            })?;
             println!("  Pinned to CPUs: {cpu_list}");
             scope.cpuset = Some(cpu_list.clone());
-            self.persist_scope(&mut scope);
+            self.persist_scope(scope);
             self.audit.record(
-                &AuditRecord::new(&full_name, AuditEvent::Provisioned)
+                &AuditRecord::new(full_name, AuditEvent::Provisioned)
                     .with("step", "cpuset")
                     .with("cpus", &cpu_list),
             );
         }
 
-        // For VNET jails: attach the VnetSetup to the jail
-        if let Some(setup) = vnet_setup {
-            if let Err(e) = setup.attach_to_jail(jid) {
-                eprintln!("Error: Failed to attach VNET to jail '{full_name}': {e}");
-                // If jail_remove fails the jail is still alive: do not release IP/ZFS.
-                if let Err(remove_err) = jail_remove(jid) {
-                    eprintln!(
-                        "Warning: Failed to remove jail '{full_name}' (JID {jid}) during VNET rollback: {remove_err}"
-                    );
-                    self.mark_jail_failed(&full_name, &path);
-                    return Err(e);
-                }
-                crate::sys::unmount_jail_devfs(&path);
-                self.rollback_start(&full_name, Some(setup), &allocated_ip, created_zfs_dataset);
-                self.mark_jail_failed(&full_name, &path);
-                return Err(e);
-            } else if self.verbose {
-                println!(
-                    "  Moved {} into jail {} (JID {})",
-                    setup.jail_interface(),
-                    full_name,
-                    jid
-                );
-                println!(
-                    "  Configured {} with {} in jail",
-                    setup.jail_interface(),
-                    setup.config.ip
-                );
-                println!("  Set default gateway to {}", setup.config.gateway);
-            }
+        Ok(())
+    }
 
-            self.vnet_setups.insert(full_name.clone(), setup);
-        }
-
-        // Boot the jail's userland after networking is attached so services
-        // can bind their addresses. jail(2) has no exec.start; running rc is
-        // our job, exactly like devfs.
-        if jail_def.init.unwrap_or(true) {
-            match crate::jail::jexec::jexec_run(jid, &["/bin/sh", "/etc/rc"]) {
-                Ok(exit_code) if exit_code != 0 => {
-                    eprintln!("Warning: /etc/rc in jail '{full_name}' exited with {exit_code}");
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("Warning: failed to run /etc/rc in jail '{full_name}': {e}");
-                }
-            }
-        }
-
-        // Update context with JID for post_start hooks
-        let hook_context = hook_context.with_jid(jid);
-
-        if let Err(e) = hook_runner.execute_phase(HookPhase::PostStart, &hook_context) {
-            eprintln!("Warning: post_start hook failed for jail '{full_name}': {e}");
-            eprintln!("Jail is running but may not be fully configured.");
-        }
-
-        // Track the instance
-        let mut jail_config = JailConfig::new(&full_name, &path);
-        if let Some(hostname) = &jail_def.hostname {
-            jail_config = jail_config.hostname(hostname);
-        }
-        if let Some(ip) = effective_ip {
-            jail_config = jail_config.ip(ip);
-        }
+    /// Last phase: track the instance, finish the scope record, tell the Warden.
+    fn record_running(
+        &mut self,
+        full_name: &str,
+        jail_config: JailConfig,
+        jid: i32,
+        jail_handle: JailHandle,
+        scope: &mut ScopeRecord,
+    ) {
         let mut instance = JailInstance::new(jail_config);
         instance.jid = Some(jid);
-        instance.handle = jail_handle;
+        instance.handle = Some(jail_handle);
+        // Fresh instance: Stopped -> Starting -> Running cannot be rejected.
         instance.start().ok();
-        instance.started().ok();
-        self.instances.insert(full_name.clone(), instance);
-
-        if let Some(alloc) = allocated_ip {
-            self.allocated_ips.insert(full_name.clone(), alloc);
-        }
+        instance.started().ok(); // see above
+        self.instances.insert(full_name.to_string(), instance);
 
         scope.advance_or_warn(ScopeMachineEvent::Provisioned);
-        self.persist_scope(&mut scope);
+        self.persist_scope(scope);
         self.audit
-            .record(&AuditRecord::new(&full_name, AuditEvent::Running).with("jid", jid));
+            .record(&AuditRecord::new(full_name, AuditEvent::Running).with("jid", jid));
 
         if let Some(handle) = &self.warden_handle
-            && let Err(e) = handle.notify_started(&full_name)
+            && let Err(e) = handle.notify_started(full_name)
         {
             eprintln!("Warning: Failed to notify Warden of jail start: {e}");
         }
+    }
 
-        Ok(())
+    /// Release what a failed `provision_and_start` claimed, newest first.
+    /// A jail that refuses to die keeps everything.
+    fn unwind_start(&mut self, full_name: &str, claims: StartClaims) {
+        if let (Some(jid), Some(root)) = (claims.jid, &claims.jail_root)
+            && let Err(e) = jail_remove(jid)
+        {
+            eprintln!(
+                "Warning: Failed to remove jail '{full_name}' (JID {jid}) during rollback: {e}"
+            );
+            self.mark_jail_failed(full_name, root);
+            return;
+        }
+        if let Some(root) = &claims.jail_root {
+            crate::sys::unmount_jail_devfs(root);
+        }
+        self.rollback_start(
+            full_name,
+            claims.vnet_setup,
+            claims.allocated_ip.as_ref(),
+            claims.zfs_dataset,
+        );
+        if let Some(root) = &claims.jail_root {
+            self.mark_jail_failed(full_name, root);
+        }
+    }
+
+    /// CPU pins already claimed by every jail other than `service_name`.
+    pub(super) fn other_cpuset_pins<'a>(
+        &'a self,
+        service_name: &'a str,
+    ) -> impl Iterator<Item = &'a str> {
+        self.config
+            .jails
+            .iter()
+            .filter(move |other| other.name != service_name)
+            .filter_map(|other| other.startup_resources().cpuset.as_deref())
     }
 
     /// Addresses a draining jail can still be reached on.
@@ -1128,49 +1223,10 @@ impl Bridge {
             .is_some_and(|drain| drain.enabled)
             && let Some(instance) = self.instances.get_mut(&full_name)
         {
-            instance.drain().ok();
+            instance.drain().ok(); // only valid from Running; otherwise nothing to drain
         }
 
-        let jail_def = self.config.get_jail(&service_name);
-        let mut post_stop_hook: Option<(HookRunner, std::path::PathBuf)> = None;
-        let mut drain_anchor: Option<String> = None;
-
-        if let Some(jail_def) = jail_def {
-            let path = jail_def.effective_path(&self.config.config, &full_name);
-            let hook_runner = HookRunner::new(jail_def.hooks.clone()).verbose(self.verbose);
-            let mut hook_context = HookContext::new(&full_name, &path).with_jid(jid);
-
-            if let Some(network) = &jail_def.network
-                && let Some(ip) = &network.ip
-            {
-                hook_context = hook_context.with_ip(ip.to_string());
-            }
-
-            hook_runner.execute_phase(HookPhase::PreStop, &hook_context)?;
-
-            drain_anchor = self.drain_connections(&full_name, jail_def);
-
-            if let Some(stop_cmd) = jail_def.resolve_stop()
-                && let Ok(exit_code) =
-                    crate::jail::jexec::jexec_run(jid, &["/bin/sh", "-c", &stop_cmd])
-                && exit_code != 0
-            {
-                eprintln!("Warning: stop command in jail '{full_name}' exited with {exit_code}");
-            }
-
-            // Give rc-managed services an orderly shutdown before removal.
-            if jail_def.init.unwrap_or(true)
-                && let Ok(exit_code) =
-                    crate::jail::jexec::jexec_run(jid, &["/bin/sh", "/etc/rc.shutdown"])
-                && exit_code != 0
-            {
-                eprintln!(
-                    "Warning: /etc/rc.shutdown in jail '{full_name}' exited with {exit_code}"
-                );
-            }
-
-            post_stop_hook = Some((hook_runner, path));
-        }
+        let (post_stop_hook, drain_anchor) = self.quiesce_jail(&service_name, &full_name, jid)?;
 
         if let Some(handle) = &self.warden_handle {
             handle.mark_stop_requested(jid);
@@ -1213,58 +1269,18 @@ impl Bridge {
         }
 
         if let Some(instance) = self.instances.get_mut(&full_name) {
+            // The jail is gone either way; a rejected transition is harmless.
             instance.stop().ok();
-            instance.stopped().ok();
+            instance.stopped().ok(); // see above
             instance.jid = None;
             instance.handle = None;
         }
 
-        let mut leaked_resources = false;
-        let mut cleaned_persisted_vnet = false;
-        if let Some(vnet_setup) = self.vnet_setups.remove(&full_name) {
-            match vnet_setup.cleanup() {
-                Ok(()) => {
-                    let _ = self.vnet_state_store.delete(&full_name);
-                    if self.verbose {
-                        println!("  Cleaned up VNET for bridge {}", vnet_setup.bridge_name);
-                    }
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Warning: Failed to cleanup VNET setup for jail '{full_name}': {e} -- keeping state record for manual cleanup"
-                    );
-                    leaked_resources = true;
-                }
-            }
-            cleaned_persisted_vnet = true;
-        }
-        if !cleaned_persisted_vnet && let Ok(Some(record)) = self.vnet_state_store.get(&full_name) {
-            match VnetSetup::cleanup_state(&record) {
-                Ok(()) => {
-                    let _ = self.vnet_state_store.delete(&full_name);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Warning: Failed to cleanup persisted VNET setup for jail '{full_name}': {e} -- keeping state record for manual cleanup"
-                    );
-                    leaked_resources = true;
-                }
-            }
-        }
+        let leaked_resources = self.release_vnet_on_stop(&full_name);
 
-        if let Some((network_name, ip)) = self.allocated_ips.remove(&full_name) {
-            self.ip_allocator.release(&network_name, &ip);
-            let _ = self.lease_store.release(&network_name, &full_name);
-            if self.verbose {
-                println!("  Released IP {ip} back to network '{network_name}'");
-            }
-        } else {
-            let _ = self.lease_store.release_owner(&full_name);
-        }
+        self.release_ip_on_stop(&full_name);
 
-        // The scope record is the GC work-list: dropping it claims every
-        // resource was released, so anything that leaked keeps the record
-        // alive in `Failed` instead.
+        // The scope record is the GC work-list: a leak keeps it alive in `Failed`.
         let peaks = self.peak_details(&full_name);
         let destroyed = |mut record: AuditRecord| -> AuditRecord {
             record.detail.extend(peaks.iter().cloned());
@@ -1286,6 +1302,108 @@ impl Bridge {
         }
 
         stop_result
+    }
+
+    /// `pre_stop` hooks, drain, stop command and `rc.shutdown`; returns the
+    /// `post_stop` hook and the drain anchor.
+    fn quiesce_jail(
+        &self,
+        service_name: &str,
+        full_name: &str,
+        jid: i32,
+    ) -> Result<(Option<PostStopHook>, Option<String>)> {
+        let Some(jail_def) = self.config.get_jail(service_name) else {
+            return Ok((None, None));
+        };
+
+        let path = jail_def.effective_path(&self.config.config, full_name);
+        let hook_runner = HookRunner::new(jail_def.hooks.clone()).verbose(self.verbose);
+        let mut hook_context = HookContext::new(full_name, &path).with_jid(jid);
+
+        if let Some(network) = &jail_def.network
+            && let Some(ip) = &network.ip
+        {
+            hook_context = hook_context.with_ip(ip.to_string());
+        }
+
+        hook_runner.execute_phase(HookPhase::PreStop, &hook_context)?;
+
+        let drain_anchor = self.drain_connections(full_name, jail_def);
+
+        if let Some(stop_cmd) = jail_def.resolve_stop()
+            && let Ok(exit_code) = crate::jail::jexec::jexec_run(jid, &["/bin/sh", "-c", &stop_cmd])
+            && exit_code != 0
+        {
+            eprintln!("Warning: stop command in jail '{full_name}' exited with {exit_code}");
+        }
+
+        if jail_def.init.unwrap_or(true)
+            && let Ok(exit_code) =
+                crate::jail::jexec::jexec_run(jid, &["/bin/sh", "/etc/rc.shutdown"])
+            && exit_code != 0
+        {
+            eprintln!("Warning: /etc/rc.shutdown in jail '{full_name}' exited with {exit_code}");
+        }
+
+        Ok((Some((hook_runner, path)), drain_anchor))
+    }
+
+    /// Tear down the jail's VNET pair; returns whether anything leaked.
+    fn release_vnet_on_stop(&mut self, full_name: &str) -> bool {
+        let mut leaked_resources = false;
+        if let Some(vnet_setup) = self.vnet_setups.remove(full_name) {
+            match vnet_setup.cleanup() {
+                Ok(()) => {
+                    if let Err(e) = self.vnet_state_store.delete(full_name) {
+                        eprintln!(
+                            "Warning: failed to remove VNET state record for '{full_name}': {e}"
+                        );
+                    }
+                    if self.verbose {
+                        println!("  Cleaned up VNET for bridge {}", vnet_setup.bridge_name);
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to cleanup VNET setup for jail '{full_name}': {e} -- keeping state record for manual cleanup"
+                    );
+                    leaked_resources = true;
+                }
+            }
+        } else if let Ok(Some(record)) = self.vnet_state_store.get(full_name) {
+            match VnetSetup::cleanup_state(&record) {
+                Ok(()) => {
+                    if let Err(e) = self.vnet_state_store.delete(full_name) {
+                        eprintln!(
+                            "Warning: failed to remove VNET state record for '{full_name}': {e}"
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to cleanup persisted VNET setup for jail '{full_name}': {e} -- keeping state record for manual cleanup"
+                    );
+                    leaked_resources = true;
+                }
+            }
+        }
+
+        leaked_resources
+    }
+
+    /// Return the jail's IP lease(s) to the pool.
+    fn release_ip_on_stop(&mut self, full_name: &str) {
+        if let Some((network_name, ip)) = self.allocated_ips.remove(full_name) {
+            self.ip_allocator.release(&network_name, &ip);
+            if let Err(e) = self.lease_store.release(&network_name, full_name) {
+                eprintln!("Warning: failed to release lease for '{full_name}': {e}");
+            }
+            if self.verbose {
+                println!("  Released IP {ip} back to network '{network_name}'");
+            }
+        } else if let Err(e) = self.lease_store.release_owner(full_name) {
+            eprintln!("Warning: failed to release leases for '{full_name}': {e}");
+        }
     }
 
     /// Force cleanup of a failed jail
@@ -1322,7 +1440,6 @@ impl Bridge {
 
         self.instances.remove(&full_name);
 
-        let mut cleaned_persisted_vnet = false;
         if let Some(vnet_setup) = self.vnet_setups.remove(&full_name) {
             println!("  Cleaning up VNET setup...");
             if let Err(e) = vnet_setup.cleanup() {
@@ -1332,10 +1449,10 @@ impl Bridge {
                     return Err(e);
                 }
             }
-            let _ = self.vnet_state_store.delete(&full_name);
-            cleaned_persisted_vnet = true;
-        }
-        if !cleaned_persisted_vnet && let Ok(Some(record)) = self.vnet_state_store.get(&full_name) {
+            if let Err(e) = self.vnet_state_store.delete(&full_name) {
+                eprintln!("  Warning: Failed to remove VNET state record: {e}");
+            }
+        } else if let Ok(Some(record)) = self.vnet_state_store.get(&full_name) {
             println!("  Cleaning up persisted VNET state...");
             if let Err(e) = VnetSetup::cleanup_state(&record) {
                 if force {
@@ -1344,12 +1461,16 @@ impl Bridge {
                     return Err(e);
                 }
             }
-            let _ = self.vnet_state_store.delete(&full_name);
+            if let Err(e) = self.vnet_state_store.delete(&full_name) {
+                eprintln!("  Warning: Failed to remove VNET state record: {e}");
+            }
         }
 
         if let Some((network_name, ip)) = self.allocated_ips.remove(&full_name) {
             self.ip_allocator.release(&network_name, &ip);
-            let _ = self.lease_store.release(&network_name, &full_name);
+            if let Err(e) = self.lease_store.release(&network_name, &full_name) {
+                eprintln!("  Warning: Failed to release lease: {e}");
+            }
             println!("  Released IP {ip} back to network '{network_name}'");
         } else {
             let released = self.lease_store.release_owner(&full_name)?;

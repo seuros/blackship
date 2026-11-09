@@ -19,6 +19,7 @@ A FreeBSD jail orchestrator with TOML configuration, dependency management, stat
 - **Stats**: per-jail CPU, RSS, and process counts from jls/ps libxo JSON
 - **Port Forwarding**: PF-based port exposure with source IP binding
 - **Shell Completion**: Bash, Zsh, and Fish completions
+- **Library API**: `Host`, `Container`, `Exec` and friends drive ephemeral jails from your own program (a CI runner, say); the CLI is built on the same calls
 - **MCP Server**: `blackship mcp` exposes host facts, the real parsers, and operator-approved file creation over MCP, so a model can author a `blackship.toml` or Jailfile against this host instead of guessing
 
 ## Requirements
@@ -176,6 +177,108 @@ blackship exec web -- pkg install -y nginx
 blackship ps
 blackship ps --json
 ```
+
+## Using Blackship as a Library
+
+Everything `blackship run`, `cp`, `rm`, `bootstrap`, `build` and `commit`
+do is a library call first; the CLI is a thin coat of paint over it. A CI
+runner (or anything else that wants throwaway jails) can depend on the crate
+and skip the binary, the argument parser, the MCP server and the OTLP
+exporter:
+
+```toml
+[dependencies]
+blackship = { version = "0.2", default-features = false }
+```
+
+```rust
+use blackship::{ContainerSpec, Exec, Host, Limits, Mount, Network, Selector};
+use std::time::Duration;
+
+let host = Host::new("/var/db/kim/blackship").with_zfs("zroot", "kim/blackship");
+
+// Whatever a crashed run left behind goes first.
+host.reap_orphans(&Selector::prefix("kim-"))?;
+host.ensure_release("16.0-CURRENT")?;
+
+let job = host.create(
+    &ContainerSpec::new("kim-42", "16.0-CURRENT")
+        .hostname("ci")
+        .network(Network::Inherit)
+        .limits(Limits::new().memory("4g").max_processes(512))
+        .mount(Mount::read_only("/var/cache/kim/src/42", "/work"))
+        .label("job", "42"),
+)?;
+
+let step = job.exec(
+    Exec::shell("make test")
+        .cwd("/work")
+        .env("CI", "true")
+        .timeout(Duration::from_secs(900))
+        .on_output(|stream, bytes| print!("{stream:?}: {}", String::from_utf8_lossy(bytes))),
+)?;
+println!("exit: {:?}", step.exit);
+
+job.copy_out("/work/report.xml", "/tmp/kim-42.xml")?;
+job.destroy()?;
+```
+
+The rules of the road:
+
+- **`Host`** is a description, not a connection: where releases,
+  containers and state live, and which dataset backs them. Clone it freely;
+  containers carry their own copy, so many can run on many threads with no
+  shared mutable state.
+- **Containers are ephemeral.** Dropping a `Container` destroys it. Call
+  `keep()` to let it outlive the handle (that is what `run --detach` does),
+  and `destroy()` when you want to see the errors a drop would swallow.
+- **`exec`** runs argv or `sh -c` with a clean environment, a working
+  directory, and a timeout or deadline. Output is captured, streamed to a
+  callback, or inherited. A non-zero exit is data, not an error. On timeout
+  every process in the container is killed from the host side (`pkill -j`),
+  so nothing inside can dodge it.
+- **Destroy is idempotent** and works from any state: running, half-built,
+  or left behind by a `kill -9`. It removes the jail, unmounts devfs and
+  nullfs (refusing to delete anything while a mount is still live), releases
+  the network lease, and destroys the clone.
+- **Orphans** are containers whose creating process is gone. Each one is
+  claimed with an ownership record before anything is built, so
+  `orphans()` / `reap_orphans()` find them by name prefix or label after a
+  crash. Kept containers have no owner and are never reaped.
+- **Releases and images:** `releases()`, `has_release()`, `bootstrap()` and
+  `ensure_release()` (FreeBSD 16 goes through fingerprint-verified pkgbase
+  automatically). `build()` runs a Jailfile with the layer cache,
+  `commit_image()` and `Container::commit()` freeze a root into a new
+  release, and `remove_image()` / `remove_release()` clean up.
+- **Privilege:** library calls assume they already run as root and return
+  `Error::NeedsRoot` otherwise. Only the CLI re-executes through sudo/doas.
+- **Errors** are one typed `blackship::Error` enum. No `anyhow` in sight.
+
+`examples/ephemeral.rs` walks the whole lifecycle:
+
+```sh
+sudo cargo run --no-default-features --example ephemeral -- \
+    --data-dir /var/db/blackship --zfs zroot/blackship --release 16.0-CURRENT
+```
+
+`tests/containers_as_root.rs` holds the end-to-end suite (timeouts, mounts,
+orphan reaping, concurrency, build and commit); it runs only as root, against
+a release you name:
+
+```sh
+sudo env BLACKSHIP_E2E_DATA_DIR=/var/tmp/bw BLACKSHIP_E2E_ZFS=zroot/blackship-e2e \
+    BLACKSHIP_E2E_RELEASE=16.0-CURRENT \
+    cargo test --test containers_as_root -- --ignored --test-threads=1
+```
+
+### Cargo features
+
+| Feature | Default | What it brings |
+|---------|---------|----------------|
+| `cli` | yes | The `blackship` binary and its usage-rs parser; implies `telemetry` |
+| `mcp` | yes | `blackship mcp` (mcp-host, schemars, tracing); implies `cli` |
+| `telemetry` | via `cli` | OTLP export through rama; without it `[telemetry]` still parses and does nothing |
+| `inspect` | no | state machine introspection |
 
 ## Configuration Reference
 

@@ -1,7 +1,11 @@
 //! System detection and version information
 
-/// Constants read from the FreeBSD headers at build time; see build/sys_consts.c.
+// FFI module: kldload(2), sysctl(3), mount helpers.
+#![allow(unsafe_code)]
+
+/// Constants read from the FreeBSD headers at build time; see `build/sys_consts.c`.
 pub mod consts {
+    #![allow(clippy::unreadable_literal)]
     include!(concat!(env!("OUT_DIR"), "/sys_consts.rs"));
 }
 
@@ -15,6 +19,7 @@ pub fn string_from_utf8_lossy(bytes: Vec<u8>) -> String {
 }
 
 // kldload(2) is not exposed by the libc crate.
+// SAFETY: matches <sys/linker.h>: int kldload(const char *file).
 unsafe extern "C" {
     fn kldload(file: *const libc::c_char) -> libc::c_int;
 }
@@ -26,6 +31,7 @@ pub fn load_modules(modules: &[&str]) -> Result<()> {
         let name = CString::new(*module)
             .map_err(|e| Error::Network(format!("Invalid module name {module}: {e}")))?;
 
+        // SAFETY: live NUL-terminated string.
         if unsafe { kldload(name.as_ptr()) } < 0 {
             let err = std::io::Error::last_os_error();
             let errno = err.raw_os_error().unwrap_or(0);
@@ -55,10 +61,10 @@ pub enum ReleaseType {
 impl fmt::Display for ReleaseType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ReleaseType::Current => write!(f, "CURRENT"),
-            ReleaseType::Stable => write!(f, "STABLE"),
-            ReleaseType::Release => write!(f, "RELEASE"),
-            ReleaseType::Rc(n) => write!(f, "RC{n}"),
+            Self::Current => write!(f, "CURRENT"),
+            Self::Stable => write!(f, "STABLE"),
+            Self::Release => write!(f, "RELEASE"),
+            Self::Rc(n) => write!(f, "RC{n}"),
         }
     }
 }
@@ -80,7 +86,7 @@ impl OsVersion {
     /// Detect the FreeBSD kernel version
     ///
     /// Uses native `uname(2)` syscall to get the kernel version string, which is what
-    /// determines driver capabilities (e.g., VLAN filtering in if_bridge).
+    /// determines driver capabilities (e.g., VLAN filtering in `if_bridge`).
     ///
     /// # Examples
     ///
@@ -92,10 +98,11 @@ impl OsVersion {
     /// - `15.1-BETA1`
     /// - `15.1-RC2`
     pub fn detect_kernel() -> Result<Self> {
-        // Use native uname(2) syscall instead of spawning a process
+        // SAFETY: all-zero is a valid utsname.
         let mut utsname: libc::utsname = unsafe { std::mem::zeroed() };
 
-        let result = unsafe { libc::uname(&mut utsname) };
+        // SAFETY: valid exclusive pointer.
+        let result = unsafe { libc::uname(&raw mut utsname) };
 
         if result != 0 {
             return Err(Error::CommandFailed {
@@ -104,7 +111,7 @@ impl OsVersion {
             });
         }
 
-        // Extract release field (e.g., "16.0-CURRENT")
+        // SAFETY: uname succeeded, so release is NUL-terminated.
         let release_cstr = unsafe { CStr::from_ptr(utsname.release.as_ptr()) };
         let version_str = release_cstr
             .to_str()
@@ -167,7 +174,7 @@ impl OsVersion {
             None
         };
 
-        Ok(OsVersion {
+        Ok(Self {
             major,
             minor,
             patch,
@@ -175,31 +182,31 @@ impl OsVersion {
         })
     }
 
-    /// Check if the OS supports VLAN filtering in if_bridge
+    /// Check if the OS supports VLAN filtering in `if_bridge`
     ///
     /// VLAN filtering requires FreeBSD 15.0 or later.
-    pub fn supports_vlan_filtering(&self) -> bool {
+    pub const fn supports_vlan_filtering(&self) -> bool {
         self.major >= 15
     }
 
     /// Check if pkgbase is mandatory
     ///
     /// FreeBSD 16.0+ requires pkgbase; distribution sets are removed.
-    pub fn requires_pkgbase(&self) -> bool {
+    pub const fn requires_pkgbase(&self) -> bool {
         self.major >= 16
     }
 
     /// Check if jail descriptors are supported
     ///
-    /// Jail descriptors (owning fds, EVFILT_JAILDESC) require FreeBSD 16.0+.
-    pub fn supports_jail_descriptors(&self) -> bool {
+    /// Jail descriptors (owning fds, `EVFILT_JAILDESC`) require FreeBSD 16.0+.
+    pub const fn supports_jail_descriptors(&self) -> bool {
         self.major >= 16
     }
 
-    /// Check if kqueue EVFILT_JAIL is supported
+    /// Check if kqueue `EVFILT_JAIL` is supported
     ///
     /// Kqueue jail event monitoring requires FreeBSD 16.0+.
-    pub fn supports_jail_kqueue(&self) -> bool {
+    pub const fn supports_jail_kqueue(&self) -> bool {
         self.major >= 16
     }
 }
@@ -224,12 +231,13 @@ pub const IFACE_GROUP: &str = "blackship";
 pub fn set_sysctl_int(name: &str, value: i32) -> Result<()> {
     let c_name = CString::new(name)
         .map_err(|e| Error::Network(format!("Invalid sysctl name {name}: {e}")))?;
+    // SAFETY: NUL-terminated name; newp/newlen describe a live `value`.
     let rc = unsafe {
         libc::sysctlbyname(
             c_name.as_ptr(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &value as *const i32 as *const libc::c_void,
+            (&raw const value).cast::<libc::c_void>(),
             std::mem::size_of::<i32>(),
         )
     };
@@ -266,13 +274,12 @@ pub fn interface_is_tagged(iface: &str) -> bool {
     std::process::Command::new("/sbin/ifconfig")
         .args(["-g", IFACE_GROUP])
         .output()
-        .map(|o| {
+        .is_ok_and(|o| {
             o.status.success()
                 && String::from_utf8_lossy(&o.stdout)
                     .lines()
                     .any(|line| line.trim() == iface)
         })
-        .unwrap_or(false)
 }
 
 /// Every interface carrying the blackship ownership group.
@@ -294,6 +301,27 @@ pub fn list_tagged_interfaces() -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Run a libxo-capable base utility and parse its JSON output.
+pub fn run_json(program: &str, args: &[&str]) -> Result<serde_json::Value> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| Error::CommandFailed {
+            command: program.to_string(),
+            message: e.to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(Error::CommandFailed {
+            command: format!("{} {}", program, args.join(" ")),
+            message: String::from_utf8_lossy(&output.stderr).to_string(),
+        });
+    }
+    serde_json::from_slice(&output.stdout).map_err(|e| Error::CommandFailed {
+        command: program.to_string(),
+        message: format!("invalid libxo JSON: {e}"),
+    })
 }
 
 /// Read the mount table in `mount -p` format.
@@ -337,25 +365,25 @@ pub fn mounted_paths_under(
 
 /// Mount devfs at `dev_path` via nmount(2).
 ///
-/// devfs has no vfs_cmount, so the legacy mount(2) syscall returns
+/// devfs has no `vfs_cmount`, so the legacy mount(2) syscall returns
 /// EOPNOTSUPP; it is only mountable through nmount(2).
 pub fn mount_devfs(dev_path: &std::path::Path) -> Result<()> {
     let path_str = dev_path
         .to_str()
         .ok_or_else(|| Error::JailOperation(format!("Invalid path: {}", dev_path.display())))?;
 
-    let fstype_key = CString::new("fstype").unwrap();
-    let fstype_val = CString::new("devfs").unwrap();
-    let fspath_key = CString::new("fspath").unwrap();
     let fspath_val =
         CString::new(path_str).map_err(|e| Error::JailOperation(format!("Invalid path: {e}")))?;
 
-    let mut iov = [&fstype_key, &fstype_val, &fspath_key, &fspath_val].map(|s| libc::iovec {
-        iov_base: s.as_ptr() as *mut libc::c_void,
-        iov_len: s.as_bytes_with_nul().len(),
+    let mut iov = [c"fstype", c"devfs", c"fspath", fspath_val.as_c_str()].map(|s| libc::iovec {
+        iov_base: s.as_ptr().cast_mut().cast(),
+        iov_len: s.to_bytes_with_nul().len(),
     });
 
-    let rc = unsafe { libc::nmount(iov.as_mut_ptr(), iov.len() as libc::c_uint, 0) };
+    let niov = libc::c_uint::try_from(iov.len())
+        .map_err(|_| Error::JailOperation("too many nmount options".into()))?;
+    // SAFETY: iov points at live NUL-terminated strings that nmount only reads.
+    let rc = unsafe { libc::nmount(iov.as_mut_ptr(), niov, 0) };
     if rc != 0 {
         return Err(Error::JailOperation(format!(
             "Failed to mount devfs at {}: {}",
@@ -390,6 +418,7 @@ pub fn remove_tree_with_flags(path: &std::path::Path) -> std::io::Result<()> {
     if !path.exists() {
         return Ok(());
     }
+    // Best effort; real failures surface from remove_dir_all.
     let _ = std::process::Command::new("/bin/chflags")
         .args(["-R", "noschg,nouchg"])
         .arg(path)
@@ -407,6 +436,7 @@ pub fn unmount_quiet(path: &std::path::Path) {
     if let Some(path_str) = path.to_str()
         && let Ok(c_path) = CString::new(path_str)
     {
+        // SAFETY: live NUL-terminated path.
         unsafe {
             libc::unmount(c_path.as_ptr(), 0);
         }
@@ -415,3 +445,11 @@ pub fn unmount_quiet(path: &std::path::Path) {
 
 #[cfg(test)]
 mod tests;
+
+/// Bytes of a fixed `c_char` buffer up to the first NUL (or all of it), for i8 and u8 `c_char`.
+pub fn c_buf_bytes(buf: &[libc::c_char]) -> Vec<u8> {
+    buf.iter()
+        .map(|c| u8::from_ne_bytes(c.to_ne_bytes()))
+        .take_while(|&b| b != 0)
+        .collect()
+}

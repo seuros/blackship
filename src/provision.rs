@@ -33,19 +33,19 @@ impl Arch {
     pub fn current() -> Result<Self> {
         let arch = std::env::consts::ARCH;
         match arch {
-            "x86_64" => Ok(Arch::Amd64),
-            "aarch64" => Ok(Arch::Arm64),
-            "x86" => Ok(Arch::I386),
+            "x86_64" => Ok(Self::Amd64),
+            "aarch64" => Ok(Self::Arm64),
+            "x86" => Ok(Self::I386),
             _ => Err(Error::UnsupportedArch(arch.to_string())),
         }
     }
 
     /// Get FreeBSD architecture name
-    pub fn freebsd_name(&self) -> &'static str {
+    pub const fn freebsd_name(self) -> &'static str {
         match self {
-            Arch::Amd64 => "amd64",
-            Arch::Arm64 => "arm64",
-            Arch::I386 => "i386",
+            Self::Amd64 => "amd64",
+            Self::Arm64 => "arm64",
+            Self::I386 => "i386",
         }
     }
 }
@@ -129,7 +129,8 @@ impl Provisioner {
     }
 
     /// Parse a MANIFEST file and return archive -> sha256 mapping
-    fn parse_manifest(&self, content: &str) -> HashMap<String, String> {
+    // provision/tests.rs calls it on an instance.
+    fn parse_manifest(content: &str) -> HashMap<String, String> {
         let mut checksums = HashMap::new();
 
         for line in content.lines() {
@@ -271,9 +272,14 @@ impl Provisioner {
             }
         }
 
-        // Same finishing touches as the archive path: keep the repo config
-        // usable inside the jail and quiet first logins.
-        let _ = std::fs::write(release_path.join("etc/rc.conf"), "");
+        // pkgbase ships no /etc/rc.conf; sysrc needs one to edit.
+        let rc_conf = release_path.join("etc/rc.conf");
+        if !rc_conf.exists()
+            && let Err(e) = std::fs::write(&rc_conf, "")
+        {
+            eprintln!("Warning: could not create {}: {e}", rc_conf.display());
+        }
+        // Cosmetic.
         let _ = std::fs::write(release_path.join("root/.hushlogin"), "");
 
         eprintln!("Bootstrap complete: {}", release_path.display());
@@ -303,7 +309,7 @@ impl Provisioner {
         // Fetch MANIFEST for checksums
         eprintln!("Fetching MANIFEST...");
         let manifest_content = fetch_text(&manifest_url, &self.retry_config)?;
-        let checksums = self.parse_manifest(&manifest_content);
+        let checksums = Self::parse_manifest(&manifest_content);
 
         // Pre-planted symlinks in parent dirs would redirect create_dir_all writes.
         for dir in [&self.cache_dir, &release_path] {
@@ -373,7 +379,7 @@ impl Provisioner {
 
                     // Extract archive
                     eprintln!("Extracting {archive}.txz...");
-                    self.extract_txz(&cache_file, &release_path)?;
+                    Self::extract_txz(&cache_file, &release_path)?;
                     Ok(())
                 })();
 
@@ -400,7 +406,7 @@ impl Provisioner {
     }
 
     /// Extract a .txz (tar.xz) archive
-    fn extract_txz(&self, archive_path: &Path, dest: &Path) -> Result<()> {
+    fn extract_txz(archive_path: &Path, dest: &Path) -> Result<()> {
         let file = File::open(archive_path).map_err(|e| {
             Error::ExtractionFailed(format!(
                 "Failed to open archive {}: {}",
@@ -479,7 +485,7 @@ impl Provisioner {
 /// Suitable for config/key trees. Whole-userland copies stay on `cp -a`:
 /// it preserves hardlinks (/rescue is ~150 links to one binary) and file
 /// flags, which a naive walk does not.
-pub(crate) fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
+pub fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let meta = fs::symlink_metadata(src)
@@ -488,7 +494,7 @@ pub(crate) fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
     if meta.file_type().is_symlink() {
         let target = fs::read_link(src)
             .map_err(|e| Error::ExtractionFailed(format!("readlink {}: {}", src.display(), e)))?;
-        let _ = fs::remove_file(dest);
+        let _ = fs::remove_file(dest); // usually NotFound; symlink() reports the rest
         std::os::unix::fs::symlink(&target, dest)
             .map_err(|e| Error::ExtractionFailed(format!("symlink {}: {}", dest.display(), e)))?;
     } else if meta.is_dir() {

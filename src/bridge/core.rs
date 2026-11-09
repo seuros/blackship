@@ -61,7 +61,7 @@ pub struct Bridge {
     /// Verbose output mode
     pub(super) verbose: bool,
 
-    /// Rate limiter state for jail starts (tokens, last_refill)
+    /// Rate limiter state for jail starts (tokens, `last_refill`)
     pub(super) rate_limiter: Mutex<(f64, Instant)>,
 
     /// Rate limiter start time for consistent timing
@@ -73,7 +73,7 @@ pub struct Bridge {
     /// Optional handle to notify the Warden of jail events
     pub(super) warden_handle: Option<WardenHandle>,
 
-    /// VNET setups for VNET jails (jail name -> VnetSetup)
+    /// VNET setups for VNET jails (jail name -> `VnetSetup`)
     pub(super) vnet_setups: HashMap<String, VnetSetup>,
 
     /// Detected OS version for feature gating
@@ -167,7 +167,7 @@ impl Bridge {
     }
 
     /// Enable verbose output
-    pub fn verbose(mut self, verbose: bool) -> Self {
+    pub const fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
@@ -187,7 +187,7 @@ impl Bridge {
         self.prepare_runtime()
     }
 
-    /// Resolve a jail identifier to (service_name, full_name)
+    /// Resolve a jail identifier to (`service_name`, `full_name`)
     pub(super) fn resolve_jail_names(&self, name: &str) -> Result<(String, String)> {
         self.config
             .resolve_jail_names(name)

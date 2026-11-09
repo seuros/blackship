@@ -29,7 +29,7 @@ pub enum AuditEvent {
 }
 
 impl AuditEvent {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Created => "created",
             Self::Provisioned => "provisioned",
@@ -81,7 +81,7 @@ impl AuditLog {
         Self::new(manifest::data_root(config).join("audit"))
     }
 
-    pub fn new(root: PathBuf) -> Self {
+    pub const fn new(root: PathBuf) -> Self {
         Self { root }
     }
 
@@ -103,7 +103,7 @@ impl AuditLog {
             .map_err(|e| Error::State(format!("Failed to create audit dir: {e}")))?;
 
         let path = self.log_path(&record.jail);
-        self.rotate_if_needed(&path)?;
+        Self::rotate_if_needed(&path)?;
 
         let line = serde_json::to_string(record)
             .map_err(|e| Error::State(format!("Failed to serialize audit record: {e}")))?;
@@ -150,7 +150,7 @@ impl AuditLog {
         Ok(())
     }
 
-    fn rotate_if_needed(&self, path: &Path) -> Result<()> {
+    fn rotate_if_needed(path: &Path) -> Result<()> {
         let too_big = fs::metadata(path).map(|m| m.len() >= MAX_LOG_BYTES);
         match too_big {
             Ok(true) => {}

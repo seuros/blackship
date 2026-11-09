@@ -1,18 +1,23 @@
-//! FreeBSD network ioctl syscalls
-//!
-//! Native ioctl operations for network interface management, replacing ifconfig commands.
+//! FreeBSD network ioctls: native replacements for ifconfig.
+
+// FFI module: interface and if_bridge ioctls.
+#![allow(unsafe_code)]
 
 use crate::error::{Error, Result};
 use std::ffi::CString;
 use std::net::UdpSocket;
 use std::os::unix::io::AsRawFd;
 
-// Request codes and driver subcommands read from the system headers at build
-// time; see build/sys_consts.c.
-use crate::sys::consts::*;
+// Request codes come from the system headers via build/sys_consts.c.
+use crate::sys::consts::{
+    BRDGADD, BRDGDEL, BRDGGFLAGS, BRDGGIFS, BRDGSFLAGS, BRDGSIFPVID, BRDGSIFVLANSET,
+    IFCAP_VLAN_HWFILTER, OFFSETOF_IFBIF_VLAN_REQ_BV_SET, SIOCAIFADDR, SIOCGDRVSPEC, SIOCGIFCAP,
+    SIOCGIFFLAGS, SIOCIFCREATE2, SIOCIFDESTROY, SIOCSDRVSPEC, SIOCSIFCAP, SIOCSIFFLAGS,
+    SIOCSIFLLADDR, SIOCSIFNAME, SIOCSIFVNET, SIZEOF_IFBIF_VLAN_REQ, SIZEOF_IFBIFCONF,
+    SIZEOF_IFBREQ, SIZEOF_IFBRPARAM,
+};
 
-/// Safely copy interface name into fixed-size buffer
-/// Returns error if name is too long (max 15 chars + null terminator)
+/// Copy `name` into an ifreq name buffer; errors past 15 chars.
 fn copy_ifname(dest: &mut [libc::c_char; libc::IF_NAMESIZE], name: &str) -> Result<()> {
     let name_cstr =
         CString::new(name).map_err(|e| Error::Network(format!("Invalid interface name: {e}")))?;
@@ -26,8 +31,9 @@ fn copy_ifname(dest: &mut [libc::c_char; libc::IF_NAMESIZE], name: &str) -> Resu
         )));
     }
 
+    // SAFETY: live CString bytes; c_char has u8 layout.
     dest[..name_bytes.len()].copy_from_slice(unsafe {
-        std::slice::from_raw_parts(name_bytes.as_ptr() as *const i8, name_bytes.len())
+        std::slice::from_raw_parts(name_bytes.as_ptr().cast::<libc::c_char>(), name_bytes.len())
     });
 
     Ok(())
@@ -39,13 +45,7 @@ fn create_socket() -> Result<UdpSocket> {
 }
 
 fn extract_ifname(name: &[libc::c_char; libc::IF_NAMESIZE]) -> Result<String> {
-    let name_len = name
-        .iter()
-        .position(|&c| c == 0)
-        .unwrap_or(libc::IF_NAMESIZE);
-    let name_bytes: Vec<u8> = name[..name_len].iter().map(|&c| c as u8).collect();
-
-    String::from_utf8(name_bytes)
+    String::from_utf8(crate::sys::c_buf_bytes(name))
         .map_err(|e| Error::Network(format!("Invalid interface name: {e}")))
 }
 
@@ -86,6 +86,7 @@ struct IfReqCap {
 }
 
 #[repr(C)]
+#[allow(clippy::struct_field_names)] // mirrors struct ifaliasreq in <net/if.h>
 struct IfAliasReq {
     ifra_name: [libc::c_char; libc::IF_NAMESIZE],
     ifra_addr: libc::sockaddr_in,
@@ -95,6 +96,7 @@ struct IfAliasReq {
 }
 
 #[repr(C)]
+#[allow(clippy::struct_field_names)] // mirrors struct ifdrv in <net/if.h>
 struct IfDrv {
     ifd_name: [libc::c_char; libc::IF_NAMESIZE],
     ifd_cmd: libc::c_ulong,
@@ -104,6 +106,7 @@ struct IfDrv {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+#[allow(clippy::struct_field_names)] // mirrors struct ifbreq in <net/if_bridgevar.h>
 struct BridgeIfReq {
     ifbr_ifsname: [libc::c_char; libc::IF_NAMESIZE],
     ifbr_ifsflags: u32,
@@ -135,11 +138,12 @@ struct BridgeParam {
 }
 
 #[repr(C)]
+#[allow(clippy::struct_field_names)] // mirrors struct ifbif_vlan_req in <net/if_bridgevar.h>
 struct BridgeIfVlanReq {
     bv_ifname: [libc::c_char; libc::IF_NAMESIZE],
     bv_op: u8,
-    _padding: [u8; 7],
-    bv_set: [u8; 512],
+    /// `ifbvlan_set_t`: __BITSET of `long` words, 4096 bits.
+    bv_set: [libc::c_ulong; 4096 / libc::c_ulong::BITS as usize],
 }
 
 const _: [(); std::mem::size_of::<IfReqNameData>()] = [(); std::mem::size_of::<libc::ifreq>()];
@@ -152,9 +156,22 @@ const _: [(); std::mem::size_of::<IfDrv>()] = [(); std::mem::size_of::<libc::ifd
 const _: [(); SIZEOF_IFBREQ] = [(); std::mem::size_of::<BridgeIfReq>()];
 const _: [(); SIZEOF_IFBIFCONF] = [(); std::mem::size_of::<BridgeIfConf>()];
 const _: [(); SIZEOF_IFBRPARAM] = [(); std::mem::size_of::<BridgeParam>()];
-const _: [(); 536] = [(); std::mem::size_of::<BridgeIfVlanReq>()];
+const _: [(); SIZEOF_IFBIF_VLAN_REQ] = [(); std::mem::size_of::<BridgeIfVlanReq>()];
+const _: [(); OFFSETOF_IFBIF_VLAN_REQ_BV_SET] = [(); std::mem::offset_of!(BridgeIfVlanReq, bv_set)];
 
-fn bridge_drvspec_io(
+#[allow(clippy::cast_possible_truncation)] // AF_LINK (18) fits sa_family_t
+const AF_LINK_FAMILY: libc::sa_family_t = libc::AF_LINK as libc::sa_family_t;
+#[allow(clippy::cast_possible_truncation)] // AF_INET (2) fits sa_family_t
+const AF_INET_FAMILY: libc::sa_family_t = libc::AF_INET as libc::sa_family_t;
+#[allow(clippy::cast_possible_truncation)] // 16 bytes, asserted below
+const SOCKADDR_IN_LEN: u8 = std::mem::size_of::<libc::sockaddr_in>() as u8;
+const _: () = assert!(std::mem::size_of::<libc::sockaddr_in>() <= u8::MAX as usize);
+
+/// One SIOCGDRVSPEC/SIOCSDRVSPEC round trip to an `if_bridge` command.
+///
+/// # Safety
+/// `data` must be `len` live writable bytes of `cmd`'s struct, including any buffer it points to.
+unsafe fn bridge_drvspec_io(
     sock_fd: libc::c_int,
     bridge: &str,
     cmd: libc::c_ulong,
@@ -162,12 +179,14 @@ fn bridge_drvspec_io(
     data: *mut libc::c_void,
     set: bool,
 ) -> std::io::Result<()> {
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut req: IfDrv = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifd_name, bridge).map_err(|e| std::io::Error::other(e.to_string()))?;
     req.ifd_cmd = cmd;
     req.ifd_len = len;
     req.ifd_data = data;
 
+    // SAFETY: req is a full struct ifdrv; data/len valid per contract.
     let result = unsafe {
         libc::ioctl(
             sock_fd,
@@ -183,7 +202,11 @@ fn bridge_drvspec_io(
     }
 }
 
-fn bridge_drvspec(
+/// [`bridge_drvspec_io`] mapped into [`Error::Network`].
+///
+/// # Safety
+/// Same contract as [`bridge_drvspec_io`].
+unsafe fn bridge_drvspec(
     sock_fd: libc::c_int,
     bridge: &str,
     cmd: libc::c_ulong,
@@ -191,21 +214,21 @@ fn bridge_drvspec(
     data: *mut libc::c_void,
     set: bool,
 ) -> Result<()> {
-    bridge_drvspec_io(sock_fd, bridge, cmd, len, data, set)
+    // SAFETY: caller upholds bridge_drvspec_io's contract.
+    unsafe { bridge_drvspec_io(sock_fd, bridge, cmd, len, data, set) }
         .map_err(|e| Error::Network(format!("Bridge ioctl {cmd} failed: {e}")))
 }
 
 /// Create an anonymous cloned interface and return the assigned name.
 fn create_clone_interface(iftype: &str) -> Result<String> {
-    // Create a socket for ioctl operations
     let sock = create_socket()?;
 
-    // SIOCIFCREATE structure for FreeBSD
+    // SAFETY: plain-data struct; all-zero is valid (null ifr_data = no clone params).
     let mut req: IfReqNameData = unsafe { std::mem::zeroed() };
 
     copy_ifname(&mut req.ifr_name, iftype)?;
 
-    // ifconfig(8) uses SIOCIFCREATE2 for clone creation on modern FreeBSD.
+    // SAFETY: req is ifreq-sized; kernel writes the assigned name into ifr_name.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCIFCREATE2, &mut req) };
 
     if result < 0 {
@@ -224,10 +247,9 @@ pub fn create_interface(iftype: &str, name: Option<&str>) -> Result<String> {
 
     if let Some(requested_name) = name {
         if created_name != requested_name {
-            // FreeBSD's ifconfig creates the clone first and then renames it when a
-            // custom name is requested. Doing the same avoids EINVAL when passing a
-            // non-cloner name like "blackship0" directly to clone creation.
+            // Like ifconfig: clone then rename; non-cloner names give EINVAL on create.
             if let Err(err) = rename_interface(&created_name, requested_name) {
+                // Rollback; keep the original error.
                 let _ = destroy_interface(&created_name);
                 return Err(err);
             }
@@ -243,11 +265,11 @@ pub fn create_interface(iftype: &str, name: Option<&str>) -> Result<String> {
 pub fn destroy_interface(name: &str) -> Result<()> {
     let sock = create_socket()?;
 
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut req: IfReqNameData = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifr_name, name)?;
 
-    // SIOCIFDESTROY ioctl
-
+    // SAFETY: req is ifreq-sized; SIOCIFDESTROY only reads ifr_name.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCIFDESTROY, &req) };
 
     if result < 0 {
@@ -262,12 +284,14 @@ pub fn destroy_interface(name: &str) -> Result<()> {
 
 /// Bring an interface up or down
 pub fn set_interface_up(name: &str, up: bool) -> Result<()> {
+    const IFF_UP: libc::c_short = 0x1;
     let sock = create_socket()?;
 
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut req: IfReqFlags = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifr_name, name)?;
 
-    // Get current flags
+    // SAFETY: req is ifreq-sized; kernel fills ifr_flags.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCGIFFLAGS, &mut req) };
     if result < 0 {
         return Err(Error::Network(format!(
@@ -276,15 +300,13 @@ pub fn set_interface_up(name: &str, up: bool) -> Result<()> {
         )));
     }
 
-    // Modify flags
-    const IFF_UP: libc::c_short = 0x1;
     if up {
         req.ifr_flags |= IFF_UP;
     } else {
         req.ifr_flags &= !IFF_UP;
     }
 
-    // Set new flags
+    // SAFETY: req is ifreq-sized; SIOCSIFFLAGS only reads it.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFFLAGS, &req) };
     if result < 0 {
         return Err(Error::Network(format!(
@@ -300,16 +322,16 @@ pub fn set_interface_up(name: &str, up: bool) -> Result<()> {
 pub fn rename_interface(old_name: &str, new_name: &str) -> Result<()> {
     let sock = create_socket()?;
 
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut req: IfReqNameData = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifr_name, old_name)?;
 
     let new_cstr = CString::new(new_name)
         .map_err(|e| Error::Network(format!("Invalid interface name: {e}")))?;
 
-    req.ifr_data = new_cstr.as_ptr() as *mut libc::c_void;
+    req.ifr_data = new_cstr.as_ptr().cast_mut().cast();
 
-    // SIOCSIFNAME ioctl
-
+    // SAFETY: ifr_data points at new_cstr, alive until return; kernel bounds the copyinstr.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFNAME, &req) };
 
     if result < 0 {
@@ -326,7 +348,6 @@ pub fn rename_interface(old_name: &str, new_name: &str) -> Result<()> {
 pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
     let sock = create_socket()?;
 
-    // Parse MAC address
     let mac_parts: Vec<&str> = mac.split(':').collect();
     if mac_parts.len() != 6 {
         return Err(Error::Network(format!("Invalid MAC address format: {mac}")));
@@ -338,22 +359,23 @@ pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
             .map_err(|e| Error::Network(format!("Invalid MAC address: {e}")))?;
     }
 
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut req: IfReqSockaddr = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifr_name, name)?;
 
     // SIOCSIFLLADDR reads sa_data[0..sa_len]; kernel checks sa_len == if_addrlen.
-    req.ifr_addr.sa_family = libc::AF_LINK as u8;
+    req.ifr_addr.sa_family = AF_LINK_FAMILY;
     req.ifr_addr.sa_len = 6;
+    // SAFETY: sa_data is 14 bytes; we write 6 from a separate array.
     unsafe {
         std::ptr::copy_nonoverlapping(
             mac_bytes.as_ptr(),
-            req.ifr_addr.sa_data.as_mut_ptr() as *mut u8,
+            req.ifr_addr.sa_data.as_mut_ptr().cast::<u8>(),
             6,
         );
     }
 
-    // SIOCSIFLLADDR ioctl
-
+    // SAFETY: req is ifreq-sized; SIOCSIFLLADDR only reads it.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFLLADDR, &req) };
 
     if result < 0 {
@@ -370,13 +392,13 @@ pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
 pub fn move_to_vnet(name: &str, jid: i32) -> Result<()> {
     let sock = create_socket()?;
 
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut req: IfReqJid = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifr_name, name)?;
 
     req.ifr_jid = jid;
 
-    // SIOCSIFVNET ioctl (FreeBSD-specific)
-
+    // SAFETY: req is ifreq-sized; SIOCSIFVNET only reads it.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFVNET, &req) };
 
     if result < 0 {
@@ -389,21 +411,24 @@ pub fn move_to_vnet(name: &str, jid: i32) -> Result<()> {
     Ok(())
 }
 
-/// Add or remove a bridge member via a BRDGADD/BRDGDEL drvspec ioctl
 fn bridge_member_op(bridge: &str, member: &str, cmd: libc::c_ulong) -> Result<()> {
     let sock = create_socket()?;
 
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut req: BridgeIfReq = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifbr_ifsname, member)?;
 
-    bridge_drvspec(
-        sock.as_raw_fd(),
-        bridge,
-        cmd,
-        std::mem::size_of::<BridgeIfReq>(),
-        &mut req as *mut _ as *mut libc::c_void,
-        true,
-    )
+    // SAFETY: req is a live BridgeIfReq, as BRDGADD/BRDGDEL expect.
+    unsafe {
+        bridge_drvspec(
+            sock.as_raw_fd(),
+            bridge,
+            cmd,
+            std::mem::size_of::<BridgeIfReq>(),
+            (&raw mut req).cast::<libc::c_void>(),
+            true,
+        )
+    }
 }
 
 /// Add a member interface to a bridge
@@ -420,15 +445,15 @@ pub fn bridge_delete_member(bridge: &str, member: &str) -> Result<()> {
 pub fn interface_exists(name: &str) -> Result<bool> {
     let sock = create_socket()?;
 
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut req: IfReqFlags = unsafe { std::mem::zeroed() };
 
-    // Validate name length - if too long, interface definitely doesn't exist
     if name.len() >= libc::IF_NAMESIZE {
         return Ok(false);
     }
     copy_ifname(&mut req.ifr_name, name)?;
 
-    // Try to get interface flags - if it succeeds, interface exists
+    // SAFETY: req is ifreq-sized; kernel fills ifr_flags.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCGIFFLAGS, &mut req) };
 
     Ok(result >= 0)
@@ -439,11 +464,16 @@ pub fn interface_exists(name: &str) -> Result<bool> {
 /// Supports CIDR notation like "10.0.0.1/24" or plain IP like "10.0.0.1".
 /// When no prefix is specified, /32 is used.
 pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
+    const fn fill_sockaddr_in(dest: &mut libc::sockaddr_in, ip: Ipv4Addr) {
+        dest.sin_len = SOCKADDR_IN_LEN;
+        dest.sin_family = AF_INET_FAMILY;
+        dest.sin_addr.s_addr = u32::from_ne_bytes(ip.octets());
+    }
+
     use std::net::Ipv4Addr;
 
     let sock = create_socket()?;
 
-    // Parse address with optional CIDR notation
     let (ip_str, prefix_len) = if let Some(slash_pos) = addr.find('/') {
         let ip = &addr[..slash_pos];
         let prefix: u8 = addr[slash_pos + 1..]
@@ -462,12 +492,7 @@ pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
         .parse()
         .map_err(|_| Error::Network(format!("Invalid IPv4 address: {ip_str}")))?;
 
-    fn fill_sockaddr_in(dest: &mut libc::sockaddr_in, ip: Ipv4Addr) {
-        dest.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
-        dest.sin_family = libc::AF_INET as u8;
-        dest.sin_addr.s_addr = u32::from_ne_bytes(ip.octets());
-    }
-
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut req: IfAliasReq = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifra_name, name)?;
     fill_sockaddr_in(&mut req.ifra_addr, ip);
@@ -486,8 +511,7 @@ pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
         fill_sockaddr_in(&mut req.ifra_broadaddr, broadcast_ip);
     }
 
-    // SIOCAIFADDR ioctl
-
+    // SAFETY: req matches struct ifaliasreq; SIOCAIFADDR only reads it.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCAIFADDR, &req) };
 
     if result < 0 {
@@ -502,15 +526,16 @@ pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
 
 /// Disable hardware VLAN filtering on an interface
 ///
-/// Uses SIOCGIFCAP/SIOCSIFCAP ioctls to clear IFCAP_VLAN_HWFILTER flag.
+/// Uses SIOCGIFCAP/SIOCSIFCAP ioctls to clear `IFCAP_VLAN_HWFILTER` flag.
 /// Some NICs (especially Broadcom) have buggy VLAN hardware filtering.
 pub fn disable_hwfilter(name: &str) -> Result<()> {
     let sock = create_socket()?;
 
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut req: IfReqCap = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifr_name, name)?;
 
-    // Get current capabilities
+    // SAFETY: req is ifreq-sized; kernel fills ifr_curcap.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCGIFCAP, &mut req) };
     if result < 0 {
         return Err(Error::Network(format!(
@@ -519,10 +544,9 @@ pub fn disable_hwfilter(name: &str) -> Result<()> {
         )));
     }
 
-    // Clear VLAN hardware filter capability
     req.ifr_reqcap = req.ifr_curcap & !IFCAP_VLAN_HWFILTER;
 
-    // Set new capabilities
+    // SAFETY: req is ifreq-sized; SIOCSIFCAP only reads it.
     let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFCAP, &req) };
     if result < 0 {
         return Err(Error::Network(format!(
@@ -531,7 +555,6 @@ pub fn disable_hwfilter(name: &str) -> Result<()> {
         )));
     }
 
-    // Also bring the interface up
     set_interface_up(name, true)?;
 
     Ok(())
@@ -541,39 +564,42 @@ pub fn disable_hwfilter(name: &str) -> Result<()> {
 ///
 /// Uses SIOCSDRVSPEC ioctl with BRDGSFLAGS command.
 pub fn bridge_enable_vlan_filtering(bridge: &str) -> Result<()> {
+    const IFBRF_VLANFILTER: u32 = 1;
     let sock = create_socket()?;
 
-    // First get current flags
     let mut get_param = BridgeParam { ifbrp_int32: 0 };
-    let result = bridge_drvspec_io(
-        sock.as_raw_fd(),
-        bridge,
-        BRDGGFLAGS,
-        std::mem::size_of::<BridgeParam>(),
-        &mut get_param as *mut _ as *mut libc::c_void,
-        false,
-    );
+    // SAFETY: get_param is a live BridgeParam, as BRDGGFLAGS expects.
+    let result = unsafe {
+        bridge_drvspec_io(
+            sock.as_raw_fd(),
+            bridge,
+            BRDGGFLAGS,
+            std::mem::size_of::<BridgeParam>(),
+            (&raw mut get_param).cast::<libc::c_void>(),
+            false,
+        )
+    };
 
-    // Start with current flags or 0 if get failed
     let current_flags = if result.is_ok() {
         get_param.ifbrp_int32
     } else {
         0
     };
 
-    // Set VLAN filtering flag
-    const IFBRF_VLANFILTER: u32 = 1;
     let mut set_param = BridgeParam {
         ifbrp_int32: current_flags | IFBRF_VLANFILTER,
     };
-    bridge_drvspec(
-        sock.as_raw_fd(),
-        bridge,
-        BRDGSFLAGS,
-        std::mem::size_of::<BridgeParam>(),
-        &mut set_param as *mut _ as *mut libc::c_void,
-        true,
-    )
+    // SAFETY: set_param is a live BridgeParam, as BRDGSFLAGS expects.
+    unsafe {
+        bridge_drvspec(
+            sock.as_raw_fd(),
+            bridge,
+            BRDGSFLAGS,
+            std::mem::size_of::<BridgeParam>(),
+            (&raw mut set_param).cast::<libc::c_void>(),
+            true,
+        )
+    }
 }
 
 /// Set PVID (Port VLAN ID) on a bridge member interface
@@ -582,19 +608,22 @@ pub fn bridge_enable_vlan_filtering(bridge: &str) -> Result<()> {
 pub fn bridge_set_pvid(bridge: &str, member: &str, pvid: u16) -> Result<()> {
     let sock = create_socket()?;
 
-    // Bridge request structure with PVID
+    // SAFETY: plain-data struct; all-zero is valid.
     let mut breq: BridgeIfReq = unsafe { std::mem::zeroed() };
     copy_ifname(&mut breq.ifbr_ifsname, member)?;
     breq.ifbr_pvid = pvid;
 
-    bridge_drvspec_io(
-        sock.as_raw_fd(),
-        bridge,
-        BRDGSIFPVID,
-        std::mem::size_of::<BridgeIfReq>(),
-        &mut breq as *mut _ as *mut libc::c_void,
-        true,
-    )
+    // SAFETY: breq is a live BridgeIfReq, as BRDGSIFPVID expects.
+    unsafe {
+        bridge_drvspec_io(
+            sock.as_raw_fd(),
+            bridge,
+            BRDGSIFPVID,
+            std::mem::size_of::<BridgeIfReq>(),
+            (&raw mut breq).cast::<libc::c_void>(),
+            true,
+        )
+    }
     .map_err(|e| Error::Network(format!("Failed to set PVID on {member}: {e}")))
 }
 
@@ -603,32 +632,35 @@ pub fn bridge_set_pvid(bridge: &str, member: &str, pvid: u16) -> Result<()> {
 /// Uses SIOCSDRVSPEC ioctl with BRDGSIFVLANSET command.
 /// The vlans slice contains VLAN IDs (1-4094) to tag.
 pub fn bridge_set_tagged_vlans(bridge: &str, member: &str, vlans: &[u16]) -> Result<()> {
+    const BRDG_VLAN_OP_SET: u8 = 1;
     let sock = create_socket()?;
 
+    // SAFETY: plain-data struct; all-zero is an empty VLAN set.
     let mut vreq: BridgeIfVlanReq = unsafe { std::mem::zeroed() };
     copy_ifname(&mut vreq.bv_ifname, member)?;
 
-    // Operation: SET (replace entire VLAN set)
-    const BRDG_VLAN_OP_SET: u8 = 1;
     vreq.bv_op = BRDG_VLAN_OP_SET;
 
-    // Build VLAN bitmap
+    // __BIT_SET layout: word n / BITS, bit n % BITS.
+    let word_bits = libc::c_ulong::BITS as usize;
     for &vlan in vlans {
         if vlan > 0 && vlan < 4095 {
-            let byte_idx = vlan as usize / 8;
-            let bit_idx = vlan as usize % 8;
-            vreq.bv_set[byte_idx] |= 1 << bit_idx;
+            let vlan = vlan as usize;
+            vreq.bv_set[vlan / word_bits] |= 1 << (vlan % word_bits);
         }
     }
 
-    bridge_drvspec_io(
-        sock.as_raw_fd(),
-        bridge,
-        BRDGSIFVLANSET,
-        std::mem::size_of::<BridgeIfVlanReq>(),
-        &mut vreq as *mut _ as *mut libc::c_void,
-        true,
-    )
+    // SAFETY: vreq is a live BridgeIfVlanReq, as BRDGSIFVLANSET expects.
+    unsafe {
+        bridge_drvspec_io(
+            sock.as_raw_fd(),
+            bridge,
+            BRDGSIFVLANSET,
+            std::mem::size_of::<BridgeIfVlanReq>(),
+            (&raw mut vreq).cast::<libc::c_void>(),
+            true,
+        )
+    }
     .map_err(|e| Error::Network(format!("Failed to set tagged VLANs on {member}: {e}")))
 }
 
@@ -637,61 +669,69 @@ pub fn bridge_set_tagged_vlans(bridge: &str, member: &str, vlans: &[u16]) -> Res
 /// Uses SIOCGDRVSPEC ioctl with BRDGGIFS command.
 pub fn bridge_list_members(bridge: &str) -> Result<Vec<String>> {
     let sock = create_socket()?;
+    let entry_size = std::mem::size_of::<BridgeIfReq>();
 
-    // Bridge interface request
-    // Start with space for 16 members, grow if needed
-    let mut capacity: usize = 16;
-    let mut members = Vec::new();
+    // BRDGGIFS never returns ENOMEM; a zero length queries the needed size.
+    let mut size_query = BridgeIfConf {
+        ifbic_len: 0,
+        _padding: 0,
+        ifbic_req: std::ptr::null_mut(),
+    };
+    // SAFETY: zero ifbic_len; kernel only writes the length.
+    unsafe { bridge_list_io(sock.as_raw_fd(), bridge, &mut size_query) }?;
+    let mut slots = size_query.ifbic_len as usize / entry_size + 1;
 
     loop {
-        let mut buffer: Vec<BridgeIfReq> = vec![unsafe { std::mem::zeroed() }; capacity];
-
+        // SAFETY: plain-data struct; all-zero is valid.
+        let mut buffer: Vec<BridgeIfReq> = vec![unsafe { std::mem::zeroed() }; slots];
+        let ifbic_len = u32::try_from(slots * entry_size)
+            .map_err(|_| Error::Network(format!("Bridge {bridge} member list too large")))?;
         let mut bifc = BridgeIfConf {
-            ifbic_len: (capacity * std::mem::size_of::<BridgeIfReq>()) as u32,
+            ifbic_len,
             _padding: 0,
             ifbic_req: buffer.as_mut_ptr(),
         };
+        // SAFETY: ifbic_req/ifbic_len describe `buffer`, alive across the call.
+        unsafe { bridge_list_io(sock.as_raw_fd(), bridge, &mut bifc) }?;
 
-        if let Err(err) = bridge_drvspec_io(
-            sock.as_raw_fd(),
+        let count = bifc.ifbic_len as usize / entry_size;
+        if count == slots {
+            // Buffer full: members joined since the size query.
+            slots *= 2;
+            continue;
+        }
+
+        return Ok(buffer
+            .iter()
+            .take(count)
+            .filter_map(|entry| {
+                String::from_utf8(crate::sys::c_buf_bytes(&entry.ifbr_ifsname))
+                    .ok()
+                    .filter(|name| !name.is_empty())
+            })
+            .collect());
+    }
+}
+
+/// One BRDGGIFS round trip.
+///
+/// # Safety
+/// `bifc.ifbic_req` must point at `ifbic_len` writable bytes, or `ifbic_len` must be zero.
+unsafe fn bridge_list_io(fd: libc::c_int, bridge: &str, bifc: &mut BridgeIfConf) -> Result<()> {
+    // SAFETY: bifc's buffer is valid per this function's contract.
+    unsafe {
+        bridge_drvspec_io(
+            fd,
             bridge,
             BRDGGIFS,
             std::mem::size_of::<BridgeIfConf>(),
-            &mut bifc as *mut _ as *mut libc::c_void,
+            std::ptr::from_mut(bifc).cast::<libc::c_void>(),
             false,
-        ) {
-            // ENOMEM means we need more space
-            // ENOMEM means we need more space
-            if err.raw_os_error() == Some(libc::ENOMEM) {
-                capacity *= 2;
-                continue;
-            }
-            return Err(Error::Network(format!(
-                "Failed to list bridge members: {err}"
-            )));
-        }
-
-        // Parse results
-        let count = bifc.ifbic_len as usize / std::mem::size_of::<BridgeIfReq>();
-        for entry in buffer.iter().take(count) {
-            let name_len = entry
-                .ifbr_ifsname
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(libc::IF_NAMESIZE);
-            let name_bytes: Vec<u8> = entry.ifbr_ifsname[..name_len]
-                .iter()
-                .map(|&c| c as u8)
-                .collect();
-            if let Ok(name) = String::from_utf8(name_bytes)
-                && !name.is_empty()
-            {
-                members.push(name);
-            }
-        }
-
-        break;
+        )
     }
-
-    Ok(members)
+    .map_err(|err| Error::Network(format!("Failed to list bridge members: {err}")))
 }
+
+#[cfg(test)]
+#[path = "ioctl/tests.rs"]
+mod tests;

@@ -1,4 +1,4 @@
-//! EVA: hot update of running jails via jail_set(JAIL_UPDATE), no restart.
+//! EVA: hot update of running jails via `jail_set(JAIL_UPDATE)`, no restart.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -21,7 +21,10 @@ enum ParamClass {
 }
 
 fn classify_param(key: &str) -> ParamClass {
-    use crate::sys::consts::*;
+    use crate::sys::consts::{
+        JAIL_PARAM_DEVFS_RULESET, JAIL_PARAM_IP4_ADDR, JAIL_PARAM_IP6_ADDR, JAIL_PARAM_JID,
+        JAIL_PARAM_NAME, JAIL_PARAM_PATH, JAIL_PARAM_VNET,
+    };
     match key {
         JAIL_PARAM_NAME | JAIL_PARAM_JID => ParamClass::Selector,
         JAIL_PARAM_PATH
@@ -117,11 +120,11 @@ fn diff_params(
             continue;
         }
 
-        let line = format!("{}: {} -> {}", key, live_str, param_display(value));
+        let change = format!("{}: {} -> {}", key, live_str, param_display(value));
         match class {
-            ParamClass::Immutable => diff.immutable_diffs.push(line),
+            ParamClass::Immutable => diff.immutable_diffs.push(change),
             ParamClass::Updatable => {
-                diff.display.push(line);
+                diff.display.push(change);
                 diff.changes.insert(key.clone(), value.clone());
             }
             ParamClass::Selector => unreachable!(),
@@ -134,26 +137,25 @@ fn diff_params(
 /// jls fails the whole invocation on any key it does not know, so fall
 /// back to per-key reads and report the losers as unreadable.
 fn read_live_params(full_name: &str, keys: &[&str]) -> (HashMap<String, String>, Vec<String>) {
-    match jls_json(full_name, keys) {
-        Ok(map) => (map, Vec::new()),
-        Err(_) => {
-            let mut live = HashMap::new();
-            let mut unreadable = Vec::new();
-            for &key in keys {
-                match jls_json(full_name, &[key]) {
-                    Ok(map) => live.extend(map),
-                    Err(_) => unreadable.push(key.to_string()),
-                }
+    if let Ok(map) = jls_json(full_name, keys) {
+        (map, Vec::new())
+    } else {
+        let mut live = HashMap::new();
+        let mut unreadable = Vec::new();
+        for &key in keys {
+            match jls_json(full_name, &[key]) {
+                Ok(map) => live.extend(map),
+                Err(_) => unreadable.push(key.to_string()),
             }
-            (live, unreadable)
         }
+        (live, unreadable)
     }
 }
 
 fn jls_json(full_name: &str, keys: &[&str]) -> Result<HashMap<String, String>> {
     let mut args = vec!["--libxo", "json", "-j", full_name];
     args.extend_from_slice(keys);
-    let json = crate::commands::stats::run_json("/usr/sbin/jls", &args)?;
+    let json = crate::sys::run_json("/usr/sbin/jls", &args)?;
 
     let entry = json
         .get("jail-information")
@@ -177,17 +179,17 @@ fn jls_json(full_name: &str, keys: &[&str]) -> Result<HashMap<String, String>> {
 
 impl Bridge {
     /// Hot-update running jails to match the manifest (EVA).
-    pub fn eva(&mut self, jail: Option<&str>) -> Result<()> {
+    pub fn eva(&self, jail: Option<&str>) -> Result<()> {
         self.eva_inner(jail, false)
     }
 
     /// Dry run: show what `eva` would change without applying anything.
-    pub fn eva_dry_run(&mut self, jail: Option<&str>) -> Result<()> {
+    pub fn eva_dry_run(&self, jail: Option<&str>) -> Result<()> {
         println!("=== DRY RUN - No changes will be made ===\n");
         self.eva_inner(jail, true)
     }
 
-    fn eva_inner(&mut self, jail: Option<&str>, dry_run: bool) -> Result<()> {
+    fn eva_inner(&self, jail: Option<&str>, dry_run: bool) -> Result<()> {
         let targets = self.jails_for_up(jail)?;
         let mut failures: Vec<(String, Error)> = Vec::new();
 
@@ -216,7 +218,7 @@ impl Bridge {
         }
     }
 
-    fn eva_jail(&mut self, name: &str, dry_run: bool) -> Result<()> {
+    fn eva_jail(&self, name: &str, dry_run: bool) -> Result<()> {
         let (service_name, full_name) = self.resolve_jail_names(name)?;
         let Some(jail_def) = self.config.get_jail(&service_name) else {
             return Ok(());
@@ -243,13 +245,8 @@ impl Bridge {
 
         let resources = self.effective_resources(&full_name, jail_def);
         let rctl_rules = resources.to_rules(&full_name);
-        let other_pins = self
-            .config
-            .jails
-            .iter()
-            .filter(|other| other.name != service_name)
-            .filter_map(|other| other.startup_resources().cpuset.as_deref());
-        let cpu_list = crate::rctl::resolve_cpu_list(resources, other_pins);
+        let cpu_list =
+            crate::rctl::resolve_cpu_list(resources, self.other_cpuset_pins(&service_name));
 
         if dry_run {
             println!("  [EVA] {full_name} (JID {jid})");

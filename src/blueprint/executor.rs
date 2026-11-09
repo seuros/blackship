@@ -6,11 +6,9 @@ use crate::blueprint::context::{BuildContext, reject_symlink_ancestors};
 use crate::blueprint::instructions::{CopySpec, Instruction, Jailfile};
 use crate::error::{Error, Result};
 use crate::jail::jexec::chroot_exec;
-use nix::unistd::{Group, User};
-use std::ffi::CString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// ZFS-backed build layer cache: one snapshot per filesystem-mutating
 /// instruction, keyed by the rolling hash of everything before it.
@@ -35,7 +33,7 @@ pub struct TemplateExecutor {
 
 impl TemplateExecutor {
     /// Create a new template executor
-    pub fn new(context: BuildContext) -> Self {
+    pub const fn new(context: BuildContext) -> Self {
         Self {
             context,
             dry_run: false,
@@ -44,7 +42,7 @@ impl TemplateExecutor {
     }
 
     /// Enable dry run mode
-    pub fn dry_run(mut self, dry_run: bool) -> Self {
+    pub const fn dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
         self
     }
@@ -71,7 +69,7 @@ impl TemplateExecutor {
     }
 
     /// True when an instruction changes the jail filesystem (snapshot-worthy)
-    fn is_layer_boundary(instruction: &Instruction) -> bool {
+    const fn is_layer_boundary(instruction: &Instruction) -> bool {
         matches!(instruction, Instruction::Run(_) | Instruction::Copy(_))
     }
 
@@ -199,56 +197,7 @@ impl TemplateExecutor {
 
                 // Create the directory in the jail if it doesn't exist
                 if !self.dry_run {
-                    let full_path = self.context.resolve_dest(&path)?;
-
-                    // Reject symlink ancestors: mkdir could otherwise escape the jail root.
-                    let canonical_target =
-                        self.context.target_path().canonicalize().map_err(|e| {
-                            Error::BuildFailed {
-                                step: "WORKDIR".to_string(),
-                                message: format!(
-                                    "Failed to canonicalize target path '{}': {}",
-                                    self.context.target_path().display(),
-                                    e
-                                ),
-                            }
-                        })?;
-
-                    let mut ancestor = full_path.as_path();
-                    while !ancestor.exists() {
-                        match ancestor.parent() {
-                            Some(p) => ancestor = p,
-                            None => break,
-                        }
-                    }
-                    if ancestor.exists() {
-                        let canonical_ancestor =
-                            ancestor.canonicalize().map_err(|e| Error::BuildFailed {
-                                step: "WORKDIR".to_string(),
-                                message: format!(
-                                    "Failed to canonicalize '{}': {}",
-                                    ancestor.display(),
-                                    e
-                                ),
-                            })?;
-                        if !canonical_ancestor.starts_with(&canonical_target) {
-                            return Err(Error::BuildFailed {
-                                step: "WORKDIR".to_string(),
-                                message: format!(
-                                    "WORKDIR path '{}' resolves outside the jail root '{}'",
-                                    full_path.display(),
-                                    canonical_target.display()
-                                ),
-                            });
-                        }
-                    }
-
-                    if !full_path.exists() {
-                        fs::create_dir_all(&full_path).map_err(|e| Error::BuildFailed {
-                            step: "WORKDIR".to_string(),
-                            message: format!("Failed to create {}: {}", full_path.display(), e),
-                        })?;
-                    }
+                    self.make_jail_dir(&path, "WORKDIR")?;
                 }
             }
 
@@ -288,55 +237,7 @@ impl TemplateExecutor {
 
                 // Create the volume mount point
                 if !self.dry_run {
-                    let full_path = self.context.resolve_dest(&path)?;
-
-                    let canonical_target =
-                        self.context.target_path().canonicalize().map_err(|e| {
-                            Error::BuildFailed {
-                                step: "VOLUME".to_string(),
-                                message: format!(
-                                    "Failed to canonicalize target path '{}': {}",
-                                    self.context.target_path().display(),
-                                    e
-                                ),
-                            }
-                        })?;
-
-                    let mut ancestor = full_path.as_path();
-                    while !ancestor.exists() {
-                        match ancestor.parent() {
-                            Some(p) => ancestor = p,
-                            None => break,
-                        }
-                    }
-                    if ancestor.exists() {
-                        let canonical_ancestor =
-                            ancestor.canonicalize().map_err(|e| Error::BuildFailed {
-                                step: "VOLUME".to_string(),
-                                message: format!(
-                                    "Failed to canonicalize '{}': {}",
-                                    ancestor.display(),
-                                    e
-                                ),
-                            })?;
-                        if !canonical_ancestor.starts_with(&canonical_target) {
-                            return Err(Error::BuildFailed {
-                                step: "VOLUME".to_string(),
-                                message: format!(
-                                    "VOLUME path '{}' resolves outside the jail root '{}'",
-                                    full_path.display(),
-                                    canonical_target.display()
-                                ),
-                            });
-                        }
-                    }
-
-                    if !full_path.exists() {
-                        fs::create_dir_all(&full_path).map_err(|e| Error::BuildFailed {
-                            step: "VOLUME".to_string(),
-                            message: format!("Failed to create {}: {}", full_path.display(), e),
-                        })?;
-                    }
+                    self.make_jail_dir(&path, "VOLUME")?;
                 }
             }
 
@@ -360,7 +261,7 @@ impl TemplateExecutor {
             && let Ok(content) = fs::read("/etc/resolv.conf")
         {
             if let Some(parent) = resolv_path.parent() {
-                let _ = fs::create_dir_all(parent);
+                let _ = fs::create_dir_all(parent); // best-effort, like the write below
             }
             if let Ok(mut f) = fs::OpenOptions::new()
                 .write(true)
@@ -368,15 +269,22 @@ impl TemplateExecutor {
                 .open(&resolv_path)
             {
                 use std::io::Write;
-                let _ = f.write_all(&content);
+                let _ = f.write_all(&content); // best-effort: DNS in the build root is a convenience
             }
         }
 
         reject_symlink_ancestors(target_path, &dev_path)?;
 
+        // Resolve before mounting devfs so an early return can't leak the mount.
+        let target_str = target_path.to_str().ok_or_else(|| Error::BuildFailed {
+            step: "RUN".to_string(),
+            message: format!("Non-UTF-8 build root: {}", target_path.display()),
+        })?;
+
         // Mount devfs for the chroot environment
         let need_devfs = !dev_path.join("null").exists();
         if need_devfs {
+            // A missing dir surfaces as a mount_devfs warning just below.
             std::fs::create_dir_all(&dev_path).ok();
 
             if let Err(e) = crate::sys::mount_devfs(&dev_path) {
@@ -392,7 +300,7 @@ impl TemplateExecutor {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let result = chroot_exec(target_path.to_str().unwrap(), command, &env_vars);
+        let result = chroot_exec(target_str, command, &env_vars);
 
         // Unmount devfs if we mounted it
         if need_devfs {
@@ -425,13 +333,37 @@ impl TemplateExecutor {
         Ok(())
     }
 
+    /// Resolve `dest` inside the jail root, insisting the root exists.
+    fn jail_dest(&self, dest: &str, step: &str) -> Result<PathBuf> {
+        let root = self.context.target_path();
+        if !root.is_dir() {
+            return Err(Error::BuildFailed {
+                step: step.to_string(),
+                message: format!("Jail root '{}' does not exist", root.display()),
+            });
+        }
+        self.context.resolve_dest(dest)
+    }
+
+    /// Create a directory inside the jail (WORKDIR, VOLUME).
+    fn make_jail_dir(&self, path: &str, step: &str) -> Result<()> {
+        let full_path = self.jail_dest(path, step)?;
+        if !full_path.exists() {
+            fs::create_dir_all(&full_path).map_err(|e| Error::BuildFailed {
+                step: step.to_string(),
+                message: format!("Failed to create {}: {}", full_path.display(), e),
+            })?;
+        }
+        Ok(())
+    }
+
     /// Execute a COPY instruction
     fn execute_copy(&self, spec: &CopySpec) -> Result<()> {
         let src = self.context.substitute(&spec.src);
         let dest = self.context.substitute(&spec.dest);
 
         let src_path = self.context.resolve_source(&src)?;
-        let dest_path = self.context.resolve_dest(&dest)?;
+        let dest_path = self.jail_dest(&dest, "COPY")?;
 
         // Ensure source exists
         if !src_path.exists() {
@@ -474,62 +406,11 @@ impl TemplateExecutor {
             });
         }
 
-        let canonical_target =
-            self.context
-                .target_path()
-                .canonicalize()
-                .map_err(|e| Error::BuildFailed {
-                    step: "COPY".to_string(),
-                    message: format!(
-                        "Failed to canonicalize target path '{}': {}",
-                        self.context.target_path().display(),
-                        e
-                    ),
-                })?;
-
-        let check_path = if dest_path.exists() {
-            dest_path.canonicalize().map_err(|e| Error::BuildFailed {
-                step: "COPY".to_string(),
-                message: format!(
-                    "Failed to canonicalize dest '{}': {}",
-                    dest_path.display(),
-                    e
-                ),
-            })?
-        } else if let Some(parent) = dest_path.parent()
-            && parent.exists()
-        {
-            parent.canonicalize().map_err(|e| Error::BuildFailed {
-                step: "COPY".to_string(),
-                message: format!(
-                    "Failed to canonicalize dest parent '{}': {}",
-                    parent.display(),
-                    e
-                ),
-            })?
-        } else {
-            canonical_target.clone()
-        };
-
-        if !check_path.starts_with(&canonical_target) {
-            return Err(Error::BuildFailed {
-                step: "COPY".to_string(),
-                message: format!(
-                    "Destination '{}' resolves outside the jail root '{}'",
-                    dest_path.display(),
-                    canonical_target.display()
-                ),
-            });
-        }
-
         // Create destination parent directory if needed
         if let Some(parent) = dest_path.parent()
             && !parent.exists()
         {
-            fs::create_dir_all(parent).map_err(|e| Error::BuildFailed {
-                step: "COPY".to_string(),
-                message: format!("Failed to create directory {}: {}", parent.display(), e),
-            })?;
+            create_copy_dir(parent)?;
         }
 
         // canonical_src, not src_path: the original could be swapped after validation.
@@ -555,15 +436,7 @@ impl TemplateExecutor {
                 });
             }
 
-            fs::copy(&canonical_src, &final_dest).map_err(|e| Error::BuildFailed {
-                step: "COPY".to_string(),
-                message: format!(
-                    "Failed to copy {} to {}: {}",
-                    src_path.display(),
-                    final_dest.display(),
-                    e
-                ),
-            })?;
+            copy_file(&canonical_src, &final_dest)?;
 
             // Strip setuid/setgid: no privilege escalation inside the chroot.
             if let Some(mode) = spec.mode {
@@ -579,19 +452,13 @@ impl TemplateExecutor {
                 })?;
             }
 
-            if spec.mode.is_none()
-                && let Ok(meta) = fs::metadata(&final_dest)
-            {
-                let current_mode = meta.permissions().mode();
-                if current_mode & 0o6000 != 0 {
-                    let safe_mode = current_mode & 0o1777;
-                    let _ = fs::set_permissions(&final_dest, fs::Permissions::from_mode(safe_mode));
-                }
+            if spec.mode.is_none() {
+                strip_setid_bits(&final_dest)?;
             }
 
             // Set owner if specified (requires running as root)
             if let Some(owner) = &spec.owner {
-                set_owner(&final_dest, owner)?;
+                set_owner(self.context.target_path(), &final_dest, owner)?;
             }
         }
 
@@ -613,12 +480,51 @@ impl TemplateExecutor {
 }
 
 /// Recursively copy a directory
+/// Drop setuid/setgid from a copied file, failing closed. An explicit COPY mode wins.
+fn strip_setid_bits(path: &Path) -> Result<()> {
+    let mode = fs::metadata(path)
+        .map_err(|e| Error::BuildFailed {
+            step: "COPY".to_string(),
+            message: format!("Failed to stat {}: {e}", path.display()),
+        })?
+        .permissions()
+        .mode();
+    if mode & 0o6000 != 0 {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode & 0o1777)).map_err(|e| {
+            Error::BuildFailed {
+                step: "COPY".to_string(),
+                message: format!("Failed to strip setuid/setgid from {}: {e}", path.display()),
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// `fs::copy` for COPY, with the step's error.
+fn copy_file(src: &Path, dest: &Path) -> Result<()> {
+    fs::copy(src, dest)
+        .map(drop)
+        .map_err(|e| Error::BuildFailed {
+            step: "COPY".to_string(),
+            message: format!(
+                "Failed to copy {} to {}: {e}",
+                src.display(),
+                dest.display()
+            ),
+        })
+}
+
+/// `fs::create_dir_all` for COPY, with the step's error.
+fn create_copy_dir(dir: &Path) -> Result<()> {
+    fs::create_dir_all(dir).map_err(|e| Error::BuildFailed {
+        step: "COPY".to_string(),
+        message: format!("Failed to create directory {}: {e}", dir.display()),
+    })
+}
+
 fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     if !dest.exists() {
-        fs::create_dir_all(dest).map_err(|e| Error::BuildFailed {
-            step: "COPY".to_string(),
-            message: format!("Failed to create directory {}: {}", dest.display(), e),
-        })?;
+        create_copy_dir(dest)?;
     }
 
     for entry in fs::read_dir(src).map_err(|e| Error::BuildFailed {
@@ -673,96 +579,64 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
                 continue;
             }
 
-            fs::copy(&src_path, &dest_path).map_err(|e| Error::BuildFailed {
-                step: "COPY".to_string(),
-                message: format!(
-                    "Failed to copy {} to {}: {}",
-                    src_path.display(),
-                    dest_path.display(),
-                    e
-                ),
-            })?;
+            copy_file(&src_path, &dest_path)?;
 
-            if let Ok(meta) = fs::metadata(&dest_path) {
-                let current_mode = meta.permissions().mode();
-                if current_mode & 0o6000 != 0 {
-                    let safe_mode = current_mode & 0o1777;
-                    let _ = fs::set_permissions(&dest_path, fs::Permissions::from_mode(safe_mode));
-                }
-            }
+            strip_setid_bits(&dest_path)?;
         }
     }
 
     Ok(())
 }
 
-/// Set file owner using chown syscall
-fn set_owner(path: &Path, owner: &str) -> Result<()> {
-    // Parse owner string (format: "user", "user:group", or ":group")
-    let parts: Vec<&str> = owner.split(':').collect();
-
-    let uid = if !parts[0].is_empty() {
-        // Look up user by name
-        User::from_name(parts[0])
-            .map_err(|e| Error::BuildFailed {
-                step: "COPY".to_string(),
-                message: format!("Failed to lookup user {}: {}", parts[0], e),
-            })?
-            .ok_or_else(|| Error::BuildFailed {
-                step: "COPY".to_string(),
-                message: format!("User not found: {}", parts[0]),
-            })?
-            .uid
-            .as_raw()
-    } else {
-        // No user specified, use -1 to keep unchanged
-        u32::MAX
-    };
-
-    let gid = if parts.len() > 1 && !parts[1].is_empty() {
-        // Look up group by name
-        Group::from_name(parts[1])
-            .map_err(|e| Error::BuildFailed {
-                step: "COPY".to_string(),
-                message: format!("Failed to lookup group {}: {}", parts[1], e),
-            })?
-            .ok_or_else(|| Error::BuildFailed {
-                step: "COPY".to_string(),
-                message: format!("Group not found: {}", parts[1]),
-            })?
-            .gid
-            .as_raw()
-    } else {
-        // No group specified, use -1 to keep unchanged
-        u32::MAX
-    };
-
-    // Use native chown(2) syscall instead of spawning process
-    let path_cstr = CString::new(path.to_str().unwrap()).map_err(|e| Error::BuildFailed {
+/// chown a copied file to a COPY `--owner` spec, resolved inside the jail.
+fn set_owner(root: &Path, path: &Path, owner: &str) -> Result<()> {
+    let (uid, gid) = resolve_owner(root, owner)?;
+    std::os::unix::fs::chown(path, uid, gid).map_err(|e| Error::BuildFailed {
         step: "COPY".to_string(),
-        message: format!("Invalid path: {e}"),
-    })?;
+        message: format!("Failed to chown {} to {owner}: {e}", path.display()),
+    })
+}
 
-    let result = unsafe { libc::chown(path_cstr.as_ptr(), uid, gid) };
+/// Parse "user", "user:group" or ":group" against the jail's own passwd/group files.
+fn resolve_owner(root: &Path, owner: &str) -> Result<(Option<u32>, Option<u32>)> {
+    let (user, group) = owner.split_once(':').unwrap_or((owner, ""));
+    let uid = (!user.is_empty())
+        .then(|| lookup_id(root, "etc/passwd", user, "user"))
+        .transpose()?;
+    let gid = (!group.is_empty())
+        .then(|| lookup_id(root, "etc/group", group, "group"))
+        .transpose()?;
+    Ok((uid, gid))
+}
 
-    if result != 0 {
-        return Err(Error::BuildFailed {
-            step: "COPY".to_string(),
-            message: format!("chown syscall failed: {}", std::io::Error::last_os_error()),
-        });
+/// The id for `name` in a passwd/group-format file under `root`; numeric names pass through.
+fn lookup_id(root: &Path, file: &str, name: &str, what: &str) -> Result<u32> {
+    if let Ok(id) = name.parse::<u32>() {
+        return Ok(id);
     }
-
-    Ok(())
+    let table = fs::read_to_string(root.join(file)).map_err(|e| Error::BuildFailed {
+        step: "COPY".to_string(),
+        message: format!("Failed to read the jail's {file}: {e}"),
+    })?;
+    table
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .find_map(|line| {
+            let mut fields = line.split(':');
+            (fields.next() == Some(name))
+                .then(|| fields.nth(1)?.parse().ok())
+                .flatten()
+        })
+        .ok_or_else(|| Error::BuildFailed {
+            step: "COPY".to_string(),
+            message: format!("No {what} '{name}' in the jail's {file}"),
+        })
 }
 
 /// Render a Sha256 as lowercase hex
 fn hex_digest(hasher: sha2::Sha256) -> String {
     use sha2::Digest;
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hex::encode(hasher.finalize())
 }
 
 /// Feed a file's or directory tree's contents into a hasher (sorted walk)

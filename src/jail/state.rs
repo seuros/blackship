@@ -96,18 +96,17 @@ pub enum JailHandle {
 
 impl JailHandle {
     /// Get the JID regardless of handle type
-    pub fn jid(&self) -> i32 {
+    pub const fn jid(&self) -> i32 {
         match self {
-            JailHandle::Jid(jid) => *jid,
-            JailHandle::Descriptor { jid, .. } => *jid,
+            Self::Jid(jid) | Self::Descriptor { jid, .. } => *jid,
         }
     }
 
     /// The descriptor fd, when this handle owns one.
     pub fn descriptor_fd(&self) -> Option<i32> {
         match self {
-            JailHandle::Jid(_) => None,
-            JailHandle::Descriptor { fd, .. } => Some(fd.as_raw_fd()),
+            Self::Jid(_) => None,
+            Self::Descriptor { fd, .. } => Some(fd.as_raw_fd()),
         }
     }
 }

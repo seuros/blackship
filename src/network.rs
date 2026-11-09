@@ -1,7 +1,7 @@
 //! Network management module for VNET jails
 //!
 //! Provides:
-//! - Bridge interface management (if_bridge)
+//! - Bridge interface management (`if_bridge`)
 //! - Epair interface creation for VNET jails
 //! - IP address allocation and management
 //! - VNET jail network configuration

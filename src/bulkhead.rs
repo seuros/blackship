@@ -15,13 +15,12 @@ use std::process::Command;
 const PF_ANCHOR: &str = "blackship";
 
 /// Enable PF on the host: write a minimal /etc/pf.conf carrying the
-/// blackship anchors if none exists, persist pf_enable=YES, and start pf.
+/// blackship anchors if none exists, persist `pf_enable=YES`, and start pf.
 pub fn enable_pf() -> Result<()> {
     let running = Command::new("/sbin/pfctl")
         .args(["-s", "info"])
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+        .is_ok_and(|o| o.status.success());
     if running {
         return Ok(());
     }
@@ -104,7 +103,7 @@ impl PortForward {
     }
 
     /// Bind to a specific external IP.
-    pub fn with_bind_ip(mut self, ip: IpAddr) -> Self {
+    pub const fn with_bind_ip(mut self, ip: IpAddr) -> Self {
         self.bind_ip = Some(ip);
         self
     }
@@ -171,13 +170,14 @@ fn drain_rules(ips: &[IpAddr]) -> String {
         if !rules.is_empty() {
             rules.push('\n');
         }
-        let _ = write!(rules, "block drop in quick proto tcp to {ip} flags S/SA");
+        let _ = write!(rules, "block drop in quick proto tcp to {ip} flags S/SA"); // fmt::Write into a String is infallible
     }
     rules
 }
 
 /// Drop a drain anchor's rules. Best effort: a missing anchor is success.
 pub fn flush_drain_anchor(anchor: &str) {
+    // Anchor may not exist yet.
     let _ = Command::new("/sbin/pfctl")
         .args(["-a", anchor, "-F", "rules"])
         .output();
@@ -210,13 +210,12 @@ pub fn tcp_state_count(ip: IpAddr) -> usize {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| {
+        .map_or(0, |o| {
             String::from_utf8_lossy(&o.stdout)
                 .lines()
                 .filter(|line| line.contains("tcp") && line.contains(&needle))
                 .count()
         })
-        .unwrap_or(0)
 }
 
 /// True when PF is loaded and enabled.
@@ -226,8 +225,7 @@ pub fn pf_enabled() -> bool {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("Status: Enabled"))
-        .unwrap_or(false)
+        .is_some_and(|o| String::from_utf8_lossy(&o.stdout).contains("Status: Enabled"))
 }
 
 fn pfctl_stdin(anchor: &str, rules: &str) -> Result<()> {
@@ -337,8 +335,7 @@ impl BulkheadManager {
                 existing.external_port,
                 existing
                     .bind_ip
-                    .map(|ip| ip.to_string())
-                    .unwrap_or_else(|| "*".into()),
+                    .map_or_else(|| "*".into(), |ip| ip.to_string()),
                 existing.protocol,
                 existing.jail_name
             )));
@@ -404,29 +401,7 @@ impl BulkheadManager {
             rules_text.push_str(&forward.to_pf_rule()?);
         }
 
-        let mut child = Command::new("/sbin/pfctl")
-            .args(["-a", PF_ANCHOR, "-f", "-"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| Error::Network(format!("Failed to run pfctl: {e}")))?;
-
-        if let Some(stdin) = child.stdin.as_mut() {
-            use std::io::Write;
-            stdin
-                .write_all(rules_text.as_bytes())
-                .map_err(|e| Error::Network(format!("Failed to write rules: {e}")))?;
-        }
-
-        let output = child
-            .wait_with_output()
-            .map_err(|e| Error::Network(format!("Failed to wait for pfctl: {e}")))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Network(format!("pfctl failed: {stderr}")));
-        }
-
-        Ok(())
+        pfctl_stdin(PF_ANCHOR, &rules_text)
     }
 }
 

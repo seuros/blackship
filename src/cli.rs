@@ -93,7 +93,7 @@ pub enum Commands {
     /// System setup (PF firewall anchor, etc.)
     Setup {
         /// Enable PF if it is not running: write a minimal /etc/pf.conf
-        /// with blackship anchors if none exists, set pf_enable=YES, start pf
+        /// with blackship anchors if none exists, set `pf_enable=YES`, start pf
         #[usage(long)]
         enable_pf: bool,
     },
@@ -253,7 +253,7 @@ pub enum Commands {
         /// Jail to migrate (must be stopped)
         jail: String,
 
-        /// Target host (user@host, ssh BatchMode)
+        /// Target host (user@host, ssh `BatchMode`)
         target: String,
 
         /// Remote dataset (default: zroot/blackship/jails/<jail>)
@@ -388,7 +388,7 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Inspect or switch a jail's multi-phase QoS profile
+    /// Inspect or switch a jail's multi-phase `QoS` profile
     Qos {
         /// Jail name
         jail: String,
@@ -545,7 +545,7 @@ pub enum Shell {
 }
 
 impl Shell {
-    fn runtime(self) -> usage_rs::complete::Shell {
+    const fn runtime(self) -> usage_rs::complete::Shell {
         match self {
             Self::Bash => usage_rs::complete::Shell::Bash,
             Self::Elvish => usage_rs::complete::Shell::Elvish,
@@ -731,7 +731,7 @@ pub enum NetworkAction {
         #[usage(short, long, default = "blackship0")]
         bridge: String,
 
-        /// Network backend: epair (if_bridge) or netgraph (ng_bridge with a
+        /// Network backend: epair (`if_bridge`) or netgraph (`ng_bridge` with a
         /// host gateway eiface)
         #[usage(long, default = "epair")]
         backend: String,
@@ -800,13 +800,13 @@ impl Commands {
 }
 
 impl ReleasesAction {
-    fn requires_root(&self) -> bool {
+    const fn requires_root(&self) -> bool {
         matches!(self, Self::Delete { .. })
     }
 }
 
 impl SnapshotAction {
-    fn requires_root(&self) -> bool {
+    const fn requires_root(&self) -> bool {
         !matches!(self, Self::List { .. })
     }
 }
@@ -821,7 +821,7 @@ impl ArmadaAction {
 }
 
 impl NetworkAction {
-    fn requires_root(&self) -> bool {
+    const fn requires_root(&self) -> bool {
         matches!(self, Self::Create { .. } | Self::Destroy { .. })
     }
 }

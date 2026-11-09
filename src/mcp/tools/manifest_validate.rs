@@ -9,6 +9,7 @@ use mcp_host::registry::router::McpToolRouter;
 use serde_json::{Value, json};
 
 use super::super::McpState;
+use super::json_output;
 use super::manifest_inspect::ManifestPathParams;
 
 /// The three things that can go wrong, in the order they are attempted.
@@ -33,10 +34,7 @@ impl McpState {
         let path = self.manifest_path(params.0.path.as_deref());
         let outcome = validate_stages(&path);
 
-        let text = serde_json::to_string_pretty(&outcome)
-            .map_err(|e| ToolError::Execution(format!("Failed to serialize result: {e}")))?;
-
-        Ok(ToolOutput::text(text))
+        json_output(&outcome)
     }
 }
 

@@ -3,11 +3,29 @@
 //! Run a command, capture both pipes, kill it if it outlives its timeout.
 //! Shared by hooks and health checks.
 
+// FFI module: pre_exec hooks and process-group signals.
+#![allow(unsafe_code)]
+
 use std::io;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// Whether `pid` has exited, without reaping it, so its group id stays
+/// reserved for a following `kill(-pid)`. `block` waits instead of polling.
+pub fn wait_exited(pid: nix::unistd::Pid, block: bool) -> nix::Result<bool> {
+    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
+
+    let mut flags = WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT;
+    if !block {
+        flags |= WaitPidFlag::WNOHANG;
+    }
+    Ok(!matches!(
+        waitid(Id::Pid(pid), flags)?,
+        WaitStatus::StillAlive
+    ))
+}
 
 /// How often the supervisor polls a running child.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -39,6 +57,7 @@ pub enum Outcome {
 ///
 /// `Err` is spawn/wait failure. A non-zero exit is `Ok(Exited)`.
 pub fn run_supervised(cmd: &mut Command, timeout: Duration) -> io::Result<Outcome> {
+    // SAFETY: the pre_exec hook makes only async-signal-safe syscalls.
     let mut child = unsafe {
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -53,30 +72,21 @@ pub fn run_supervised(cmd: &mut Command, timeout: Duration) -> io::Result<Outcom
     };
 
     // Drain the pipes in threads: >64KB of output would block the child before try_wait().
-    let mut stdout_thread = child.stdout.take().map(|mut s| {
-        thread::spawn(move || {
-            let mut buf = String::new();
-            let _ = io::Read::read_to_string(&mut s, &mut buf);
-            buf
-        })
-    });
-    let mut stderr_thread = child.stderr.take().map(|mut s| {
-        thread::spawn(move || {
-            let mut buf = String::new();
-            let _ = io::Read::read_to_string(&mut s, &mut buf);
-            buf
-        })
-    });
+    let mut stdout_thread = child.stdout.take().map(spawn_reader);
+    let mut stderr_thread = child.stderr.take().map(spawn_reader);
 
     let pid = child.id() as libc::pid_t;
     let start = Instant::now();
 
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // Kill the group so grandchildren drop the pipe fds and readers finish.
+        match wait_exited(nix::unistd::Pid::from_raw(pid), false) {
+            Ok(true) => {
+                // Unreaped child still pins the group id.
+                // SAFETY: plain integer args.
                 unsafe { libc::kill(-pid, libc::SIGKILL) };
+                let status = child.wait();
                 let (stdout, stderr) = join_pipes(&mut stdout_thread, &mut stderr_thread);
+                let status = status?;
                 return Ok(Outcome::Exited(Output {
                     success: status.success(),
                     exit_code: status.code(),
@@ -84,7 +94,7 @@ pub fn run_supervised(cmd: &mut Command, timeout: Duration) -> io::Result<Outcom
                     stderr,
                 }));
             }
-            Ok(None) => {
+            Ok(false) => {
                 if start.elapsed() > timeout {
                     reap_group(&mut child, pid);
                     join_pipes(&mut stdout_thread, &mut stderr_thread);
@@ -95,41 +105,52 @@ pub fn run_supervised(cmd: &mut Command, timeout: Duration) -> io::Result<Outcom
             Err(e) => {
                 reap_group(&mut child, pid);
                 join_pipes(&mut stdout_thread, &mut stderr_thread);
-                return Err(e);
+                return Err(io::Error::from(e));
             }
         }
     }
 }
 
-/// Mark every inherited fd above stderr close-on-exec. Runs pre-exec, so
-/// syscalls only.
+/// Mark every fd above stderr close-on-exec; pre-exec safe.
 ///
-/// Not `closefrom(3)`: that also closes std's CLOEXEC exec-failure pipe, which
-/// turns a missing binary into a SIGABRT child instead of `NotFound`.
-fn harden_fds() {
+/// Not `closefrom(3)`: that closes std's exec-failure pipe, turning `NotFound` into SIGABRT.
+pub fn harden_fds() {
+    // SAFETY: plain integer args.
     let marked = unsafe {
         libc::close_range(
             3,
             libc::c_uint::MAX,
-            libc::CLOSE_RANGE_CLOEXEC as libc::c_int,
+            libc::CLOSE_RANGE_CLOEXEC.cast_signed(),
         )
     };
     if marked == -1 {
         // close_range(2) is FreeBSD 13+; blunt fallback beats inheritable fds.
+        // SAFETY: integer arg; we exec right after.
         unsafe { libc::closefrom(3) };
     }
 }
 
 /// Kill the child's process group, falling back to the child alone, then reap it.
 fn reap_group(child: &mut std::process::Child, pid: libc::pid_t) {
+    // SAFETY: plain integer args.
     let killed_group = unsafe { libc::kill(-pid, libc::SIGKILL) };
     if killed_group == -1 {
+        // SAFETY: plain integer args.
         unsafe { libc::kill(pid, libc::SIGKILL) };
     }
+    // Status is moot after SIGKILL.
     let _ = child.wait();
 }
 
-/// Join both drain threads, yielding whatever they managed to read.
+fn spawn_reader(mut pipe: impl io::Read + Send + 'static) -> thread::JoinHandle<String> {
+    thread::spawn(move || {
+        let mut buf = String::new();
+        // Partial output beats none.
+        let _ = pipe.read_to_string(&mut buf);
+        buf
+    })
+}
+
 fn join_pipes(
     stdout_thread: &mut Option<thread::JoinHandle<String>>,
     stderr_thread: &mut Option<thread::JoinHandle<String>>,

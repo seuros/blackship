@@ -1,31 +1,66 @@
 //! Armada (docker-compose style) orchestration commands
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::cli::ArmadaAction;
-use crate::commands::build::copy_release_to;
 use crate::error::Result;
+use crate::image::copy_release_to;
 use crate::{blueprint, bridge, error, manifest, provision};
 
 pub fn handle(
     _config_path: &Path,
     verbose: bool,
-    files: Vec<std::path::PathBuf>,
+    files: &[PathBuf],
     action: ArmadaAction,
 ) -> Result<()> {
     match action {
-        ArmadaAction::Init { file, force } => {
-            use std::fs;
+        ArmadaAction::Init { file, force } => init(&file, force),
 
-            if file.exists() && !force {
-                eprintln!(
-                    "Error: {} already exists. Use -y/--force to overwrite.",
-                    file.display()
-                );
-                std::process::exit(1);
+        ArmadaAction::Up {
+            detach,
+            jails,
+            build,
+            no_build,
+            dry_run,
+        } => {
+            let mode = if no_build {
+                None
+            } else if build {
+                Some(BuildMode::Force)
+            } else {
+                Some(BuildMode::IfMissing)
+            };
+            up(files, verbose, &jails, mode, dry_run, detach)
+        }
+
+        ArmadaAction::Down { jails, dry_run } => down(files, verbose, &jails, dry_run),
+
+        ArmadaAction::Build { jails, dry_run } => {
+            let config = manifest::load_merged(files)?;
+
+            let jails_to_build = select_jails(&config, &jails)?;
+
+            if dry_run {
+                println!("=== DRY RUN - No changes will be made ===\n");
             }
 
-            let content = r#"# Blackship Armada Configuration
+            build_jails(&config, &jails_to_build, BuildMode::Force, dry_run, verbose)?;
+            Ok(())
+        }
+
+        ArmadaAction::Ps { json } => {
+            let config = manifest::load_merged(files)?;
+            let bridge = bridge::Bridge::open(config, verbose)?;
+            bridge.ps(json);
+            Ok(())
+        }
+
+        ArmadaAction::Config { show } => config(files, show),
+    }
+}
+
+/// Starter manifest written by `armada init`
+const ARMADA_TEMPLATE: &str = r#"# Blackship Armada Configuration
 # https://github.com/seuros/blackship
 
 [config]
@@ -55,151 +90,139 @@ pub fn handle(
 # path = "/jails/db"
 "#;
 
-            fs::write(&file, content)?;
-            println!("Created {}", file.display());
-            println!("\nNext steps:");
-            println!("  1. Edit {} to define your jails", file.display());
-            println!("  2. Run 'blackship armada up' to start all jails");
-            Ok(())
-        }
+/// `armada init`: write a starter blackship.toml
+fn init(file: &Path, force: bool) -> Result<()> {
+    if file.exists() && !force {
+        eprintln!(
+            "Error: {} already exists. Use -y/--force to overwrite.",
+            file.display()
+        );
+        std::process::exit(1);
+    }
 
-        ArmadaAction::Up {
-            detach,
-            jails,
-            build,
-            no_build,
-            dry_run,
-        } => {
-            let config = manifest::load_merged(&files)?;
+    std::fs::write(file, ARMADA_TEMPLATE)?;
+    println!("Created {}", file.display());
+    println!("\nNext steps:");
+    println!("  1. Edit {} to define your jails", file.display());
+    println!("  2. Run 'blackship armada up' to start all jails");
+    Ok(())
+}
 
-            let selected = select_jails(&config, &jails)?;
-            if no_build {
-                for jail_def in &selected {
-                    if jail_def.build.is_some() && !jail_rootfs(&config, &jail_def.name).exists() {
-                        return Err(error::Error::User(format!(
-                            "Jail '{}' is not built and --no-build was given. Run 'blackship armada build {}' first.",
-                            jail_def.name, jail_def.name
-                        )));
-                    }
-                }
-            } else {
-                let mode = if build {
-                    BuildMode::Force
-                } else {
-                    BuildMode::IfMissing
-                };
-                build_jails(&config, &selected, mode, dry_run, verbose)?;
+/// `armada up`: build what `mode` asks for (`None` = --no-build), then start
+fn up(
+    files: &[PathBuf],
+    verbose: bool,
+    jails: &[String],
+    mode: Option<BuildMode>,
+    dry_run: bool,
+    detach: bool,
+) -> Result<()> {
+    let config = manifest::load_merged(files)?;
+
+    let selected = select_jails(&config, jails)?;
+    if let Some(mode) = mode {
+        build_jails(&config, &selected, mode, dry_run, verbose)?;
+    } else {
+        for jail_def in &selected {
+            if jail_def.build.is_some() && !jail_rootfs(&config, &jail_def.name).exists() {
+                return Err(error::Error::User(format!(
+                    "Jail '{}' is not built and --no-build was given. Run 'blackship armada build {}' first.",
+                    jail_def.name, jail_def.name
+                )));
             }
-
-            let mut bridge = bridge::Bridge::open(config, verbose)?;
-
-            if jails.is_empty() {
-                if dry_run {
-                    bridge.up_dry_run(None)?;
-                } else {
-                    bridge.up(None)?;
-                }
-            } else {
-                for jail in &jails {
-                    if dry_run {
-                        bridge.up_dry_run(Some(jail))?;
-                    } else {
-                        bridge.up(Some(jail))?;
-                    }
-                }
-            }
-
-            if detach {
-                println!("Jails started in background.");
-                println!("Use 'blackship supervise' for warden mode with auto-restart.");
-            }
-            Ok(())
-        }
-
-        ArmadaAction::Down { jails, dry_run } => {
-            let config = manifest::load_merged(&files)?;
-            let mut bridge = bridge::Bridge::open(config, verbose)?;
-
-            if jails.is_empty() {
-                if dry_run {
-                    bridge.down_dry_run(None)?;
-                } else {
-                    bridge.down(None)?;
-                }
-            } else {
-                for jail in &jails {
-                    if dry_run {
-                        bridge.down_dry_run(Some(jail))?;
-                    } else {
-                        bridge.down(Some(jail))?;
-                    }
-                }
-            }
-            Ok(())
-        }
-
-        ArmadaAction::Build { jails, dry_run } => {
-            let config = manifest::load_merged(&files)?;
-
-            let jails_to_build = select_jails(&config, &jails)?;
-
-            if dry_run {
-                println!("=== DRY RUN - No changes will be made ===\n");
-            }
-
-            build_jails(&config, &jails_to_build, BuildMode::Force, dry_run, verbose)?;
-            Ok(())
-        }
-
-        ArmadaAction::Ps { json } => {
-            let config = manifest::load_merged(&files)?;
-            let bridge = bridge::Bridge::open(config, verbose)?;
-            bridge.ps(json)?;
-            Ok(())
-        }
-
-        ArmadaAction::Config { show } => {
-            let config = manifest::load_merged(&files)?;
-
-            if show {
-                println!("# Merged configuration from: {files:?}\n");
-                println!("[config]");
-                println!("data_dir = \"{}\"", config.config.data_dir.display());
-                if config.config.zfs_enabled {
-                    println!("zfs_enabled = true");
-                    if let Some(pool) = &config.config.zpool {
-                        println!("zpool = \"{pool}\"");
-                    }
-                }
-                println!();
-                for jail in &config.jails {
-                    println!("[[jails]]");
-                    println!("name = \"{}\"", jail.name);
-                    if let Some(path) = &jail.path {
-                        println!("path = \"{}\"", path.display());
-                    }
-                    if let Some(release) = &jail.release {
-                        println!("release = \"{release}\"");
-                    }
-                    if let Some(build) = &jail.build {
-                        println!("build = \"{}\"", build.display());
-                    }
-                    if !jail.depends_on.is_empty() {
-                        println!("depends_on = {:?}", jail.depends_on);
-                    }
-                    println!();
-                }
-            } else {
-                println!("Configuration valid.");
-                println!("  Files: {files:?}");
-                println!("  Jails: {}", config.jails.len());
-            }
-            Ok(())
         }
     }
+
+    let mut bridge = bridge::Bridge::open(config, verbose)?;
+
+    if jails.is_empty() {
+        if dry_run {
+            bridge.up_dry_run(None)?;
+        } else {
+            bridge.up(None)?;
+        }
+    } else {
+        for jail in jails {
+            if dry_run {
+                bridge.up_dry_run(Some(jail))?;
+            } else {
+                bridge.up(Some(jail))?;
+            }
+        }
+    }
+
+    if detach {
+        println!("Jails started in background.");
+        println!("Use 'blackship supervise' for warden mode with auto-restart.");
+    }
+    Ok(())
+}
+
+/// `armada down`: stop the selected jails, or all of them
+fn down(files: &[PathBuf], verbose: bool, jails: &[String], dry_run: bool) -> Result<()> {
+    let config = manifest::load_merged(files)?;
+    let mut bridge = bridge::Bridge::open(config, verbose)?;
+
+    if jails.is_empty() {
+        if dry_run {
+            bridge.down_dry_run(None)?;
+        } else {
+            bridge.down(None)?;
+        }
+    } else {
+        for jail in jails {
+            if dry_run {
+                bridge.down_dry_run(Some(jail))?;
+            } else {
+                bridge.down(Some(jail))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `armada config`: validate the merged config, optionally print it
+fn config(files: &[PathBuf], show: bool) -> Result<()> {
+    let config = manifest::load_merged(files)?;
+
+    if show {
+        println!("# Merged configuration from: {files:?}\n");
+        println!("[config]");
+        println!("data_dir = \"{}\"", config.config.data_dir.display());
+        if config.config.zfs_enabled {
+            println!("zfs_enabled = true");
+            if let Some(pool) = &config.config.zpool {
+                println!("zpool = \"{pool}\"");
+            }
+        }
+        println!();
+        for jail in &config.jails {
+            println!("[[jails]]");
+            println!("name = \"{}\"", jail.name);
+            if let Some(path) = &jail.path {
+                println!("path = \"{}\"", path.display());
+            }
+            if let Some(release) = &jail.release {
+                println!("release = \"{release}\"");
+            }
+            if let Some(build) = &jail.build {
+                println!("build = \"{}\"", build.display());
+            }
+            if !jail.depends_on.is_empty() {
+                println!("depends_on = {:?}", jail.depends_on);
+            }
+            println!();
+        }
+    } else {
+        println!("Configuration valid.");
+        println!("  Files: {files:?}");
+        println!("  Jails: {}", config.jails.len());
+    }
+    Ok(())
 }
 
 /// Whether a build should replace an existing rootfs or only fill a missing one
+#[derive(Clone, Copy)]
 enum BuildMode {
     Force,
     IfMissing,
@@ -334,13 +357,14 @@ fn build_jail_from_file(
         }
     }
 
-    let ctx_dir = context_dir
-        .map(std::path::PathBuf::as_path)
-        .unwrap_or_else(|| {
+    let ctx_dir = context_dir.map_or_else(
+        || {
             jailfile_path
                 .parent()
                 .unwrap_or_else(|| std::path::Path::new("."))
-        });
+        },
+        std::path::PathBuf::as_path,
+    );
 
     let ctx = BuildContext::new(ctx_dir, &target_path, &full_name).verbose(verbose);
     let mut executor = TemplateExecutor::new(ctx).dry_run(dry_run);

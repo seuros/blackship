@@ -78,74 +78,19 @@ pub fn handle(
 
         for checker in &mut checkers {
             let status = checker.run_checks()?;
-            let check_results = checker.get_check_results();
-
             if json {
-                let status_str = match status {
-                    HealthStatus::Healthy => "healthy",
-                    HealthStatus::Unhealthy => "unhealthy",
-                    HealthStatus::Failing => "failing",
-                    HealthStatus::Starting => "starting",
-                    HealthStatus::Suspended => "suspended",
-                    HealthStatus::Unknown => "unknown",
-                };
-
-                let checks: Vec<_> = check_results
-                    .iter()
-                    .map(|(check, result, failures)| {
-                        serde_json::json!({
-                            "name": check.name,
-                            "passed": result.as_ref().map(|r| r.passed),
-                            "output": result.as_ref().map(|r| r.output.clone()),
-                            "duration_ms": result.as_ref().map(|r| r.duration.as_millis()),
-                            "age_ms": result.as_ref().map(|r| r.age().as_millis()),
-                            "failures": failures
-                        })
-                    })
-                    .collect();
-
-                json_results.push(serde_json::json!({
-                    "jail": checker.jail_name(),
-                    "status": status_str,
-                    "checks": checks
-                }));
+                json_results.push(checker_json(checker, status));
             } else {
-                let mut checks_summary = String::new();
-                for (_check, result, failures) in &check_results {
-                    if !checks_summary.is_empty() {
-                        checks_summary.push_str(", ");
-                    }
-                    match result {
-                        Some(r) => {
-                            checks_summary.push_str(&r.summary());
-                            if *failures > 0 {
-                                let _ = write!(checks_summary, " ({failures}x)");
-                            }
-                        }
-                        None => checks_summary.push('?'),
-                    }
-                }
-
-                let status_str = match status {
-                    HealthStatus::Healthy => "\x1b[32mhealthy\x1b[0m",
-                    HealthStatus::Unhealthy => "\x1b[33munhealthy\x1b[0m",
-                    HealthStatus::Failing => "\x1b[31mfailing\x1b[0m",
-                    HealthStatus::Starting => "\x1b[34mstarting\x1b[0m",
-                    HealthStatus::Suspended => "\x1b[35msuspended\x1b[0m",
-                    HealthStatus::Unknown => "unknown",
-                };
-
-                println!(
-                    "{:<20} {:<12} {:<20}",
-                    checker.jail_name(),
-                    status_str,
-                    checks_summary
-                );
+                print_checker_row(checker, status);
             }
         }
 
         if json {
-            println!("{}", serde_json::to_string_pretty(&json_results).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json_results)
+                    .expect("serde_json::Value always serializes")
+            );
         }
 
         if !watch {
@@ -159,4 +104,71 @@ pub fn handle(
     }
 
     Ok(())
+}
+
+/// One jail's health as a JSON object for `health --json`.
+fn checker_json(checker: &HealthChecker, status: HealthStatus) -> serde_json::Value {
+    let checks: Vec<_> = checker
+        .get_check_results()
+        .iter()
+        .map(|(check, result, failures)| {
+            serde_json::json!({
+                "name": check.name,
+                "passed": result.as_ref().map(|r| r.passed),
+                "output": result.as_ref().map(|r| r.output.clone()),
+                "duration_ms": result.as_ref().map(|r| r.duration.as_millis()),
+                "age_ms": result.as_ref().map(|r| r.age().as_millis()),
+                "failures": failures
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "jail": checker.jail_name(),
+        "status": status,
+        "checks": checks
+    })
+}
+
+/// One jail's row in the human health table.
+fn print_checker_row(checker: &HealthChecker, status: HealthStatus) {
+    let mut checks_summary = String::new();
+    for (_check, result, failures) in &checker.get_check_results() {
+        if !checks_summary.is_empty() {
+            checks_summary.push_str(", ");
+        }
+        match result {
+            Some(r) => {
+                checks_summary.push_str(&r.summary());
+                if *failures > 0 {
+                    let _ = write!(checks_summary, " ({failures}x)"); // fmt::Write into a String is infallible
+                }
+            }
+            None => checks_summary.push('?'),
+        }
+    }
+
+    let status_str = match ansi_color(status) {
+        Some(color) => format!("\x1b[{color}m{status}\x1b[0m"),
+        None => status.to_string(),
+    };
+
+    println!(
+        "{:<20} {:<12} {:<20}",
+        checker.jail_name(),
+        status_str,
+        checks_summary
+    );
+}
+
+/// ANSI color for a status in the human table; `Unknown` stays plain.
+const fn ansi_color(status: HealthStatus) -> Option<u8> {
+    match status {
+        HealthStatus::Healthy => Some(32),
+        HealthStatus::Unhealthy => Some(33),
+        HealthStatus::Failing => Some(31),
+        HealthStatus::Starting => Some(34),
+        HealthStatus::Suspended => Some(35),
+        HealthStatus::Unknown => None,
+    }
 }

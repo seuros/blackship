@@ -4,6 +4,8 @@
 //! [`crate::cli::Cli::command`], so a subcommand added to `src/cli.rs` appears
 //! in the manual the day it is added.
 
+use std::fmt::Write as _;
+
 use mcp_host::prelude::*;
 use mcp_host::registry::router::McpResourceRouter;
 use usage_rs::Command;
@@ -51,7 +53,7 @@ fn append_command(page: &mut String, cmd: &Command<'_>, ancestors: &[&str]) {
     if !page.is_empty() {
         page.push_str(RULE);
     }
-    page.push_str(&format!("# {}\n\n", path.join(" ")));
+    let _ = writeln!(page, "# {}\n", path.join(" ")); // fmt::Write into a String is infallible
 
     match crate::cli::Cli::render_help_styled(cmd, true, Style::PLAIN) {
         Some(help) => page.push_str(help.trim_end()),
@@ -64,8 +66,10 @@ fn append_command(page: &mut String, cmd: &Command<'_>, ancestors: &[&str]) {
     }
 }
 
-pub fn mount(router: McpResourceRouter<McpState>) -> McpResourceRouter<McpState> {
-    router.with_resource(McpState::man_resource_info(), McpState::man_handler, None)
+pub fn mount(
+    router: McpResourceRouter<McpState>,
+) -> Result<McpResourceRouter<McpState>, AppsError> {
+    Ok(router.with_resource(McpState::man_resource_info()?, McpState::man_handler, None))
 }
 
 #[cfg(test)]

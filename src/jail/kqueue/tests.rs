@@ -20,20 +20,20 @@ fn test_poll_no_events() {
 #[test]
 fn test_register_nonexistent_jail() {
     let source = JailEventSource::new().unwrap();
-    assert!(source.register_jail(999999).is_err());
+    assert!(source.register_jail(999_999).is_err());
 }
 
 #[test]
 fn test_register_nonexistent_descriptor() {
     let source = JailEventSource::new().unwrap();
-    assert!(source.register_jaildesc(999999).is_err());
+    assert!(source.register_jaildesc(999_999).is_err());
 }
 
 #[test]
 fn test_unregister_unknown_ident_is_ok() {
     let source = JailEventSource::new().unwrap();
-    assert!(source.unregister(JailIdent::Jid(999999)).is_ok());
-    assert!(source.unregister(JailIdent::Descriptor(999999)).is_ok());
+    assert!(source.unregister(JailIdent::Jid(999_999)).is_ok());
+    assert!(source.unregister(JailIdent::Descriptor(999_999)).is_ok());
 }
 
 #[test]

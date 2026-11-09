@@ -1,4 +1,4 @@
-//! Multi-phase QoS: shift a running jail between its startup and steady
+//! Multi-phase `QoS`: shift a running jail between its startup and steady
 //! resource profiles without disturbing custom rctl rules.
 
 use crate::audit::{AuditEvent, AuditRecord};
@@ -9,7 +9,7 @@ use crate::scope::QosPhase;
 
 use super::Bridge;
 
-/// Outcome of a requested QoS shift.
+/// Outcome of a requested `QoS` shift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShiftOutcome {
     Shifted,
@@ -18,14 +18,13 @@ pub enum ShiftOutcome {
 }
 
 impl Bridge {
-    /// The QoS phase currently recorded for a jail, if any.
+    /// The `QoS` phase currently recorded for a jail, if any.
     pub fn qos_phase(&self, name: &str) -> Result<QosPhase> {
         let (_, full_name) = self.resolve_jail_names(name)?;
         Ok(self
             .scope_store
             .get(&full_name)?
-            .map(|scope| scope.qos_phase)
-            .unwrap_or(QosPhase::None))
+            .map_or(QosPhase::None, |scope| scope.qos_phase))
     }
 
     /// Shift a jail to `target`, applying the difference between the two
@@ -89,7 +88,7 @@ impl Bridge {
         Ok(ShiftOutcome::Shifted)
     }
 
-    /// The effective resource profile for a jail given its recorded QoS phase.
+    /// The effective resource profile for a jail given its recorded `QoS` phase.
     /// Used by reconcilers that must not silently revert a completed shift.
     pub(super) fn effective_resources<'a>(
         &self,

@@ -1,19 +1,17 @@
 use super::*;
 
-use std::path::PathBuf;
 
-/// A unique scratch directory; the test writes manifests into it.
-fn scratch(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "blackship-manifest-validate-{}-{tag}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).expect("create scratch dir");
-    dir
+/// A scratch directory, removed when the guard drops.
+fn scratch(tag: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("blackship-manifest-validate-{tag}-"))
+        .tempdir()
+        .expect("scratch dir")
 }
 
 fn validate_content(tag: &str, content: &str) -> Value {
-    let path = scratch(tag).join("blackship.toml");
+    let tmp = scratch(tag);
+    let path = tmp.path().to_path_buf().join("blackship.toml");
     std::fs::write(&path, content).expect("write manifest");
     let result = validate_stages(&path);
     let _ = std::fs::remove_file(&path);
@@ -22,7 +20,8 @@ fn validate_content(tag: &str, content: &str) -> Value {
 
 #[test]
 fn unreadable_path_fails_at_the_read_stage() {
-    let path = scratch("missing").join("absent.toml");
+    let tmp = scratch("missing");
+    let path = tmp.path().to_path_buf().join("absent.toml");
     let _ = std::fs::remove_file(&path);
 
     let result = validate_stages(&path);

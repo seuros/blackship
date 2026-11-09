@@ -6,6 +6,8 @@
 //! [`crate::bridge::lifecycle::is_reserved_param`], the same predicate the jail
 //! builder uses, so this page cannot drift from enforcement.
 
+use std::fmt::Write as _;
+
 use mcp_host::prelude::*;
 use mcp_host::registry::router::McpResourceRouter;
 
@@ -115,7 +117,7 @@ fn render() -> String {
         } else {
             " (NOT currently enforced — report this)"
         };
-        page.push_str(&format!("- `{name}` — {why}{enforced}\n"));
+        let _ = writeln!(page, "- `{name}` — {why}{enforced}"); // fmt::Write into a String is infallible
     }
 
     page.push_str(
@@ -135,10 +137,12 @@ fn render() -> String {
     page
 }
 
-pub fn mount(router: McpResourceRouter<McpState>) -> McpResourceRouter<McpState> {
-    router.with_resource(
-        McpState::reference_jail_params_resource_info(),
+pub fn mount(
+    router: McpResourceRouter<McpState>,
+) -> Result<McpResourceRouter<McpState>, AppsError> {
+    Ok(router.with_resource(
+        McpState::reference_jail_params_resource_info()?,
         McpState::reference_jail_params_handler,
         None,
-    )
+    ))
 }

@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 /// Which parser to use for a Jailfile
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum JailfileFormat {
+pub enum JailfileFormat {
     /// Sniff the content and pick a parser
     #[default]
     Auto,
@@ -33,7 +33,7 @@ pub(crate) enum JailfileFormat {
 
 /// A single parse problem, with 1-based position
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct Diagnostic {
+pub struct Diagnostic {
     /// 1-based line number
     pub line: usize,
     /// 1-based column of the first non-whitespace character
@@ -48,7 +48,7 @@ pub fn parse_jailfile(content: &str) -> Result<Jailfile> {
 }
 
 /// Parse a Jailfile with an explicit format, bypassing the sniffer
-pub(crate) fn parse_jailfile_as(content: &str, format: JailfileFormat) -> Result<Jailfile> {
+pub fn parse_jailfile_as(content: &str, format: JailfileFormat) -> Result<Jailfile> {
     match resolve_format(content, format) {
         JailfileFormat::Toml => parse_toml_format(content),
         _ => parse_line_format(content),
@@ -60,7 +60,7 @@ pub(crate) fn parse_jailfile_as(content: &str, format: JailfileFormat) -> Result
 /// The sniff is textual, so a line-format Jailfile whose body merely mentions
 /// `[build]` or `[metadata]` is misrouted to the TOML parser. Callers that
 /// report which parser ran need this to be visible.
-pub(crate) fn resolve_format(content: &str, format: JailfileFormat) -> JailfileFormat {
+pub fn resolve_format(content: &str, format: JailfileFormat) -> JailfileFormat {
     match format {
         JailfileFormat::Auto => {
             let trimmed = content.trim();
@@ -88,7 +88,7 @@ pub(crate) fn resolve_format(content: &str, format: JailfileFormat) -> JailfileF
         reason = "the MCP jailfile_validate tool is this function's only caller"
     )
 )]
-pub(crate) fn diagnose(content: &str, format: JailfileFormat) -> Vec<Diagnostic> {
+pub fn diagnose(content: &str, format: JailfileFormat) -> Vec<Diagnostic> {
     match resolve_format(content, format) {
         JailfileFormat::Toml => diagnose_toml(content),
         _ => diagnose_line_format(content),
@@ -449,7 +449,7 @@ struct TomlStop {
 }
 
 /// Parse TOML format Jailfile
-pub(crate) fn parse_toml_format(content: &str) -> Result<Jailfile> {
+pub fn parse_toml_format(content: &str) -> Result<Jailfile> {
     let parsed: TomlJailfile = toml::from_str(content)?;
 
     let mut jailfile = Jailfile::new();

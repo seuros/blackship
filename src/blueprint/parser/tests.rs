@@ -1,15 +1,16 @@
 use super::*;
+use std::assert_matches;
 
 #[test]
 fn test_parse_line_from() {
     let result = parse_line("FROM 15.1-RELEASE").unwrap();
-    assert!(matches!(result, Some(Instruction::From(r)) if r == "15.1-RELEASE"));
+    assert_matches!(result, Some(Instruction::From(r)) if r == "15.1-RELEASE");
 }
 
 #[test]
 fn test_parse_line_run() {
     let result = parse_line("RUN pkg install -y nginx").unwrap();
-    assert!(matches!(result, Some(Instruction::Run(c)) if c == "pkg install -y nginx"));
+    assert_matches!(result, Some(Instruction::Run(c)) if c == "pkg install -y nginx");
 }
 
 #[test]
@@ -47,14 +48,14 @@ fn test_parse_line_expose() {
 
 #[test]
 fn test_parse_full_jailfile() {
-    let content = r#"
+    let content = r"
 FROM 15.1-RELEASE
 ARG NGINX_VERSION=1.25
 RUN pkg install -y nginx
 COPY nginx.conf /usr/local/etc/nginx/
 EXPOSE 80/tcp
 CMD /usr/sbin/service nginx start
-"#;
+";
 
     let jf = parse_line_format(content).unwrap();
     assert_eq!(jf.from, Some("15.1-RELEASE".to_string()));

@@ -8,10 +8,10 @@ use crate::{bridge, error, manifest};
 pub fn handle_expose(
     config_path: &Path,
     verbose: bool,
-    jail: String,
+    jail: &str,
     port: u16,
     internal: Option<u16>,
-    proto: String,
+    proto: &str,
     bind_ip: Option<String>,
 ) -> Result<()> {
     use std::net::IpAddr;
@@ -29,14 +29,12 @@ pub fn handle_expose(
         None
     };
 
-    let forward = bridge.expose_port(&jail, port, internal, &proto, bind_addr)?;
+    let forward = bridge.expose_port(jail, port, internal, proto, bind_addr)?;
 
     println!("Port forwarding configured:");
     println!(
         "  {}:{}/{} -> {}:{}",
-        bind_addr
-            .map(|ip| ip.to_string())
-            .unwrap_or_else(|| "*".to_string()),
+        bind_addr.map_or_else(|| "*".to_string(), |ip| ip.to_string()),
         port,
         proto,
         forward.jail_ip,
@@ -50,7 +48,7 @@ pub fn handle_expose(
     Ok(())
 }
 
-pub fn handle_ports(config_path: &Path, jail: Option<String>) -> Result<()> {
+pub fn handle_ports(config_path: &Path, jail: Option<&str>) -> Result<()> {
     let config = manifest::load(config_path)?;
     let bridge = bridge::Bridge::new(config)?;
 
@@ -61,7 +59,7 @@ pub fn handle_ports(config_path: &Path, jail: Option<String>) -> Result<()> {
     );
     println!("{}", "-".repeat(70));
 
-    let forwards = if let Some(jail_name) = &jail {
+    let forwards = if let Some(jail_name) = jail {
         bridge.get_jail_port_forwards(jail_name)
     } else {
         bridge.list_port_forwards().iter().collect()
@@ -73,8 +71,7 @@ pub fn handle_ports(config_path: &Path, jail: Option<String>) -> Result<()> {
         for forward in forwards {
             let bind_str = forward
                 .bind_ip
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "*".to_string());
+                .map_or_else(|| "*".to_string(), |ip| ip.to_string());
             println!(
                 "{:<20} {:<12} {:<18} {:<18}",
                 forward.jail_name,
@@ -91,11 +88,11 @@ pub fn handle_ports(config_path: &Path, jail: Option<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn handle_unexpose(config_path: &Path, verbose: bool, jail: String) -> Result<()> {
+pub fn handle_unexpose(config_path: &Path, verbose: bool, jail: &str) -> Result<()> {
     let config = manifest::load(config_path)?;
     let (_service_name, full_name) = config
-        .resolve_jail_names(&jail)
-        .ok_or_else(|| error::Error::JailNotFound(jail.clone()))?;
+        .resolve_jail_names(jail)
+        .ok_or_else(|| error::Error::JailNotFound(jail.to_string()))?;
     let mut bridge = bridge::Bridge::open(config, verbose)?;
     bridge.remove_port_forwards(&full_name)?;
     println!("Removed all port forwards for jail '{full_name}'");

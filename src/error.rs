@@ -4,9 +4,20 @@ use std::io;
 use std::path::PathBuf;
 use thiserror::Error;
 
-/// Main error type for Blackship operations
+/// Everything a Blackship operation can fail with. New variants may be
+/// added in minor releases.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
+    /// A privileged library call ran without root; the library never escalates.
+    #[error("{operation} requires root privileges (effective uid is {euid})")]
+    NeedsRoot {
+        /// What was attempted, e.g. "creating a container"
+        operation: &'static str,
+        /// The effective uid the call ran with
+        euid: u32,
+    },
+
     // IO errors
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
@@ -174,6 +185,18 @@ pub enum Error {
 
     #[error("{0}")]
     User(String),
+}
+
+impl Error {
+    /// Fail with [`Error::NeedsRoot`] unless the process runs as root.
+    pub(crate) fn require_root(operation: &'static str) -> Result<()> {
+        let euid = nix::unistd::geteuid().as_raw();
+        if euid == 0 {
+            Ok(())
+        } else {
+            Err(Self::NeedsRoot { operation, euid })
+        }
+    }
 }
 
 /// Result type alias for Blackship operations

@@ -1,13 +1,10 @@
 use super::*;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-fn temp_dir() -> PathBuf {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("blackship-bulkhead-{unique}"))
+fn temp_dir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("blackship-bulkhead-")
+        .tempdir()
+        .expect("scratch dir")
 }
 
 #[test]
@@ -113,7 +110,8 @@ fn test_remove_jail_forwards_without_match_does_not_touch_pf() {
 
 #[test]
 fn test_bulkhead_state_round_trip() {
-    let root = temp_dir();
+    let tmp = temp_dir();
+    let root = tmp.path().to_path_buf();
     std::fs::create_dir_all(&root).unwrap();
 
     let state_path = root.join("port-forwards.toml");
@@ -136,6 +134,4 @@ fn test_bulkhead_state_round_trip() {
         manager.list_forwards()[0].jail_ip,
         "10.0.1.10".parse::<IpAddr>().unwrap()
     );
-
-    std::fs::remove_dir_all(root).unwrap();
 }

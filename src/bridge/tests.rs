@@ -89,7 +89,7 @@ fn test_cascade_strict_stops_dependents() {
     let bridge = Bridge::new(cascade_config("strict")).unwrap();
     let plan = bridge.down_plan(Some("database")).unwrap();
     assert_eq!(plan.stop, vec!["frontend", "backend", "database"]);
-    assert!(plan.isolate.is_empty());
+    assert_eq!(plan.isolate, Vec::<String>::new());
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn test_cascade_detach_stops_only_the_target() {
     let bridge = Bridge::new(cascade_config("detach")).unwrap();
     let plan = bridge.down_plan(Some("database")).unwrap();
     assert_eq!(plan.stop, vec!["database"]);
-    assert!(plan.isolate.is_empty());
+    assert_eq!(plan.isolate, Vec::<String>::new());
 }
 
 #[test]
@@ -135,6 +135,6 @@ depends_on = ["database", "cache"]
 
     let bridge = Bridge::new(config).unwrap();
     let plan = bridge.down_plan(Some("all")).unwrap();
-    assert!(plan.isolate.is_empty());
+    assert_eq!(plan.isolate, Vec::<String>::new());
     assert!(plan.stop.contains(&"backend".to_string()));
 }

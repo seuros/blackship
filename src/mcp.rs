@@ -1,8 +1,5 @@
 //! MCP stdio server for authoring and validating jail configuration.
-//!
-//! Stdout belongs to the JSON-RPC frame stream, so nothing in this module or
-//! anything it reaches may print to it. Diagnostics go to a log file under the
-//! XDG state directory.
+//! Stdout is the JSON-RPC stream: never print; diagnostics go to `mcp.log`.
 
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
@@ -20,21 +17,19 @@ mod resources;
 mod tools;
 
 /// Shared state handed to tool, prompt, and resource handlers.
-pub(crate) struct McpState {
+pub struct McpState {
     config_path: PathBuf,
 }
 
 impl McpState {
     /// Combine the auto-mounted tool, prompt, and resource routers.
-    ///
-    /// Resource templates stay empty: every resource here has a fixed URI.
-    fn router() -> McpRouter<Self> {
-        McpRouter::new(
+    fn router() -> std::result::Result<McpRouter<Self>, AppsError> {
+        Ok(McpRouter::new(
             tools::router(),
             prompts::router(),
-            resources::router(),
+            resources::router()?,
             McpResourceTemplateRouter::new(),
-        )
+        ))
     }
 }
 
@@ -53,7 +48,7 @@ const INSTRUCTIONS: &str = "This server authors and validates blackship jail con
      retry a declined write.";
 
 /// Run the MCP server over stdio until the client closes the connection.
-pub(crate) async fn serve(config_path: &Path) -> Result<()> {
+pub async fn serve(config_path: &Path) -> Result<()> {
     init_logging();
 
     let state = Arc::new(McpState {
@@ -67,7 +62,11 @@ pub(crate) async fn serve(config_path: &Path) -> Result<()> {
         .with_resources(true, false)
         .build();
 
-    server.register_router(McpState::router(), state);
+    let router = McpState::router()
+        .map_err(|e| error::Error::User(format!("MCP resource registration failed: {e}")))?;
+    server
+        .register_router(router, state)
+        .map_err(|e| error::Error::User(format!("MCP route registration failed: {e}")))?;
 
     tracing::info!(
         tools = server.tool_registry().list().len(),
@@ -81,10 +80,7 @@ pub(crate) async fn serve(config_path: &Path) -> Result<()> {
         .map_err(|e| error::Error::User(format!("MCP server failed: {e}")))
 }
 
-/// Install a file-backed tracing subscriber, or none at all.
-///
-/// A missing or unwritable log directory is not fatal: the server runs without
-/// diagnostics rather than refusing to start.
+/// Install a file-backed tracing subscriber, or none if the log dir is unusable.
 fn init_logging() {
     let dir = crate::manifest::get_xdg_data_dir();
     if std::fs::create_dir_all(&dir).is_err() {
@@ -102,6 +98,7 @@ fn init_logging() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
+    // Fails only if a subscriber is already set.
     let _ = tracing_subscriber::fmt()
         .with_writer(file)
         .with_ansi(false)
