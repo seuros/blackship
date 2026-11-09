@@ -108,3 +108,20 @@ pub fn handle_releases(
 
     Ok(())
 }
+
+/// Return bootstrapped releases without writing terminal output.
+pub fn releases_data(config_path: &Path) -> Result<Vec<serde_json::Value>> {
+    let config = manifest::load_or_default(config_path)?;
+    let bs = provision::Provisioner::from_config(&config.config)?;
+    Ok(bs
+        .list_releases()?
+        .iter()
+        .map(|release| {
+            serde_json::json!({
+                "name": release.name,
+                "arch": release.arch.freebsd_name(),
+                "path": release.path.display().to_string()
+            })
+        })
+        .collect())
+}
