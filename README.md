@@ -168,7 +168,9 @@ blackship network create default --subnet 10.0.1.0/24 --backend netgraph --bridg
 Networks persist across reboots: `blackship setup` (run by the warden rc
 script at boot) recreates missing bridges and gateway interfaces. If PF is
 not running yet, `blackship setup --enable-pf` writes a minimal pf.conf with
-the blackship anchors, sets `pf_enable=YES`, and starts it.
+the blackship anchors, sets `pf_enable=YES`, and starts it. Jails reach
+beyond the host only through a NAT rule you add; see
+[Outbound traffic](#outbound-traffic).
 
 Named networks created this way can be referenced from `blackship.toml` with
 `[jails.network] networks = ["default"]`, and the same network can be used by
@@ -397,6 +399,7 @@ text or modifying the host. Live lifecycle operations remain text-only.
 
 ```toml
 [config]
+project = "orbital"                        # Jail name prefix (default: the config file's directory name)
 # All paths are optional - defaults to XDG directories
 data_dir = "~/.local/share/blackship"      # Base data directory (default)
 releases_dir = "~/.local/share/blackship/releases"  # FreeBSD releases (default)
@@ -410,6 +413,11 @@ monitor_ping_url = "https://hc-ping.com/…"  # Dead-man ping from the superviso
 
 With ZFS enabled the jails dataset is mounted at `data_dir/jails`, so jail
 roots live at the same paths whether or not they are datasets.
+
+Running jails are named `<project>-<name>`: jail `web` in project `orbital`
+runs as `orbital-web`, which is what `jls` and `ps` show. Commands take
+either form. Without `project`, the name comes from the directory holding
+`blackship.toml`, however you spell its path.
 
 ### Jail Definition
 
@@ -463,17 +471,26 @@ command = "pgrep nginx"
 target = "jail"
 
 [[jails.hooks]]
-phase = "post_start"                  # pre_create, post_create, pre_start, post_start,
-target = "jail"                       # pre_stop, post_stop, pre_eva, post_eva
-command = "/etc/rc.d/nginx start"
+phase = "pre_start"                   # pre_create, post_create, pre_start, post_start,
+target = "host"                       # pre_stop, post_stop, pre_eva, post_eva
+command = "/usr/local/bin/fetch-secrets"  # A program, not a shell line
+args = ["${jail_name}"]               # also ${jail_path}, ${jail_ip}, ${jid}
 on_failure = "abort"                  # abort or continue
 
 [[jails.hooks]]
 phase = "pre_stop"
 target = "jail"
-command = "/etc/rc.d/nginx stop"
+command = "/usr/sbin/service"
+args = ["nginx", "stop"]
 on_failure = "continue"
 ```
+
+A hook's `command` is executed directly, with `args` as its arguments; it is
+not passed through a shell, so `command = "service nginx stop"` looks for a
+program by that whole name. Wrap shell syntax yourself:
+`command = "/bin/sh"`, `args = ["-c", "..."]`. `post_start` hooks run after
+the jail is up, so `on_failure = "abort"` there only warns: the jail keeps
+running.
 
 ## Commands
 
@@ -508,7 +525,8 @@ skipped. `--dry-run` prints the diff without touching anything.
 |---------|-------------|
 | `blackship console <jail> [-u user]` | Open interactive shell |
 | `blackship exec <jail> [-u user] [-w dir] [-e K=V] [--clear-env] -- <cmd>` | Execute command in jail (`--clear-env` starts from an empty environment, keeping only `-e` values) |
-| `blackship run --name <n> --release <r> [--network <net>] [--dns <ip>] [-d] -- <cmd>` | Run ephemeral jail (auto-cleanup unless -d) |
+| `blackship run --name <n> --release <r> [--network <net>] [--dns <ip>] -- <cmd>` | Run a command in an ephemeral jail, removed when it exits |
+| `blackship run --name <n> --release <r> [--network <net>] [--dns <ip>] -d` | Start an ephemeral jail and leave it running (no command; use `exec`, then `rm`) |
 
 ### File Operations
 
@@ -750,6 +768,10 @@ blackship commit runner runner-golden
 blackship run --name ci-1 --release runner-golden -- ./run-tests.sh
 ```
 
+`commit` promotes the new release so it no longer depends on the jail. A side
+effect of `zfs promote`: snapshots the jail took before the commit move to
+the release, and the jail can no longer roll back to them.
+
 ### Build layer cache
 
 Every `RUN` and `COPY` is snapshotted as `bs-layer-<n>-<hash>`, keyed by a
@@ -806,6 +828,9 @@ blackship import old-jail.zip --from iocage --name legacy
 # Move a stopped jail to another host over ssh
 blackship migrate web seuros@otherbox
 ```
+
+`migrate` runs as root, so the ssh connection uses root's keys and
+`known_hosts`, not yours: set those up for the target first.
 
 ## Networking
 
@@ -864,13 +889,20 @@ host NIC (em0) ── PF NAT ── routing ── ngeth0
 
 There is no epair pair and no `if_bridge`: the jail interface is moved into
 the jail's vnet with `SIOCSIFVNET`, and traffic reaches the outside through
-normal host routing plus a NAT rule. Outbound therefore needs
-`net.inet.ip.forwarding=1` (Blackship sets it when it realizes a gateway) and
-a NAT rule for the subnet in `pf.conf`:
+normal host routing plus a NAT rule (see [Outbound traffic](#outbound-traffic)).
+
+### Outbound traffic
+
+Both backends route jail traffic through the host gateway, and Blackship
+does not install NAT. Blackship sets `net.inet.ip.forwarding=1` when it
+realizes a gateway; reaching anything beyond the host takes a NAT rule per
+subnet in `pf.conf`, on the interface that carries the default route:
 
 ```
 nat on $ext_if inet from 10.0.1.0/24 to any -> ($ext_if)
 ```
+
+Without it, jails reach the gateway and each other, and nothing else.
 
 Concurrent jail creation is safe: two creators racing for the same free
 `linkN` retry the next index, and IP claims are arbitrated by the lease store
@@ -917,11 +949,15 @@ blackship expose web -p 443 -I 192.168.1.100
 blackship expose web -p 8080 --internal 80
 ```
 
-Add to `/etc/pf.conf`:
+Add to `/etc/pf.conf` (`blackship setup --enable-pf` writes a minimal one
+with these lines when none exists):
 ```
 rdr-anchor "blackship"
 anchor "blackship"
 ```
+
+The `blackship` anchor also references the per-jail drain anchors, so these
+two lines cover `[jails.drain]` and `cascade = "isolate"` as well.
 
 Port forwards are persisted under Blackship's data directory. After a PF
 restart or host reboot, run `blackship setup` to recreate the anchor and
@@ -1070,7 +1106,10 @@ and never fails a jail operation.
 
 ## Dependencies
 
-Jails start in dependency order and stop in reverse:
+`up` starts a jail after everything it depends on; `down` stops a jail after
+everything that depends on it (with the default `cascade = "strict"`). Jails
+already in the target state are skipped, and `restart` brings back the
+dependents its stop took down:
 
 ```toml
 [[jails]]
@@ -1085,10 +1124,13 @@ name = "database"
 ```
 
 ```sh
-# Starts: database → cache → app
+# Starts: cache → database → app (siblings in depends_on order)
 blackship up app
 
-# Stops: app → cache → database
+# Stops: app → database (app depends on it)
+blackship down database
+
+# Stops only app: nothing depends on it
 blackship down app
 ```
 
@@ -1364,7 +1406,7 @@ identity and isolation — `vnet`, `path`, `name`, `securelevel`,
 and ignored rather than applied. Set the supported options (`[jails.network]`,
 `[jails.resources]`) instead.
 
-### `ping` fails inside `blackship run`
+### Raw sockets and `chflags` inside `blackship run`
 
 Ephemeral `run` jails are not granted `allow.raw_sockets`, `allow.socket_af`
 or `allow.chflags`. Use a managed jail defined in the manifest for workloads
