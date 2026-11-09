@@ -68,6 +68,8 @@ mod manifest;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod network;
+#[cfg(feature = "cli")]
+mod output;
 mod proc;
 mod provision;
 mod rctl;
@@ -90,4 +92,6 @@ pub use container::{
 pub use error::{Error, Result};
 pub use host::Host;
 pub use image::{Build, Image};
+#[cfg(feature = "cli")]
+pub use output::CliError;
 pub use release::{Bootstrap, Release};

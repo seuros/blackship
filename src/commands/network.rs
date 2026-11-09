@@ -4,6 +4,54 @@ use crate::cli::NetworkAction;
 use crate::error::Result;
 use crate::network::netgraph::NgBridge;
 use crate::{error, manifest, network};
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct NetworkStatus {
+    pub name: String,
+    pub bridge: String,
+    pub backend: String,
+    pub subnet: String,
+    pub gateway: String,
+    pub host_iface: Option<String>,
+    pub status: &'static str,
+}
+
+/// List persisted networks with their current runtime status.
+pub fn list(config: Option<&manifest::BlackshipConfig>) -> Result<Vec<NetworkStatus>> {
+    use network::NetworkStore;
+    use network::bridge::Bridge;
+
+    NetworkStore::from_config(config)
+        .list()?
+        .into_iter()
+        .map(|record| {
+            // NgBridge::open needs root; the host eiface's ifnet is visible to all.
+            let alive = match record.backend.as_str() {
+                "netgraph" => {
+                    record
+                        .host_iface
+                        .as_deref()
+                        .map(network::ioctl::interface_exists)
+                        .transpose()?
+                        .unwrap_or(false)
+                        || NgBridge::open(&record.bridge).is_ok()
+                }
+                _ => Bridge::exists(&record.bridge)?,
+            };
+
+            Ok(NetworkStatus {
+                name: record.name,
+                bridge: record.bridge,
+                backend: record.backend,
+                subnet: record.subnet,
+                gateway: record.gateway,
+                host_iface: record.host_iface,
+                status: if alive { "active" } else { "missing-bridge" },
+            })
+        })
+        .collect()
+}
 
 pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction) -> Result<()> {
     use ipnet::IpNet;
@@ -84,7 +132,7 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
             store.delete(&name)?;
             println!("Destroyed network '{}' on bridge '{}'", name, record.bridge);
         }
-        NetworkAction::List => list_networks(&store)?,
+        NetworkAction::List => list_networks(config)?,
     }
 
     Ok(())
@@ -126,45 +174,29 @@ fn ensure_matches_manifest(
     Ok(())
 }
 
-fn list_networks(store: &network::NetworkStore) -> Result<()> {
-    use network::bridge::Bridge;
-
-    let networks = store.list()?;
+fn list_networks(config: Option<&manifest::BlackshipConfig>) -> Result<()> {
+    let networks = list(config)?;
     if networks.is_empty() {
         println!("No networks found.");
-    } else {
-        println!("Networks:");
-        for network in networks {
-            // NgBridge::open needs root; the host eiface's ifnet is visible to all.
-            let alive = match network.backend.as_str() {
-                "netgraph" => {
-                    network
-                        .host_iface
-                        .as_deref()
-                        .map(network::ioctl::interface_exists)
-                        .transpose()?
-                        .unwrap_or(false)
-                        || NgBridge::open(&network.bridge).is_ok()
-                }
-                _ => Bridge::exists(&network.bridge)?,
-            };
-            let status = if alive { "active" } else { "missing-bridge" };
-            let host_iface = network
-                .host_iface
-                .as_deref()
-                .map(|i| format!(" host_iface={i}"))
-                .unwrap_or_default();
-            println!(
-                "  {}: bridge={} backend={} subnet={} gateway={}{} status={}",
-                network.name,
-                network.bridge,
-                network.backend,
-                network.subnet,
-                network.gateway,
-                host_iface,
-                status
-            );
-        }
+        return Ok(());
+    }
+    println!("Networks:");
+    for network in networks {
+        let host_iface = network
+            .host_iface
+            .as_deref()
+            .map(|i| format!(" host_iface={i}"))
+            .unwrap_or_default();
+        println!(
+            "  {}: bridge={} backend={} subnet={} gateway={}{} status={}",
+            network.name,
+            network.bridge,
+            network.backend,
+            network.subnet,
+            network.gateway,
+            host_iface,
+            network.status
+        );
     }
     Ok(())
 }

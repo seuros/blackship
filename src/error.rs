@@ -184,10 +184,74 @@ pub enum Error {
     InvalidArgument(String),
 
     #[error("{0}")]
+    CliParse(String),
+
+    #[error("The requested output format is not supported for this command")]
+    UnsupportedOutputFormat,
+
+    #[error("Failed to serialize JSON output: {0}")]
+    JsonOutput(String),
+
+    #[error("{0}")]
     User(String),
 }
 
 impl Error {
+    /// Stable identifier for machine-readable error handling.
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Io(_) => "io_error",
+            Self::ConfigRead { .. } => "config_read_failed",
+            Self::ConfigParse(_) => "config_parse_failed",
+            Self::ConfigValidation(_) => "config_validation_failed",
+            Self::UnknownDependency(_) => "unknown_dependency",
+            Self::JailNotFound(_) => "jail_not_found",
+            Self::JailAlreadyRunning(_) => "jail_already_running",
+            Self::JailNotRunning(_) => "jail_not_running",
+            Self::JailExists(_) => "jail_already_exists",
+            Self::JailCreationFailed(_) => "jail_creation_failed",
+            Self::JailPathNotFound(_) => "jail_path_not_found",
+            Self::JailOperation(_) => "jail_operation_failed",
+            Self::JailGet(_) => "jail_get_failed",
+            Self::JailSet(_) => "jail_set_failed",
+            Self::JailRemoveFailed => "jail_remove_failed",
+            Self::JailAttachFailed(_) => "jail_attach_failed",
+            Self::JailExecFailed(_) => "jail_exec_failed",
+            Self::CString(_) => "invalid_c_string",
+            Self::Zfs(_) => "zfs_operation_failed",
+            Self::ZfsNotEnabled => "zfs_not_enabled",
+            Self::DownloadFailed(_) => "download_failed",
+            Self::ChecksumMismatch { .. } => "checksum_mismatch",
+            Self::ReleaseNotFound(_) => "release_not_found",
+            Self::ReleaseAlreadyExists(_) => "release_already_exists",
+            Self::ExtractionFailed(_) => "extraction_failed",
+            Self::UnsupportedArch(_) => "unsupported_architecture",
+            Self::UnsupportedOsVersion { .. } => "unsupported_os_version",
+            Self::InvalidVersion(_) => "invalid_version",
+            Self::CommandFailed { .. } => "command_failed",
+            Self::State(_) => "state_error",
+            Self::Network(_) => "network_error",
+            Self::NetworkAlreadyExists(_) => "network_already_exists",
+            Self::NetworkNotFound(_) => "network_not_found",
+            Self::InterfaceNotFound(_) => "interface_not_found",
+            Self::BridgeAlreadyExists(_) => "bridge_already_exists",
+            Self::HookFailed { .. } => "hook_failed",
+            Self::HookTimeout(_) => "hook_timeout",
+            Self::JailTimeout(_) => "jail_timeout",
+            Self::HealthCheckFailed { .. } => "health_check_failed",
+            Self::TemplateParseFailed(_) => "template_parse_failed",
+            Self::BuildFailed { .. } => "build_failed",
+            Self::CopyFailed(_) => "copy_failed",
+            Self::Rctl(_) => "rctl_error",
+            Self::InvalidArgument(_) => "invalid_argument",
+            Self::CliParse(_) => "cli_parse_failed",
+            Self::UnsupportedOutputFormat => "unsupported_output_format",
+            Self::JsonOutput(_) => "json_output_failed",
+            Self::NeedsRoot { .. } => "needs_root",
+            Self::User(_) => "user_error",
+        }
+    }
+
     /// Fail with [`Error::NeedsRoot`] unless the process runs as root.
     pub(crate) fn require_root(operation: &'static str) -> Result<()> {
         let euid = nix::unistd::geteuid().as_raw();

@@ -17,8 +17,22 @@ pub struct Cli {
     #[usage(short, long)]
     pub verbose: bool,
 
+    /// Output format for machine-readable commands
+    #[usage(long, default = "text", value_enum)]
+    pub format: OutputFormat,
+
     #[usage(subcommand)]
     pub command: Commands,
+}
+
+/// Top-level output format.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, usage_rs::ValueEnum)]
+pub enum OutputFormat {
+    /// Human-readable terminal output
+    #[default]
+    Text,
+    /// Versioned, machine-readable JSON output
+    Json,
 }
 
 /// Available commands
@@ -752,6 +766,19 @@ pub enum NetworkAction {
 }
 
 impl Commands {
+    /// Whether this command has a complete machine-readable output contract.
+    pub fn supports_machine_output(&self) -> bool {
+        matches!(
+            self,
+            Self::Ps { .. }
+                | Self::Check
+                | Self::Ports { .. }
+                | Self::Network {
+                    action: NetworkAction::List
+                }
+        )
+    }
+
     pub fn requires_root(&self) -> bool {
         match self {
             Self::Up { dry_run, .. }
