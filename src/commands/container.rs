@@ -147,6 +147,7 @@ pub fn remove_jails(
 
     let mut warnings: Vec<String> = Vec::new();
     let mut retained: Vec<String> = Vec::new();
+    let mut failures: Vec<error::Error> = Vec::new();
     let rm_data_dir = data_dir_of(config);
 
     for jail in jails {
@@ -163,7 +164,7 @@ pub fn remove_jails(
             .any(|c| &c.name == jail && c.release.is_some())
         {
             if crate::jail::jail_getid(jail).is_ok() && !force {
-                eprintln!("Error: Jail '{jail}' is running. Use --force to stop and remove.");
+                failures.push(running_without_force(jail));
                 continue;
             }
             println!("Removing container '{jail}'...");
@@ -174,14 +175,21 @@ pub fn remove_jails(
             continue;
         }
 
+        let is_running = crate::jail::jail_getid(jail).is_ok();
+        let jail_root = get_jail_root(jail, config);
+        if !is_running && jail_root.is_err() {
+            failures.push(error::Error::JailNotFound(jail.clone()));
+            continue;
+        }
+
+        if is_running && !force {
+            failures.push(running_without_force(jail));
+            continue;
+        }
+
         println!("Removing jail '{jail}'...");
 
-        let is_running = crate::jail::jail_getid(jail).is_ok();
         if is_running {
-            if !force {
-                eprintln!("Error: Jail '{jail}' is running. Use --force to stop and remove.");
-                continue;
-            }
             println!("  Stopping jail...");
             let stop_status = Command::new("/usr/sbin/jail").args(["-r", jail]).status()?;
             if !stop_status.success() {
@@ -189,8 +197,6 @@ pub fn remove_jails(
             }
         }
 
-        // Get jail path before removing
-        let jail_root = get_jail_root(jail, config);
         if let Err(e) = container::network_cleanup(config, jail) {
             if force {
                 eprintln!("  Warning: Failed to clean up network state: {e}");
@@ -221,7 +227,10 @@ pub fn remove_jails(
         {
             crate::blueprint::context::reject_symlink_ancestors(&rm_data_dir, &root)?;
             if let Err(e) = crate::sys::remove_tree_with_flags(&root) {
-                eprintln!("Error removing {}: {}", root.display(), e);
+                failures.push(error::Error::JailOperation(format!(
+                    "Failed to remove {}: {e}",
+                    root.display()
+                )));
                 continue;
             }
             println!("  Removed jail root: {}", root.display());
@@ -244,7 +253,27 @@ pub fn remove_jails(
         }
     }
 
-    Ok(())
+    removal_result(failures, jails.len())
+}
+
+/// A jail that was not removed is a failure, not a line on stderr.
+fn removal_result(mut failures: Vec<error::Error>, total: usize) -> Result<()> {
+    if failures.len() > 1 {
+        for failure in &failures {
+            eprintln!("Error: {failure}");
+        }
+        return Err(error::Error::JailOperation(format!(
+            "{} of {total} jail(s) not removed",
+            failures.len()
+        )));
+    }
+    failures.pop().map_or(Ok(()), Err)
+}
+
+fn running_without_force(jail: &str) -> error::Error {
+    error::Error::JailOperation(format!(
+        "Jail '{jail}' is running. Use --force to stop and remove."
+    ))
 }
 
 /// `rm --volumes`: stop the jail and destroy its dataset; returns whether one went.
