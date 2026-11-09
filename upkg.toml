@@ -1,0 +1,2 @@
+# System packages for builds and CI, resolved per OS by upkg.
+packages = ["protobuf-compiler"]
