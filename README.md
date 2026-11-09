@@ -1323,8 +1323,8 @@ BLACKSHIP_MCP_TOKEN=$(openssl rand -hex 24) blackship mcp --listen 192.168.1.10:
 
 The token comes from the environment, never from argv, so it does not show up
 in `ps`. Without it, `--listen` on a non-loopback address refuses to start.
-`host_facts` describes the host and the creating tools write files on it, so
-treat the token like a login. The write gate works the same over HTTP: the
+`blackship:///host` describes the host and the creating tools write files on
+it, so treat the token like a login. The write gate works the same over HTTP: the
 approval prompt reaches the client on the session's stream, and a client that
 does not declare elicitation gets a refusal and no file. The server speaks
 plain HTTP; put TLS in front of it (a reverse proxy, or an ssh tunnel to the
@@ -1336,7 +1336,6 @@ Read-only, no approval needed:
 
 | Tool | Returns |
 |------|---------|
-| `host_facts` | Kernel version and the real feature gates, rctl state and managed resources, CPU count, zpools, bootstrapped releases, running jails |
 | `manifest_inspect` | The parsed manifest as JSON |
 | `manifest_validate` | Every diagnostic, staged read -> parse -> validate |
 | `jailfile_inspect` | The parsed Jailfile as JSON |
@@ -1349,8 +1348,8 @@ File-producing, and approval is not optional:
 | `manifest_create` | A `blackship.toml` rendered from a project name and a list of jails |
 | `jailfile_create` | A Jailfile in the TOML format |
 
-`host_facts` is what makes the rest worth having: releases, interfaces, and
-resource limits come from the host rather than from a model's weights.
+Facts about the host are a resource, `blackship:///host`, not a tool: one
+source, read before planning. Output is compact JSON; the reader is a model.
 
 ### Writes are gated on the operator
 
@@ -1390,8 +1389,9 @@ what order, rather than leaving it to infer that.
 
 | URI | Contents |
 |-----|----------|
-| `blackship:///man` | The CLI manual, generated from the live command spec |
-| `blackship:///man.kdl` | The full command tree as KDL |
+| `blackship:///host` | The live host: FreeBSD version and kernel features, CPU, memory (physical, free, ARC, swap) and what manifest jails claim, ZFS pools and free space, networks with used and free addresses, PF state and the NAT egress interface, releases, manifest and unmanaged jails |
+| `blackship:///man` | The CLI manual, generated from the live command spec (stdio only) |
+| `blackship:///man.kdl` | The full command tree as KDL (stdio only) |
 | `blackship:///schema/manifest` | JSON Schema for what `manifest_create` accepts |
 | `blackship:///schema/jailfile` | JSON Schema for what `jailfile_create` accepts |
 | `blackship:///reference/jailfile` | The line-format keywords, including which Dockerfile constructs do **not** exist here |
@@ -1399,6 +1399,9 @@ what order, rather than leaving it to infer that.
 
 The manual and the schemas are generated, not hand-written, so a new subcommand
 or a new parameter shows up the day it is added and cannot drift out of date.
+Over HTTP the client is remote and cannot run the CLI, so the manual is not
+served there. A value the server cannot read unprivileged, such as PF state,
+is `null`, never a guess.
 
 ## Troubleshooting
 

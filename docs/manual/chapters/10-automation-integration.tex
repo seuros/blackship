@@ -191,9 +191,6 @@ raises the level.
 \toprule
 Tool & Returns or writes \\
 \midrule
-\command{host\_facts} & Kernel version and feature gates, rctl state, CPU
-count, zpools, bootstrapped releases, and every running jail. Call it before
-drafting anything. \\
 \command{manifest\_inspect} & The parsed manifest as JSON, defaults filled in. \\
 \command{manifest\_validate} & Every diagnostic, staged read, parse, validate. \\
 \command{jailfile\_inspect} & The parsed Jailfile as JSON. \\
@@ -216,10 +213,12 @@ and \command{diagnose\_config} explains why an existing file is rejected.
 \toprule
 URI (under \file{blackship:///}) & Contents \\
 \midrule
-\file{man} & The CLI manual, generated from the live command
-spec. \\
-\file{man.kdl} & The command tree as KDL, for structured flag
-data. \\
+\file{host} & The live host: FreeBSD version and kernel features, CPU,
+memory and what manifest jails claim, ZFS capacity, networks with free
+addresses, PF state and NAT egress interface, releases, jails. \\
+\file{man} & The CLI manual, generated from the live command spec; stdio
+only. \\
+\file{man.kdl} & The command tree as KDL; stdio only. \\
 \file{schema/manifest} & JSON Schema for \command{manifest\_create}. \\
 \file{schema/jailfile} & JSON Schema for \command{jailfile\_create}. \\
 \file{reference/jailfile} & Supported keywords, the Dockerfile
@@ -232,6 +231,11 @@ parameters a manifest cannot override, and why. \\
 The manual, schemas and keyword list are generated from live code, so a new
 subcommand or parameter appears the day it lands. Use them when exact current
 syntax matters.
+
+Host facts are a resource, not a tool: one source, read before planning. A
+value the server cannot read unprivileged, such as PF state, is \setting{null}
+rather than a guess. Over HTTP the manual is not served: a remote client cannot
+run the CLI. Output is compact JSON.
 
 \section{CI pattern}
 
