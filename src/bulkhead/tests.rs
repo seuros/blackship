@@ -61,7 +61,8 @@ fn test_port_forward_with_bind_ip() {
         .with_bind_ip("192.168.1.100".parse().unwrap());
 
     let rule = forward.to_pf_rule().unwrap();
-    assert!(rule.contains("on 192.168.1.100"));
+    assert!(rule.contains("to 192.168.1.100 port 443"));
+    assert!(!rule.contains(" on "));
 }
 
 #[test]

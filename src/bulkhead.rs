@@ -119,16 +119,22 @@ impl PortForward {
             }
         }
 
-        let bind = match &self.bind_ip {
-            Some(ip) => format!("on {ip} "),
-            None => String::new(),
-        };
+        // A bind address narrows the destination; `on` would take it for an
+        // interface name and the rule would never match.
+        let destination = self
+            .bind_ip
+            .map_or_else(|| "any".to_string(), |ip| ip.to_string());
 
         let safe_name = sanitize_jail_name(&self.jail_name);
 
         Ok(format!(
-            "rdr {}proto {} from any to any port {} -> {} port {} # jail:{}",
-            bind, self.protocol, self.external_port, self.jail_ip, self.internal_port, safe_name
+            "rdr proto {} from any to {} port {} -> {} port {} # jail:{}",
+            self.protocol,
+            destination,
+            self.external_port,
+            self.jail_ip,
+            self.internal_port,
+            safe_name
         ))
     }
 }
