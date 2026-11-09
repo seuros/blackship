@@ -21,9 +21,7 @@ impl McpState {
     /// Parse a manifest and return it as JSON.
     #[mcp_tool(
         name = "manifest_inspect",
-        description = "Parse a blackship.toml and return the fully resolved manifest as JSON, \
-                       including the defaults that were filled in. Use manifest_validate \
-                       instead when you want to know why a manifest is rejected.",
+        description = "Parse a blackship.toml to the resolved manifest as JSON, defaults filled in.",
         read_only = true,
         idempotent = true
     )]
@@ -49,7 +47,7 @@ impl McpState {
             "manifest": config,
         });
 
-        let text = serde_json::to_string_pretty(&payload)
+        let text = serde_json::to_string(&payload)
             .map_err(|e| ToolError::Execution(format!("Failed to serialize manifest: {e}")))?;
 
         Ok(ToolOutput::text(text))

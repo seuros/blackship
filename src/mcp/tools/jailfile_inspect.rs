@@ -46,10 +46,7 @@ impl McpState {
     /// Parse a Jailfile and return it as JSON.
     #[mcp_tool(
         name = "jailfile_inspect",
-        description = "Parse a Jailfile and return the resolved template as JSON: base \
-                       release, build args, instructions, exposed ports, volumes, and \
-                       environment. Accepts both the line-based (Dockerfile-like) and TOML \
-                       formats; pass `format` to bypass content sniffing.",
+        description = "Parse a Jailfile (line or TOML) to its resolved template as JSON. `format` overrides sniffing.",
         read_only = true,
         idempotent = true
     )]
@@ -73,7 +70,7 @@ impl McpState {
             "jailfile": jailfile,
         });
 
-        let text = serde_json::to_string_pretty(&payload)
+        let text = serde_json::to_string(&payload)
             .map_err(|e| ToolError::Execution(format!("Failed to serialize Jailfile: {e}")))?;
 
         Ok(ToolOutput::text(text))

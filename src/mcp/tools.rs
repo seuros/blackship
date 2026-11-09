@@ -1,4 +1,5 @@
-//! Tool router, auto-mounted from `src/mcp/tools/`.
+//! Tool router, auto-mounted from `src/mcp/tools/`. Host facts are the
+//! `blackship:///host` resource, not a tool.
 //!
 //! Every file in that directory exposes one `pub fn mount(router) -> router`.
 //! Adding or removing a file requires touching this file so the macro
@@ -11,9 +12,9 @@ mcp_host::auto_tools!(McpState, "src/mcp/tools");
 use mcp_host::prelude::{ToolError, ToolOutput, ToolResult};
 use toml::{Table, Value as TomlValue};
 
-/// Pretty JSON as the tool's text output.
+/// Compact JSON as the tool's text output: models do not need indentation.
 fn json_output(value: &impl serde::Serialize) -> ToolResult {
-    let text = serde_json::to_string_pretty(value)
+    let text = serde_json::to_string(value)
         .map_err(|e| ToolError::Execution(format!("Failed to serialize result: {e}")))?;
     Ok(ToolOutput::text(text))
 }

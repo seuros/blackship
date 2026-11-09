@@ -14,6 +14,7 @@ use crate::error;
 use crate::error::Result;
 
 mod elicit;
+mod host_profile;
 mod prompts;
 mod resources;
 mod tools;
@@ -35,19 +36,18 @@ impl McpState {
     }
 }
 
-const INSTRUCTIONS: &str = "This server authors and validates blackship jail configuration for \
-     FreeBSD hosts. Start from a prompt rather than a bare tool call: \
-     `new_project` authors a blackship.toml, `new_jailfile` authors a Jailfile, \
-     and `diagnose_config` explains why an existing file is rejected. Each one \
-     names the tools to call and the order to call them in. Read the \
-     `blackship:///man` resource for the command surface, and \
-     `blackship:///schema/manifest` and `blackship:///schema/jailfile` for \
-     exactly what the creating tools accept. Call `host_facts` before drafting \
-     any configuration, so that releases, interfaces, datasets, and resource \
-     limits match the real host instead of guesses. Validate every draft before \
-     writing it to disk. Creating or modifying files asks the operator for \
-     approval through elicitation, so expect a confirmation step and do not \
-     retry a declined write.";
+const INSTRUCTIONS: &str = "Authors and validates blackship jail configuration \
+     (blackship.toml manifests, Jailfiles) for this FreeBSD host. \
+     `blackship:///host` is ground truth: FreeBSD version, CPU, memory and what \
+     jails already claim, disk, networks and free addresses, releases. \
+     Schemas: `blackship:///schema/{manifest,jailfile}`. \
+     Writes require operator approval via elicitation; a declined write is final.";
+
+/// Appended on stdio only: the client runs on the host and can run the CLI.
+const LOCAL_INSTRUCTIONS: &str = " CLI: `blackship:///man`.";
+
+/// The CLI manual, served on stdio only. A remote client cannot run the CLI.
+const LOCAL_ONLY_RESOURCES: [&str; 2] = ["blackship:///man", "blackship:///man.kdl"];
 
 /// Endpoint path for the HTTP transport.
 const HTTP_ENDPOINT: &str = "/mcp";
@@ -91,8 +91,15 @@ pub async fn serve(config_path: &Path, transport: Transport) -> Result<()> {
         config_path: config_path.to_path_buf(),
     });
 
+    let local = matches!(transport, Transport::Stdio);
+    let instructions = if local {
+        format!("{INSTRUCTIONS}{LOCAL_INSTRUCTIONS}")
+    } else {
+        INSTRUCTIONS.to_string()
+    };
+
     let server = Server::builder("blackship", env!("CARGO_PKG_VERSION"))
-        .with_instructions(INSTRUCTIONS)
+        .with_instructions(instructions)
         .with_tools(true)
         .with_prompts(true)
         .with_resources(true, false)
@@ -103,6 +110,12 @@ pub async fn serve(config_path: &Path, transport: Transport) -> Result<()> {
     server
         .register_router(router, state)
         .map_err(|e| error::Error::User(format!("MCP route registration failed: {e}")))?;
+    if !local {
+        // Before any session exists, so no list_changed is sent.
+        for uri in LOCAL_ONLY_RESOURCES {
+            server.resource_manager().remove(uri);
+        }
+    }
 
     tracing::info!(
         tools = server.tool_registry().list().len(),

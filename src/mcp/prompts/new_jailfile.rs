@@ -10,11 +10,10 @@ impl McpState {
     /// Author a TOML Jailfile for one jail.
     #[mcp_prompt(
         name = "new_jailfile",
-        description = "Author a Jailfile for one jail: gather real host facts, read the Jailfile \
-                       reference, draft, validate, then ask the operator to approve the write.",
+        description = "Author a Jailfile.",
         argument(
             name = "goal",
-            description = "What the jail should build and run, in a sentence or two",
+            description = "What the jail should build and run",
             required = true
         ),
         argument(
@@ -36,29 +35,15 @@ impl McpState {
         prompt_with_description(
             format!("Author a Jailfile for: {goal}"),
             vec![user_message(format!(
-                "Author a Jailfile at `{path}` that builds and runs: {goal}\n\n\
-                 Follow this order and do not skip a step.\n\n\
-                 1. Call `host_facts` and use only a release it lists under \
-                 `releases.bootstrapped` as the base. A release that is not bootstrapped cannot \
-                 be built from on this host.\n\
-                 2. Read `blackship:///reference/jailfile` before writing anything. A Jailfile \
-                 is not a Dockerfile: ADD, SHELL, HEALTHCHECK, STOPSIGNAL, JSON exec forms, COPY \
-                 flags such as `--from=` or `--chown=`, and backslash line continuations do not \
-                 exist. Do not use them and do not tell the operator they will work.\n\
-                 3. Read `blackship:///schema/jailfile` for the fields `jailfile_create` takes. \
-                 It emits the TOML format, which is the only one that can carry a `[metadata]` \
-                 table. A field missing from that schema is a field the format cannot express — \
-                 volumes, for instance, belong in the manifest, not here.\n\
-                 4. Draft the Jailfile and show it to the operator.\n\
-                 5. If a Jailfile already exists at `{path}`, call `jailfile_validate` on it \
-                 first, with an explicit `format`, so you know what you are proposing to \
-                 replace.\n\
-                 6. Call `jailfile_create` with `path` set to `{path}`. It parses the rendered \
-                 text before writing and then asks the operator to approve.\n\
-                 7. Read the result. `written: false` means nothing was written: report the \
-                 `reason` and the diagnostics verbatim. If the operator declined, stop.\n\n\
-                 Mention how the jail is wired into a manifest: a `[[jails]]` entry pointing at \
-                 this file through `build` (its directory) or `jailfile` (this exact path)."
+                "Author a Jailfile at `{path}` for: {goal}\n\
+                 Base it on a release in `blackship:///host` `releases.bootstrapped`. Jailfiles \
+                 are not Dockerfiles: read `blackship:///reference/jailfile` (unsupported \
+                 constructs, fixed TOML step order). `jailfile_create` emits TOML per \
+                 `blackship:///schema/jailfile`; volumes belong in the manifest. Validate an \
+                 existing file at `{path}` first, with an explicit `format`. On \
+                 `written: false`, report `reason` and diagnostics; a declined write is final. \
+                 Show the `[[jails]]` entry that wires it in (`build` = directory, `jailfile` = \
+                 path)."
             ))],
         )
     }

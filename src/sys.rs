@@ -227,6 +227,43 @@ pub const DEVFS_RULESET_JAIL: u32 = 4;
 /// The interface group marking host-side interfaces blackship owns.
 pub const IFACE_GROUP: &str = "blackship";
 
+/// Read an unsigned integer sysctl (4- or 8-byte) via sysctlbyname(3).
+pub fn sysctl_u64(name: &str) -> Option<u64> {
+    let mut buf = [0u8; 8];
+    let len = sysctl_read(name, &mut buf)?;
+    match len {
+        4 => Some(u64::from(u32::from_ne_bytes(buf[..4].try_into().ok()?))),
+        8 => Some(u64::from_ne_bytes(buf)),
+        _ => None,
+    }
+}
+
+/// Read a string sysctl via sysctlbyname(3).
+pub fn sysctl_string(name: &str) -> Option<String> {
+    let mut buf = [0u8; 256];
+    let len = sysctl_read(name, &mut buf)?;
+    let bytes = &buf[..len];
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    Some(String::from_utf8_lossy(&bytes[..end]).into_owned())
+}
+
+/// Read a sysctl into `buf`, returning the length the kernel wrote.
+fn sysctl_read(name: &str, buf: &mut [u8]) -> Option<usize> {
+    let c_name = CString::new(name).ok()?;
+    let mut len = buf.len();
+    // SAFETY: NUL-terminated name; oldp/oldlenp describe the live `buf`.
+    let rc = unsafe {
+        libc::sysctlbyname(
+            c_name.as_ptr(),
+            buf.as_mut_ptr().cast::<libc::c_void>(),
+            &raw mut len,
+            std::ptr::null(),
+            0,
+        )
+    };
+    (rc == 0).then_some(len)
+}
+
 /// Write an integer sysctl via sysctlbyname(3).
 pub fn set_sysctl_int(name: &str, value: i32) -> Result<()> {
     let c_name = CString::new(name)

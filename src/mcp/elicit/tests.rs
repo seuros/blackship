@@ -240,8 +240,8 @@ fn refusing_a_missing_parent_leaves_nothing_at_all_on_disk() {
         "the refusal must name the absolute missing directory: {reason}"
     );
     assert!(
-        reason.contains("Create that directory first"),
-        "the refusal must tell the model what to do: {reason}"
+        reason.contains("does not exist"),
+        "the refusal must say why: {reason}"
     );
     assert!(!absent.exists(), "{} was created", absent.display());
     assert!(!target.exists(), "{} was created", target.display());

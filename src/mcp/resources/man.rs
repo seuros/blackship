@@ -24,9 +24,7 @@ impl McpState {
         uri = "blackship:///man",
         name = "man",
         mime_type = "text/plain",
-        description = "The complete blackship command manual: long help for the root command \
-                       and for every subcommand, recursively, generated from the live CLI \
-                       spec. Read this before proposing any blackship invocation."
+        description = "Full CLI manual, generated from the live command spec."
     )]
     async fn man(&self, _ctx: Ctx<'_>) -> ResourceResult {
         Ok(vec![text_resource_with_mime(

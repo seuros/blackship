@@ -17,10 +17,7 @@ impl McpState {
         uri = "blackship:///man.kdl",
         name = "man.kdl",
         mime_type = "application/kdl",
-        description = "The blackship CLI spec as KDL, machine-readable. This is the input \
-                       `usage g markdown|manpage` and the shell-completion generators read, \
-                       so prefer it over the rendered manual when you need structured flag \
-                       and argument data."
+        description = "CLI spec as KDL: structured commands, flags, arguments."
     )]
     async fn man_kdl(&self, _ctx: Ctx<'_>) -> ResourceResult {
         Ok(vec![text_resource_with_mime(

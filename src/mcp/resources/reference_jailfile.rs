@@ -18,25 +18,22 @@ const URI: &str = "blackship:///reference/jailfile";
 
 /// Dockerfile habits the line parser rejects, from the parser dispatch.
 const UNSUPPORTED: &[(&str, &str)] = &[
-    ("ADD", "no remote-fetch or auto-extract instruction exists; use COPY"),
-    ("SHELL", "the shell used by RUN is not configurable"),
-    ("HEALTHCHECK", "health checks live in blackship.toml, not the Jailfile"),
-    ("STOPSIGNAL", "use STOP <command>, which runs a command before shutdown"),
+    ("ADD", "use COPY"),
+    ("SHELL", "RUN's shell is fixed"),
+    ("HEALTHCHECK", "health checks live in blackship.toml"),
+    ("STOPSIGNAL", "use STOP <command>"),
     (
         "JSON exec form",
-        "`CMD [\"a\", \"b\"]` is not parsed; the rest of the line is taken verbatim as a \
-         shell command string, brackets and all",
+        "`CMD [\"a\"]` is taken verbatim as a shell string, brackets included",
     ),
-    ("--from=", "COPY takes exactly <src> <dest>; there are no build stages"),
+    ("--from=", "no build stages"),
     (
         "--chown=",
-        "COPY flags are not parsed; in the line format set ownership in a later RUN step, \
-         in the TOML format with the copy entry's `owner` (and `mode`)",
+        "no COPY flags: line format chowns in a later RUN; TOML uses `owner`/`mode`",
     ),
     (
         "backslash line continuation",
-        "a trailing `\\` is recognised and then ignored, so the next line is parsed as a \
-         separate instruction and almost certainly fails. Keep every instruction on one line.",
+        "a trailing `\\` is ignored; the next line parses as its own instruction",
     ),
 ];
 
@@ -46,10 +43,7 @@ impl McpState {
         uri = "blackship:///reference/jailfile",
         name = "reference/jailfile",
         mime_type = "text/markdown",
-        description = "The Jailfile line-format keywords blackship actually supports, and an \
-                       explicit list of the Dockerfile constructs it does not (ADD, SHELL, \
-                       HEALTHCHECK, STOPSIGNAL, JSON exec forms, COPY flags, line \
-                       continuations). Read this before writing a Jailfile."
+        description = "Jailfile keywords, rejected Dockerfile constructs, TOML step order."
     )]
     async fn reference_jailfile(&self, _ctx: Ctx<'_>) -> ResourceResult {
         Ok(vec![text_resource_with_mime(
@@ -62,41 +56,30 @@ impl McpState {
 
 /// The TOML format has no instruction order of its own: `parse_toml_format`
 /// emits its tables in one fixed sequence.
-const TOML_ORDER: &str = "\n## Step order in the TOML format\n\n\
-     The TOML format runs its steps in a fixed order, whatever order the tables \
-     appear in: `from`, `workdir`, every `args` entry, every `env` entry, every \
-     `run` command, every `copy` entry, then `expose`. Two consequences:\n\n\
-     - `workdir` applies before any step, so a relative `copy` destination always \
-     resolves against it. Use absolute destinations when that is not what you mean.\n\
-     - Every `run` happens before every `copy`, so no command can act on a copied \
-     file. Set ownership and permissions with the copy entry's `owner` and `mode`; \
-     when a command must run after a copy, use the line format, which keeps the \
-     order as written.\n";
+const TOML_ORDER: &str = "\n## TOML step order\n\n\
+     Fixed, whatever the table order: `from`, `workdir`, `args`, `env`, all `run`, all \
+     `copy`, `expose`. So `workdir` precedes every step (relative `copy` destinations \
+     resolve against it), and no `run` sees a copied file: set `owner`/`mode` on the \
+     copy, or use the line format, which keeps written order.\n";
 
 /// Build the reference page.
 fn render() -> String {
     let mut page = String::from(
         "# Jailfile reference\n\n\
-         Two formats are accepted. The line-based format looks like a Dockerfile; the TOML \
-         format is a table. `parse_jailfile` sniffs which one it is by looking for a leading \
-         `[` or for the text `[metadata]` or `[build]` anywhere in the body, so a line-format \
-         Jailfile that merely mentions `[build]` in a comment is misread as TOML. The \
-         `jailfile_inspect` and `jailfile_validate` tools take an explicit `format` to \
-         override that, and `jailfile_validate` reports which parser actually ran.\n\n\
-         Only the TOML format can express a `[metadata]` table (name, version, description, \
-         author, labels). The line format carries metadata through `LABEL` only.\n\n\
-         ## Supported keywords (line format)\n\n",
+         Two formats: line (Dockerfile-like) and TOML. Sniffed by a leading `[` or a \
+         `[metadata]`/`[build]` anywhere, so a comment mentioning `[build]` misreads a line \
+         Jailfile; pass `format` to `jailfile_validate`/`jailfile_inspect`. Only TOML has \
+         `[metadata]`; the line format uses `LABEL`. TOML rejects unknown keys.\n\n\
+         ## Line keywords\n\n",
     );
 
     for keyword in supported_keywords() {
         let _ = writeln!(page, "- `{keyword}`"); // fmt::Write into a String is infallible
     }
     page.push_str(
-        "- `#` at the start of a line is a comment, and is preserved as an instruction.\n\n\
-         Keywords are matched case-insensitively. Every instruction must fit on one line.\n\n\
-         ## Not supported\n\n\
-         A model reaching for Dockerfile habits will hit these. They are absences, not \
-         aliases: the parser rejects the line outright.\n\n",
+        "- `#` comment (kept as an instruction)\n\n\
+         Case-insensitive; one instruction per line.\n\n\
+         ## Rejected\n\n",
     );
 
     for (name, why) in UNSUPPORTED {

@@ -19,10 +19,7 @@ impl McpState {
     /// Validate a manifest, reporting which stage failed.
     #[mcp_tool(
         name = "manifest_validate",
-        description = "Validate a blackship.toml in three stages: read the file, parse the \
-                       TOML, then run the semantic checks (name rules, duplicate jails, \
-                       colliding full names). Reports the stage that failed and its \
-                       diagnostics instead of a single opaque error.",
+        description = "Validate a blackship.toml by stage (read, parse, validate); returns the failed stage and diagnostics.",
         read_only = true,
         idempotent = true
     )]

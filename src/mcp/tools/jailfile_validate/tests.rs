@@ -38,7 +38,7 @@ fn clean_line_format_has_no_diagnostics() {
 
 /// The `auto` sniffer is textual, so a line-format body merely mentioning
 /// `[build]` is routed to the TOML parser. The report must say which parser
-/// actually ran, and only warn about it when `auto` was asked for.
+/// actually ran; the reference resource explains the sniffing.
 #[test]
 fn auto_reports_the_format_it_actually_chose() {
     let content = "FROM 15.1-RELEASE\nRUN echo '[build]'\n";
@@ -47,7 +47,7 @@ fn auto_reports_the_format_it_actually_chose() {
     assert_eq!(auto["requested_format"], "auto");
     assert_eq!(auto["resolved_format"], "toml");
     assert_eq!(auto["valid"], false);
-    assert!(auto["format_note"].is_string());
+    assert!(auto.get("format_note").is_none());
 
     let forced = report(content, JailfileFormat::Line);
     assert_eq!(forced["requested_format"], "line");

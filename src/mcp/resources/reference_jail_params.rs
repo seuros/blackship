@@ -23,30 +23,25 @@ fn reserved() -> Vec<(&'static str, &'static str)> {
         (consts::JAIL_PARAM_JID, "assigned by the kernel"),
         (
             consts::JAIL_PARAM_NAME,
-            "derived from the project prefix and the jail's manifest name; overriding it \
-             would detach the jail from its record",
+            "project prefix + manifest name; overriding detaches the jail from its record",
         ),
         (
             consts::JAIL_PARAM_PATH,
-            "the jail root, computed from data_dir or the ZFS dataset. A manifest-chosen \
-             path could point the jail at / and defeat the chroot entirely",
+            "jail root from data_dir or the dataset; `/` would defeat the chroot",
         ),
         (consts::JAIL_PARAM_ERRMSG, "an output parameter; the kernel writes it"),
         (
             consts::JAIL_PARAM_PERSIST,
-            "owned by the lifecycle state machine; forcing it would strand jails that \
-             blackship believes it stopped",
+            "owned by the lifecycle; forcing it strands jails blackship thinks stopped",
         ),
         (consts::JAIL_PARAM_NOPERSIST, "the inverse of persist, same reason"),
         (
             consts::JAIL_PARAM_SECURELEVEL,
-            "a security floor. A manifest lowering it would weaken the kernel's own \
-             restrictions on the jail",
+            "security floor; lowering it weakens kernel restrictions",
         ),
         (
             consts::JAIL_PARAM_DEVFS_RULESET,
-            "controls which device nodes the jail can see. A permissive ruleset hands the \
-             jail raw disk and memory devices, which is a complete escape",
+            "device visibility; a permissive ruleset exposes raw disk and memory: escape",
         ),
         (
             consts::JAIL_PARAM_ENFORCE_STATFS,
@@ -54,17 +49,15 @@ fn reserved() -> Vec<(&'static str, &'static str)> {
         ),
         (
             consts::JAIL_PARAM_CHILDREN_MAX,
-            "nested-jail budget; raising it lets a jail create children blackship does not \
-             account for",
+            "nested-jail budget; raising it creates unaccounted children",
         ),
         (
             consts::JAIL_PARAM_HOST_HOSTNAME,
-            "set from the jail definition so the hostname matches the record",
+            "from the jail definition",
         ),
         (
             consts::JAIL_PARAM_IP4_ADDR,
-            "set by the network layer from the jail's addresses; a manifest-chosen address \
-             could claim another jail's or the host's IP",
+            "set by the network layer; could claim another jail's or the host's address",
         ),
         (consts::JAIL_PARAM_IP6_ADDR, "same as ip4.addr"),
         (
@@ -81,10 +74,7 @@ impl McpState {
         uri = "blackship:///reference/jail-params",
         name = "reference/jail-params",
         mime_type = "text/markdown",
-        description = "The jail_set(2) parameters a blackship manifest may not set, taken \
-                       from <sys/jail.h>, plus the rule that every `allow.*` parameter is \
-                       reserved by prefix. Explains why each one would bypass jail \
-                       isolation if a manifest could override it."
+        description = "jail_set(2) parameters a manifest may not set (all `allow.*` by prefix), and why."
     )]
     async fn reference_jail_params(&self, _ctx: Ctx<'_>) -> ResourceResult {
         Ok(vec![text_resource_with_mime(
@@ -99,16 +89,9 @@ impl McpState {
 fn render() -> String {
     let mut page = String::from(
         "# Reserved jail parameters\n\n\
-         A jail definition in `blackship.toml` may carry extra `jail_set(2)` parameters. \
-         The ones below are refused: blackship computes them itself from the manifest, the \
-         network layer, and the lifecycle state machine. A manifest that could set them \
-         would be able to point a jail at the host's filesystem, hand it the host's \
-         addresses, widen its devfs view, or lower its securelevel — that is, bypass the \
-         isolation the jail exists to provide. A reserved key in a manifest is dropped with \
-         a warning, not silently honoured.\n\n\
-         ## Reserved by name\n\n\
-         Taken from `<sys/jail.h>` at build time, so this list reflects the headers this \
-         binary was compiled against.\n\n",
+         Manifest `params` cannot set these; blackship derives them. A reserved key is \
+         dropped with a warning.\n\n\
+         ## By name (from `<sys/jail.h>` at build time)\n\n",
     );
 
     for (name, why) in reserved() {
@@ -121,17 +104,10 @@ fn render() -> String {
     }
 
     page.push_str(
-        "\n## Reserved by prefix\n\n\
-         Every parameter starting with `allow.` is reserved, including ones not listed \
-         above and ones that do not exist yet. `allow.*` parameters are registered by \
-         kernel modules as runtime sysctl entries, so no header can enumerate them and no \
-         fixed list can stay complete. They are exactly the switches that relax jail \
-         confinement — `allow.mount`, `allow.raw_sockets`, `allow.sysvipc` — so the safe \
-         rule is to reserve the whole prefix rather than chase additions.\n\n\
-         ## What to do instead\n\n\
-         Use the first-class fields of the jail definition (addresses, hostname, root, \
-         resource limits) and let blackship translate them. Pass extra parameters only for \
-         things outside that set.\n",
+        "\n## By prefix\n\n\
+         Every `allow.*`: kernel modules register them at runtime, so no list is complete, \
+         and each one relaxes confinement.\n\n\
+         Use the first-class jail fields (addresses, hostname, root, limits) instead.\n",
     );
 
     page

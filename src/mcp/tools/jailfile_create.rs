@@ -26,8 +26,7 @@ use crate::blueprint::parser::{JailfileFormat, parse_jailfile_as};
 /// A Jailfile to author.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct JailfileCreateParams {
-    /// Where to write the Jailfile. A build context conventionally holds it as
-    /// `Jailfile` in the directory named by the manifest's `build` key.
+    /// Target path, conventionally `<build dir>/Jailfile`.
     pub path: String,
 
     /// Template metadata: name, version, description, author, labels.
@@ -62,8 +61,7 @@ pub struct MetadataParams {
 /// The `[build]` table.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BuildParams {
-    /// Base release, for example `15.1-RELEASE`. Use one `host_facts` reports
-    /// as bootstrapped.
+    /// e.g. `15.1-RELEASE`. Must be bootstrapped.
     pub from: Option<String>,
 
     /// Working directory for subsequent steps.
@@ -85,7 +83,7 @@ pub struct BuildParams {
     #[serde(default)]
     pub copy: Vec<CopyParams>,
 
-    /// Ports the jail serves. Documentation only; nothing is published.
+    /// Documentation only; nothing is published.
     #[serde(default)]
     pub expose: Vec<ExposeParams>,
 }
@@ -106,7 +104,7 @@ pub struct CopyParams {
     pub src: String,
     /// Destination path inside the jail.
     pub dest: String,
-    /// Octal mode to set on the destination, as a number such as `493`.
+    /// Mode as an integer (`493` = 0o755).
     pub mode: Option<u32>,
     /// Owner to set on the destination.
     pub owner: Option<String>,
@@ -136,12 +134,7 @@ impl McpState {
     /// Render a TOML Jailfile, validate it, and ask the operator to approve it.
     #[mcp_tool(
         name = "jailfile_create",
-        description = "Render a Jailfile in the TOML format, validate it with the same parser \
-                       `blackship build` uses, and write it only after the operator approves an \
-                       elicitation. Returns the diagnostics and writes nothing when the rendered \
-                       Jailfile does not parse, and never replaces an existing file unless the \
-                       operator grants `overwrite`. Read blackship:///reference/jailfile first: \
-                       several Dockerfile constructs have no equivalent here.",
+        description = "Render, parse-check, and write a TOML Jailfile after operator approval. Invalid drafts return diagnostics and write nothing; replacing a file needs `overwrite`.",
         destructive = true,
         open_world = false
     )]
@@ -160,8 +153,7 @@ impl McpState {
             return json_output(&json!({
                 "path": path.display().to_string(),
                 "written": false,
-                "reason": "The rendered Jailfile does not parse, so the operator was not asked. \
-                           Fix the diagnostics and call this tool again.",
+                "reason": "Draft does not parse; operator not asked.",
                 "format": "toml",
                 "diagnostics": [{ "message": e.to_string() }],
                 "rendered": rendered,

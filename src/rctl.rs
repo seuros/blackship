@@ -170,7 +170,7 @@ const MANAGED_RESOURCES: [&str; 7] = [
     not(feature = "mcp"),
     expect(
         dead_code,
-        reason = "the MCP host_facts tool is this accessor's only caller"
+        reason = "the MCP host profile is this accessor's only caller"
     )
 )]
 pub const fn managed_resources() -> &'static [&'static str] {
@@ -460,7 +460,7 @@ fn expand_rule(rule: &str) -> Result<String> {
 }
 
 /// `expand_number(3)`: an integer with an optional k/m/g/t/p/e suffix (powers of 1024).
-fn expand_number(s: &str) -> Option<u64> {
+pub fn expand_number(s: &str) -> Option<u64> {
     let s = s.trim();
     let s = s
         .strip_suffix(['b', 'B'])

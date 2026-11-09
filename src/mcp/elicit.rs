@@ -26,10 +26,7 @@ use serde_json::{Value, json};
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Refusal used when the client has no way to ask its operator anything.
-const NO_TRANSPORT: &str = "This client has no bidirectional transport, so the operator cannot be \
-                            asked to approve the write. Nothing was written. Use a client that \
-                            declares the `elicitation` capability, or save the rendered content \
-                            yourself.";
+const NO_TRANSPORT: &str = "Client lacks the `elicitation` capability; approval impossible.";
 
 /// What an elicitation answer authorizes.
 #[derive(Debug, PartialEq, Eq)]
@@ -111,7 +108,7 @@ async fn ask(
         Err(MultiplexerError::Timeout(_)) => (
             "timeout",
             Verdict::Refuse(format!(
-                "The operator did not answer within {}s. Nothing was written.",
+                "No operator answer within {}s.",
                 ANSWER_TIMEOUT.as_secs()
             )),
         ),
@@ -121,9 +118,7 @@ async fn ask(
         ),
         Err(e) => (
             "other-error",
-            Verdict::Refuse(format!(
-                "The approval request failed ({e}). Nothing was written."
-            )),
+            Verdict::Refuse(format!("Approval request failed: {e}")),
         ),
     };
 
@@ -184,25 +179,15 @@ fn message(target: &Path, description: &str, exists: bool) -> String {
 /// so a file that appeared in the meantime is still protected by `apply`.
 fn verdict(result: &CreateElicitationResult, exists: bool) -> Verdict {
     match result.action {
-        ElicitationAction::Decline => Verdict::Refuse(
-            "The operator declined the write. Nothing was written; do not retry the same \
-             proposal."
-                .to_string(),
-        ),
-        ElicitationAction::Cancel => Verdict::Refuse(
-            "The operator cancelled the approval request. Nothing was written.".to_string(),
-        ),
-        ElicitationAction::Accept if !flag(result.content.as_ref(), "confirm") => Verdict::Refuse(
-            "The operator returned the form without setting `confirm`, which is not an approval. \
-             Nothing was written."
-                .to_string(),
-        ),
+        ElicitationAction::Decline => {
+            Verdict::Refuse("Operator declined. Do not retry.".to_string())
+        }
+        ElicitationAction::Cancel => Verdict::Refuse("Operator cancelled.".to_string()),
+        ElicitationAction::Accept if !flag(result.content.as_ref(), "confirm") => {
+            Verdict::Refuse("Form returned without `confirm`: not an approval.".to_string())
+        }
         ElicitationAction::Accept if exists && !flag(result.content.as_ref(), "overwrite") => {
-            Verdict::Refuse(
-                "A file already exists at that path and the operator did not grant `overwrite`. \
-                 Nothing was written."
-                    .to_string(),
-            )
+            Verdict::Refuse("File exists; `overwrite` not granted.".to_string())
         }
         ElicitationAction::Accept => Verdict::Write { replacing: exists },
     }
@@ -234,8 +219,7 @@ fn apply(
     if !replacing && target.exists() {
         return Ok(refused(
             target,
-            "A file appeared at that path while the operator was being asked, and the approval \
-             did not cover replacing it. Nothing was written.",
+            "File appeared during approval; replacing it was not approved.",
         ));
     }
 
@@ -271,17 +255,9 @@ fn no_parent(parent: &Path) -> String {
     let shown = parent.display();
 
     if parent.exists() {
-        format!(
-            "{shown} already exists and is not a directory, so nothing can be written inside it. \
-             Nothing was written, and the operator was not asked to approve anything. Choose a \
-             path inside a directory that already exists."
-        )
+        format!("{shown} is not a directory; operator not asked.")
     } else {
-        format!(
-            "The directory {shown} does not exist, so nothing can be written there. Nothing was \
-             written, and the operator was not asked to approve anything. Create that directory \
-             first, or choose a path inside a directory that already exists."
-        )
+        format!("{shown} does not exist; operator not asked. Blackship creates no directories.")
     }
 }
 

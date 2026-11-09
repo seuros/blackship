@@ -28,23 +28,19 @@ use super::super::elicit;
 /// A manifest to author.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ManifestParams {
-    /// Where to write the manifest. Defaults to the server's configured
-    /// manifest path, which is where `blackship` looks by default.
+    /// Target path. Default: the server's manifest path.
     pub path: Option<String>,
 
-    /// Project name. Prefixed to every jail name, and restricted to ASCII
-    /// alphanumerics, dash, underscore, and dot.
+    /// Prefixed to every jail name. `[A-Za-z0-9._-]`.
     pub project: String,
 
     /// Base directory for jail roots and state. Omit to use the default.
     pub data_dir: Option<String>,
 
-    /// Directory holding bootstrapped FreeBSD releases. Omit to use the
-    /// default; `host_facts` reports the one in effect.
+    /// Bootstrapped releases directory. Omit for the default.
     pub releases_dir: Option<String>,
 
-    /// ZFS pool to carve jail datasets from. Setting this turns ZFS on; the
-    /// pool must already be imported, which `host_facts` reports.
+    /// Enables ZFS. Must be an imported pool.
     pub zpool: Option<String>,
 
     /// Dataset name under `zpool`. Ignored without `zpool`.
@@ -61,8 +57,7 @@ pub struct JailParams {
     /// Jail name, unique in the project. Same character rules as `project`.
     pub name: String,
 
-    /// FreeBSD release to provision from, for example `15.1-RELEASE`. Use one
-    /// `host_facts` reports as bootstrapped.
+    /// e.g. `15.1-RELEASE`. Must be bootstrapped.
     pub release: Option<String>,
 
     /// Explicit jail root. Omit to let blackship derive it from `data_dir`.
@@ -94,12 +89,11 @@ pub struct JailParams {
     /// Network configuration.
     pub network: Option<NetworkParams>,
 
-    /// Resource limits, applied through rctl. `host_facts` reports whether
-    /// rctl is usable on this host; cpuset pinning works regardless.
+    /// rctl limits; `cores`/`cpuset` pinning works without rctl.
     pub resources: Option<ResourceParams>,
 
-    /// Raw jail parameters, for example `allow.raw_sockets` or `exec.start`.
-    /// Reserved parameters blackship manages itself are ignored at start.
+    /// Raw `jail_set(2)` parameters. Reserved ones are ignored; see
+    /// `blackship:///reference/jail-params`.
     #[serde(default)]
     pub params: std::collections::BTreeMap<String, JailParamValue>,
 }
@@ -161,8 +155,7 @@ pub struct ResourceParams {
     /// Pin the jail to this many cores, chosen least-loaded.
     pub cores: Option<u16>,
 
-    /// Pin the jail to an explicit CPU list, for example `0,1`. Wins over
-    /// `cores`.
+    /// Explicit CPU list, e.g. `0,1`. Overrides `cores`.
     pub cpuset: Option<String>,
 }
 
@@ -170,11 +163,7 @@ impl McpState {
     /// Render a manifest, validate it, and ask the operator to approve it.
     #[mcp_tool(
         name = "manifest_create",
-        description = "Render a blackship.toml from a project name and a list of jails, validate \
-                       it with the same parser and semantic checks blackship itself uses, and \
-                       write it only after the operator approves an elicitation. Returns the \
-                       diagnostics and writes nothing when the rendered manifest is invalid, and \
-                       never replaces an existing file unless the operator grants `overwrite`.",
+        description = "Render, validate, and write a blackship.toml after operator approval. Invalid drafts return diagnostics and write nothing; replacing a file needs `overwrite`.",
         destructive = true,
         open_world = false
     )]
@@ -201,8 +190,7 @@ impl McpState {
         if report["valid"] != json!(true) {
             return json_output(&json!({
                 "written": false,
-                "reason": "The rendered manifest does not validate, so the operator was not \
-                           asked. Fix the diagnostics and call this tool again.",
+                "reason": "Draft invalid; operator not asked.",
                 "validation": report,
             }));
         }

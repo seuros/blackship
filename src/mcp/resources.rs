@@ -1,4 +1,4 @@
-//! Resource router, auto-mounted from `src/mcp/resources/`.
+//! Resource router, auto-mounted from `src/mcp/resources/` (host, man, schemas, references).
 //!
 //! Every file in that directory exposes one `pub fn mount(router) -> router`.
 //! Adding or removing a file requires touching this file so the macro
