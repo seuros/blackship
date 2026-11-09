@@ -83,7 +83,7 @@ disable_hwfilter = false
 
 Rate limits bound concurrent starts and health-check dispatch. The
 \setting{config.health} schema records the intended global check defaults; in
-version 0.2.1, checks use their own values or the same built-in defaults shown
+version 0.3.0, checks use their own values or the same built-in defaults shown
 above. Retry values control exponential backoff for HTTP release operations;
 jitter is expressed as a fraction from zero through one. The optional trunk
 block declares the physical interface and VLANs admitted by a filtering bridge.
@@ -141,6 +141,11 @@ asks Blackship to choose the least-loaded CPUs while \setting{cpuset} pins an
 explicit list and wins when both are present. The \setting{rules} array accepts
 advanced raw RCTL resource/action expressions; a jail subject is added when
 omitted, and a rule targeting a different jail is rejected.
+
+RCTL amount fields accept integers or binary size suffixes
+\setting{k}, \setting{m}, \setting{g}, \setting{t}, \setting{p}, and
+\setting{e}, optionally followed by \setting{b}. Blackship expands these to
+the integer form required by the kernel before issuing the rule syscall.
 
 If configured resource enforcement cannot be applied, startup fails and rolls
 back. This avoids silently running a workload beyond its declared boundary.

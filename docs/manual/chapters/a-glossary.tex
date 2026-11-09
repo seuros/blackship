@@ -12,6 +12,10 @@
   \item[Cascade policy] Rule deciding whether dependents stop, detach, or are
   isolated when a dependency stops.
 
+  \item[Container] Ephemeral jail owned by a Rust-library or \command{run}
+  process. It is destroyed with its handle unless kept or handed to another
+  live process.
+
   \item[EVA] Live reconciliation of updatable jail parameters, rctl policy, and
   CPU placement without a jail restart.
 

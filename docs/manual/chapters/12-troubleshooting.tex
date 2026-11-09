@@ -67,6 +67,19 @@ Custom nameservers must be reachable from the jail's subnet. In inherited mode,
 ensure the host resolver file existed when the root was prepared. DNS failure
 with working IP connectivity is not a bridge failure.
 
+For an ephemeral \command{run} on a named network, Blackship removes host
+loopback and interface-scoped link-local nameservers because its VNET stack
+cannot reach them. If the host resolver contains only such entries, creation
+fails with an instruction to supply a reachable server:
+
+\begin{lstlisting}[language=bash]
+blackship run --name probe --release 15.1-RELEASE \
+  --network default --dns 192.0.2.53 -- host freebsd.org
+\end{lstlisting}
+
+Use repeated \command{--dns} options for redundancy. Do not point a VNET jail
+at \command{127.0.0.1} unless it runs its own resolver there.
+
 \section{A netgraph bridge name is already in use}
 
 \command{ng\_ether} gives ethernet interfaces netgraph node names. If an

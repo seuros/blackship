@@ -64,12 +64,21 @@ Keep telemetry tokens and local credentials in protected overrides. Review
 Jailfiles before building: \command{RUN} is privileged application installation
 inside a root filesystem and may fetch or execute external content.
 
+Library-container nullfs mounts deserve two-sided review. Read-write mounts are
+\command{nosuid} inside the jail by default and can also be made
+\command{noexec}; neither property changes access through the original host
+path. Put writable, user-reachable host directories on a dataset with
+\command{setuid=off}. Treat \command{allow\_setuid()} and
+\command{allow\_chflags()} as narrow exceptions for trusted build workloads,
+not general compatibility switches.
+
 \section{Reliability model}
 
 Blackship records ownership before mutation and performs reverse-order rollback.
 Cleanup is designed to be idempotent, because a crash can interrupt either the
-forward path or rollback itself. Scope records are current work-lists; audit
-records are durable history.
+forward path or rollback itself. Mutable TOML state is written to a unique
+same-directory temporary file and atomically renamed over the target. Scope
+records are current work-lists; audit records are durable history.
 
 The project treats isolation failures as fatal. It does not continue after a
 requested VNET attach or resource policy fails. This fail-closed behavior may
