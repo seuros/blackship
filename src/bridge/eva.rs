@@ -181,6 +181,27 @@ fn jls_json(full_name: &str, keys: &[&str]) -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
+/// Addresses of `desired`'s family on `iface` inside the jail's vnet, or
+/// `None` when they cannot be read (not root, interface gone).
+fn vnet_addresses(full_name: &str, iface: &str, desired: IpAddr) -> Option<Vec<IpAddr>> {
+    let family = if desired.is_ipv4() { "inet" } else { "inet6" };
+    let output = std::process::Command::new("/sbin/ifconfig")
+        .args(["-j", full_name, iface, family])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut words = line.split_whitespace();
+                (words.next() == Some(family)).then(|| words.next())?
+            })
+            .filter_map(|addr| addr.split('%').next()?.parse().ok())
+            .collect(),
+    )
+}
+
 /// Everything EVA needs to know about one running jail.
 struct EvaPlan<'a> {
     jail_def: &'a JailDef,
@@ -249,7 +270,11 @@ impl Bridge {
         );
         let keys: Vec<&str> = desired.keys().map(String::as_str).collect();
         let (live, unreadable) = read_live_params(&full_name, &keys);
-        let diff = diff_params(&desired, &live, &unreadable);
+        let mut unreadable = unreadable;
+        let mut diff = diff_params(&desired, &live, &unreadable);
+        if is_vnet && let Some(ip) = static_ip {
+            self.diff_vnet_address(&full_name, ip, &mut diff, &mut unreadable);
+        }
 
         let resources = self.effective_resources(&full_name, jail_def);
         let cpu_list =
@@ -266,6 +291,45 @@ impl Bridge {
             resources,
             cpu_list,
         })))
+    }
+
+    /// A VNET jail's address lives in its own stack, where jls cannot see it:
+    /// read it from the jail's interface and report drift as restart-required.
+    fn diff_vnet_address(
+        &self,
+        full_name: &str,
+        desired: IpAddr,
+        diff: &mut EvaDiff,
+        unreadable: &mut Vec<String>,
+    ) {
+        let key = match desired {
+            IpAddr::V4(_) => crate::sys::consts::JAIL_PARAM_IP4_ADDR,
+            IpAddr::V6(_) => crate::sys::consts::JAIL_PARAM_IP6_ADDR,
+        };
+        let live = self
+            .vnet_state_store
+            .get(full_name)
+            .ok()
+            .flatten()
+            .and_then(|record| vnet_addresses(full_name, &record.jail_interface, desired));
+        match live {
+            Some(addrs) if addrs.contains(&desired) => {}
+            Some(addrs) => {
+                let live = addrs
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let live = if live.is_empty() {
+                    "(unset)".into()
+                } else {
+                    live
+                };
+                diff.immutable_diffs
+                    .push(format!("{key}: {live} -> {desired}"));
+            }
+            None => unreadable.push(key.to_string()),
+        }
     }
 
     /// What `eva` would do, per target jail.

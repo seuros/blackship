@@ -128,7 +128,7 @@ impl PlanStep {
                     println!("        ! {line} (requires restart)");
                 }
                 for key in unreadable_parameters {
-                    println!("          {key}: not reported by jls, would apply blind");
+                    println!("          {key}: could not be read, not verified");
                 }
                 if !rctl_rules.is_empty() {
                     println!("          rctl: replace with {} rule(s):", rctl_rules.len());
