@@ -33,7 +33,11 @@ impl Bridge {
             .get_jail(&service_name)
             .ok_or_else(|| Error::JailNotFound(jail_name.to_string()))?;
 
-        let jail_ip = if let Some(ip) = jail_def.network.as_ref().and_then(|network| network.ip) {
+        let jail_ip = if let Some(ip) = jail_def
+            .network
+            .as_ref()
+            .and_then(crate::manifest::JailNetworkConfig::static_ip)
+        {
             ip
         } else if let Some((_, ip)) = self.allocated_ips.get(&full_name) {
             *ip

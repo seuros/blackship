@@ -301,3 +301,15 @@ fn test_merge_later_file_can_switch_settings_off() {
 
     assert!(!load_merged(&[base, local]).unwrap().config.zfs_enabled);
 }
+
+#[test]
+fn test_static_ip_reads_ip_cidr_and_ip() {
+    let cidr: JailNetworkConfig = toml::from_str("ip_cidr = \"10.77.0.30/24\"").unwrap();
+    assert_eq!(cidr.static_ip(), Some("10.77.0.30".parse().unwrap()));
+
+    let bare: JailNetworkConfig = toml::from_str("ip = \"10.77.0.31\"").unwrap();
+    assert_eq!(bare.static_ip(), Some("10.77.0.31".parse().unwrap()));
+
+    let none: JailNetworkConfig = toml::from_str("vnet = true").unwrap();
+    assert_eq!(none.static_ip(), None);
+}

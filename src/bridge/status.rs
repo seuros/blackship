@@ -105,7 +105,7 @@ impl Bridge {
                         jail_def
                             .network
                             .as_ref()
-                            .and_then(|network| network.ip)
+                            .and_then(crate::manifest::JailNetworkConfig::static_ip)
                             .map(|ip| vec![ip.to_string()])
                             .unwrap_or_default(),
                     ),

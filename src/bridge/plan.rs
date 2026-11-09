@@ -176,7 +176,7 @@ impl Bridge {
                     ip: jail_def
                         .network
                         .as_ref()
-                        .and_then(|network| network.ip)
+                        .and_then(crate::manifest::JailNetworkConfig::static_ip)
                         .map(|ip| ip.to_string()),
                     currently_running: jail_getid(&full_name).is_ok(),
                     create_zfs_dataset: self.zfs.is_some() && jail_def.path.is_none(),

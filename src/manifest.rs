@@ -980,6 +980,18 @@ pub struct JailNetworkConfig {
     pub dns: DnsConfig,
 }
 
+impl JailNetworkConfig {
+    /// The jail's static address: the address part of `ip_cidr`, else `ip`.
+    /// Every reader goes through this, so an `ip_cidr` jail's address is
+    /// reserved, drained, forwarded to, and diffed like any other.
+    pub fn static_ip(&self) -> Option<IpAddr> {
+        self.ip_cidr
+            .as_deref()
+            .and_then(|cidr| cidr.split('/').next()?.parse().ok())
+            .or(self.ip)
+    }
+}
+
 /// DNS configuration for a jail
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct DnsConfig {

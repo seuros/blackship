@@ -531,7 +531,7 @@ pub fn build_runtime_allocator(
             let Some(network) = jail.network.as_ref() else {
                 continue;
             };
-            let Some(static_ip) = network.ip else {
+            let Some(static_ip) = network.static_ip() else {
                 continue;
             };
 

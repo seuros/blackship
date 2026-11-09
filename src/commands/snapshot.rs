@@ -238,7 +238,7 @@ pub fn handle_export(
     let ip = jail_def
         .network
         .as_ref()
-        .and_then(|n| n.ip)
+        .and_then(crate::manifest::JailNetworkConfig::static_ip)
         .map(|ip| ip.to_string());
 
     if zfs_send {

@@ -591,7 +591,7 @@ impl Bridge {
 
         // Phase 3: the IP. Inline because `jail_def` borrows `self.config`.
         let effective_ip: Option<IpAddr> = if let Some(network) = &jail_def.network {
-            if let Some(static_ip) = network.ip {
+            if let Some(static_ip) = network.static_ip() {
                 if let Some(net_name) = network
                     .networks
                     .iter()
@@ -1110,7 +1110,7 @@ impl Bridge {
         let mut ips: Vec<IpAddr> = Vec::new();
 
         if let Some(network) = &jail_def.network
-            && let Some(ip) = network.ip
+            && let Some(ip) = network.static_ip()
         {
             ips.push(ip);
         }
@@ -1357,7 +1357,7 @@ impl Bridge {
         let mut hook_context = HookContext::new(full_name, &path).with_jid(jid);
 
         if let Some(network) = &jail_def.network
-            && let Some(ip) = &network.ip
+            && let Some(ip) = network.static_ip()
         {
             hook_context = hook_context.with_ip(ip.to_string());
         }

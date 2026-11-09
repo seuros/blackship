@@ -270,7 +270,10 @@ impl Bridge {
         };
 
         let is_vnet = jail_def.network.as_ref().is_some_and(|n| n.vnet);
-        let static_ip = jail_def.network.as_ref().and_then(|n| n.ip);
+        let static_ip = jail_def
+            .network
+            .as_ref()
+            .and_then(crate::manifest::JailNetworkConfig::static_ip);
         let path = jail_def.effective_path(&self.config.config, &full_name);
         let mut desired = build_jail_params(jail_def, &full_name, is_vnet, static_ip)?;
         desired.insert(
