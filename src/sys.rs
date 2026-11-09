@@ -303,6 +303,11 @@ pub fn list_tagged_interfaces() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// `d` in nanoseconds, saturating at `u64::MAX` (584 years).
+pub fn nanos(d: std::time::Duration) -> u64 {
+    u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
+}
+
 /// Run a libxo-capable base utility and parse its JSON output.
 pub fn run_json(program: &str, args: &[&str]) -> Result<serde_json::Value> {
     let output = std::process::Command::new(program)

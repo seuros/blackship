@@ -122,6 +122,14 @@ fn timeout_kills_everything_in_the_jail() {
         .exec(Exec::argv(["echo", "still here"]).deadline(Instant::now() + Duration::from_secs(5)))
         .unwrap();
     assert_eq!(after.stdout, b"still here\n");
+
+    // A shared deadline is a budget too, not just a ceiling.
+    let started = Instant::now();
+    let spent = c
+        .exec(Exec::argv(["sleep", "600"]).deadline(started + Duration::from_secs(1)))
+        .unwrap();
+    assert_eq!(spent.exit, Exit::TimedOut);
+    assert!(started.elapsed() < Duration::from_secs(10));
     c.destroy().unwrap();
 }
 

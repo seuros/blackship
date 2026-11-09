@@ -5,6 +5,7 @@
 #![allow(unsafe_code)]
 
 use crate::error::{Error, Result};
+use deadline_machines::{Clock, Deadline, SystemClock};
 use std::ffi::CString;
 use std::fmt;
 use std::io::{self, Read};
@@ -259,11 +260,16 @@ pub fn run(jid: i32, exec: Exec<'_>) -> Result<ExecOutput> {
         });
     }
 
+    let clock = SystemClock::new();
     let started = Instant::now();
-    let deadline = limit.map(|limit| match limit {
-        Limit::Timeout(timeout) => started + timeout,
-        Limit::Deadline(deadline) => deadline,
-    });
+    let deadline = match limit {
+        None => Deadline::never(),
+        Some(Limit::Timeout(timeout)) => Deadline::after(clock.now(), crate::sys::nanos(timeout)),
+        Some(Limit::Deadline(at)) => Deadline::after(
+            clock.now(),
+            crate::sys::nanos(at.saturating_duration_since(started)),
+        ),
+    };
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::JailExecFailed(format!("cannot run '{program}' in jail {jid}: {e}")))?;
@@ -271,7 +277,7 @@ pub fn run(jid: i32, exec: Exec<'_>) -> Result<ExecOutput> {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let status = if inherit {
-        wait(&mut child, jid, deadline)?
+        wait(&mut child, jid, &clock, deadline)?
     } else {
         let mut sink = |stream: Stream, bytes: &[u8]| match &mut output {
             Output::Stream(callback) => callback(stream, bytes),
@@ -280,7 +286,7 @@ pub fn run(jid: i32, exec: Exec<'_>) -> Result<ExecOutput> {
                 Stream::Stderr => stderr.extend_from_slice(bytes),
             },
         };
-        supervise(&mut child, jid, deadline, &mut sink)?
+        supervise(&mut child, jid, &clock, deadline, &mut sink)?
     };
 
     let exit = match status {
@@ -308,7 +314,8 @@ enum Waited {
 fn supervise(
     child: &mut Child,
     jid: i32,
-    deadline: Option<Instant>,
+    clock: &SystemClock,
+    deadline: Deadline,
     sink: &mut dyn FnMut(Stream, &[u8]),
 ) -> Result<Waited> {
     let mut pipes = Pipes {
@@ -316,53 +323,51 @@ fn supervise(
         stderr: child.stderr.take(),
     };
     let mut exited = None;
-    let mut drain_until: Option<Instant> = None;
+    let mut drain = Deadline::never();
 
     while pipes.any_open() {
-        let now = Instant::now();
+        let now = clock.now();
         if exited.is_none() {
             if let Some(status) = child.try_wait()? {
                 exited = Some(status);
-                drain_until = Some(now + DRAIN_GRACE);
-            } else if deadline.is_some_and(|d| now >= d) {
+                drain = Deadline::after(now, crate::sys::nanos(DRAIN_GRACE));
+            } else if deadline.is_expired(now) {
                 kill_everything(child, || kill_jail_processes(jid));
                 return Ok(Waited::TimedOut);
             }
         }
-        if drain_until.is_some_and(|d| now >= d) {
+        if drain.is_expired(now) {
             break;
         }
 
-        let wake = [deadline.filter(|_| exited.is_none()), drain_until]
-            .into_iter()
-            .flatten()
-            .map(|at| at.saturating_duration_since(now))
-            .fold(TICK, Duration::min);
-        pipes.pump(wake, sink)?;
+        let budget = if exited.is_none() { deadline } else { drain };
+        let wake = budget.clamp_sleep_ns(now, crate::sys::nanos(TICK));
+        pipes.pump(Duration::from_nanos(wake), sink)?;
     }
     drop(pipes);
 
     match exited {
         Some(status) => Ok(Waited::Exited(status)),
-        None => wait(child, jid, deadline),
+        None => wait(child, jid, clock, deadline),
     }
 }
 
 /// Wait for the command alone, honouring the deadline.
-fn wait(child: &mut Child, jid: i32, deadline: Option<Instant>) -> Result<Waited> {
-    let Some(deadline) = deadline else {
+fn wait(child: &mut Child, jid: i32, clock: &SystemClock, deadline: Deadline) -> Result<Waited> {
+    if deadline.expires_at().is_none() {
         return Ok(Waited::Exited(child.wait()?));
-    };
+    }
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(Waited::Exited(status));
         }
-        let now = Instant::now();
-        if now >= deadline {
+        let now = clock.now();
+        if deadline.is_expired(now) {
             kill_everything(child, || kill_jail_processes(jid));
             return Ok(Waited::TimedOut);
         }
-        std::thread::sleep(TICK.min(deadline - now));
+        let nap = deadline.clamp_sleep_ns(now, crate::sys::nanos(TICK));
+        std::thread::sleep(Duration::from_nanos(nap));
     }
 }
 

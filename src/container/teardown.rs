@@ -6,8 +6,9 @@ use crate::error::{Error, Result};
 use crate::host::Layout;
 use crate::manifest::BlackshipConfig;
 use crate::network;
+use deadline_machines::{Clock, Deadline, SystemClock};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// How long to wait for a removed jail to stop showing up by name.
 const JAIL_GONE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -78,9 +79,10 @@ fn remove_jail(name: &str) -> Result<()> {
             "failed to remove jail '{name}' (jid {jid})"
         )));
     }
-    let started = Instant::now();
+    let clock = SystemClock::new();
+    let deadline = Deadline::after(clock.now(), crate::sys::nanos(JAIL_GONE_TIMEOUT));
     while crate::jail::jail_getid(name).is_ok() {
-        if started.elapsed() > JAIL_GONE_TIMEOUT {
+        if deadline.is_expired(clock.now()) {
             return Err(Error::JailOperation(format!(
                 "jail '{name}' still present {}s after removal",
                 JAIL_GONE_TIMEOUT.as_secs()

@@ -4,12 +4,13 @@
 #![allow(unsafe_code)]
 
 use crate::error::{Error, Result};
+use deadline_machines::{Clock, Deadline, NS_PER_SECOND, SystemClock};
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{ForkResult, Pid, fork, pipe};
 use std::ffi::CString;
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Run `command` in jail `jid`; returns (`exit_code`, stdout, stderr).
 pub fn jexec_with_output(jid: i32, command: &[&str]) -> Result<(i32, Vec<u8>, Vec<u8>)> {
@@ -444,11 +445,15 @@ pub fn jexec_with_timeout(
 
             let readers = OutputReaders::spawn(stdout_read, stderr_read);
 
-            let deadline =
-                (timeout_secs > 0).then(|| Instant::now() + Duration::from_secs(timeout_secs));
+            let clock = SystemClock::new();
+            let deadline = if timeout_secs == 0 {
+                Deadline::never()
+            } else {
+                Deadline::after(clock.now(), timeout_secs.saturating_mul(NS_PER_SECOND))
+            };
 
             while crate::proc::wait_exited(child, false) == Ok(false) {
-                if deadline.is_some_and(|deadline| Instant::now() > deadline) {
+                if deadline.is_expired(clock.now()) {
                     if !kill_process_group(child) {
                         // No group yet (child not past setpgid).
                         let _ = nix::sys::signal::kill(child, nix::sys::signal::SIGKILL);

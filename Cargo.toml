@@ -73,6 +73,7 @@ breaker-machines = "0.24.0"
 chrono-machines = "0.11.1"
 throttle-machines = "0.5.0"
 supervisor-machines = "0.4.0"
+deadline-machines = "0.4.0"
 rand = "0.10"
 
 # Async runtime for Warden

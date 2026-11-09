@@ -44,9 +44,15 @@ fn empty_argv_is_rejected_before_spawning() {
 fn supervise_streams_both_pipes_in_order() {
     let mut child = spawn("echo out; echo err >&2; echo out2; exit 3");
     let mut seen: Vec<(Stream, Vec<u8>)> = Vec::new();
-    let waited = supervise(&mut child, NO_JAIL, None, &mut |s, b| {
-        seen.push((s, b.to_vec()));
-    })
+    let waited = supervise(
+        &mut child,
+        NO_JAIL,
+        &SystemClock::new(),
+        Deadline::never(),
+        &mut |s, b| {
+            seen.push((s, b.to_vec()));
+        },
+    )
     .unwrap();
     let Waited::Exited(status) = waited else {
         panic!("expected an exit");
@@ -71,10 +77,12 @@ fn supervise_times_out_and_kills_the_group() {
     let mut child = spawn("echo started; sleep 30 & sleep 30");
     let started = Instant::now();
     let mut out = Vec::new();
+    let clock = SystemClock::new();
     let waited = supervise(
         &mut child,
         NO_JAIL,
-        Some(Instant::now() + Duration::from_millis(300)),
+        &clock,
+        Deadline::after(clock.now(), 300_000_000),
         &mut |_, b| out.extend_from_slice(b),
     )
     .unwrap();
@@ -90,7 +98,14 @@ fn a_background_process_holding_the_pipe_does_not_hang_supervise() {
     // The shell exits at once; its child keeps stdout open for 30s.
     let mut child = spawn("sleep 30 & echo done");
     let started = Instant::now();
-    let waited = supervise(&mut child, NO_JAIL, None, &mut |_, _| {}).unwrap();
+    let waited = supervise(
+        &mut child,
+        NO_JAIL,
+        &SystemClock::new(),
+        Deadline::never(),
+        &mut |_, _| {},
+    )
+    .unwrap();
     let Waited::Exited(status) = waited else {
         panic!("expected an exit");
     };

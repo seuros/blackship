@@ -10,7 +10,9 @@ use std::io;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use deadline_machines::{Clock, Deadline, SystemClock};
 
 /// Whether `pid` has exited, without reaping it, so its group id stays
 /// reserved for a following `kill(-pid)`. `block` waits instead of polling.
@@ -76,7 +78,8 @@ pub fn run_supervised(cmd: &mut Command, timeout: Duration) -> io::Result<Outcom
     let mut stderr_thread = child.stderr.take().map(spawn_reader);
 
     let pid = child.id() as libc::pid_t;
-    let start = Instant::now();
+    let clock = SystemClock::new();
+    let deadline = Deadline::after(clock.now(), crate::sys::nanos(timeout));
 
     loop {
         match wait_exited(nix::unistd::Pid::from_raw(pid), false) {
@@ -95,7 +98,7 @@ pub fn run_supervised(cmd: &mut Command, timeout: Duration) -> io::Result<Outcom
                 }));
             }
             Ok(false) => {
-                if start.elapsed() > timeout {
+                if deadline.is_expired(clock.now()) {
                     reap_group(&mut child, pid);
                     join_pipes(&mut stdout_thread, &mut stderr_thread);
                     return Ok(Outcome::TimedOut);
