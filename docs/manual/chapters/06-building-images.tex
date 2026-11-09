@@ -57,9 +57,11 @@ Instruction & Meaning \\
 \bottomrule
 \end{shiptable}
 
-Source resolution refuses absolute paths and parent traversal. Destination
-writes refuse symlink escapes from the jail root. Ownership is resolved against
-the jail, not the host.
+Source resolution refuses absolute paths and parent traversal. Destinations
+resolve the way the jail sees them: a symlink inside the jail is followed with
+its absolute target re-rooted at the jail root, and \file{..} stops there, so
+package layouts such as \file{/usr/local/www/nginx} work and no link can lead
+a write out of the jail. Ownership is resolved against the jail, not the host.
 
 \section{TOML Jailfiles}
 
@@ -67,33 +69,43 @@ The alternative format is convenient for generated configuration:
 
 \begin{lstlisting}[language=TOML]
 [metadata]
-name = "web"
+name = "nginx-jail"
 version = "1.0"
 
+[build]
 from = "15.1-RELEASE"
 
-[[args]]
+[[build.args]]
 name = "NGINX_VERSION"
 default = "1.30"
 
-[[instructions]]
-type = "run"
-command = "pkg install -y nginx"
+[[build.run]]
+command = 'pkg install -y -g "nginx-${NGINX_VERSION}*"'
 
-[[instructions]]
-type = "copy"
+[[build.copy]]
 src = "nginx.conf"
 dest = "/usr/local/etc/nginx/nginx.conf"
+owner = "root:wheel"
+mode = 0o644
 
-[[expose]]
+[[build.expose]]
 port = 80
 protocol = "tcp"
 
+[start]
 cmd = "/usr/local/sbin/nginx -g 'daemon off;'"
 
 [stop]
 cmd = "/usr/local/sbin/nginx -s quit"
 \end{lstlisting}
+
+The TOML format runs its steps in a fixed order, whatever order the tables
+appear in: \setting{from}, \setting{workdir}, \setting{args}, \setting{env},
+every \setting{run}, every \setting{copy}, then \setting{expose}. No
+\setting{run} step can act on a copied file, so set ownership and permissions
+on the \setting{copy} entry (\setting{owner}, \setting{mode}); when a command
+must follow a copy, use the line format, which keeps the order as written.
+Unknown keys are rejected rather than ignored.
 
 Generate either form with \command{blackship init}; pass \command{--toml} for
 the structured variant.

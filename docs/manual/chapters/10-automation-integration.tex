@@ -153,9 +153,85 @@ BLACKSHIP_MCP_TOKEN=$(openssl rand -hex 24) \
   blackship mcp --listen 192.168.1.10:7340
 \end{lstlisting}
 
-MCP resources include a generated CLI manual, KDL command tree, JSON schemas,
-Jailfile reference, and reserved jail-parameter reference. Because these are
-generated from live code, use them when exact current syntax matters.
+\subsection{Registering a client}
+
+The server needs no root and no existing \file{blackship.toml}: authoring one is
+its purpose. Pass \command{--config <path>} before \command{mcp} to change the
+manifest path the tools default to. A stdio client launches the binary:
+
+\begin{lstlisting}
+{
+  "mcpServers": {
+    "blackship": { "command": "blackship", "args": ["mcp"] }
+  }
+}
+\end{lstlisting}
+
+An HTTP client points at the listener and sends the token:
+
+\begin{lstlisting}
+{
+  "mcpServers": {
+    "blackship": {
+      "type": "http",
+      "url": "http://192.168.1.10:7340/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+\end{lstlisting}
+
+On stdio, standard output carries the JSON-RPC stream, so diagnostics go to
+\file{mcp.log} under the data directory on both transports; \command{RUST\_LOG}
+raises the level.
+
+\subsection{Tools}
+
+\begin{shiptable}{L{0.26\textwidth}L{0.64\textwidth}}
+\toprule
+Tool & Returns or writes \\
+\midrule
+\command{host\_facts} & Kernel version and feature gates, rctl state, CPU
+count, zpools, bootstrapped releases, and every running jail. Call it before
+drafting anything. \\
+\command{manifest\_inspect} & The parsed manifest as JSON, defaults filled in. \\
+\command{manifest\_validate} & Every diagnostic, staged read, parse, validate. \\
+\command{jailfile\_inspect} & The parsed Jailfile as JSON. \\
+\command{jailfile\_validate} & Every bad line with line and column, and which
+parser ran. \\
+\command{manifest\_create} & Writes a \file{blackship.toml}, after approval. \\
+\command{jailfile\_create} & Writes a TOML Jailfile, after approval. \\
+\bottomrule
+\end{shiptable}
+
+\subsection{Prompts}
+
+The prompts carry the workflow, naming the tools to call and their order:
+\command{new\_project} authors a manifest, \command{new\_jailfile} a Jailfile,
+and \command{diagnose\_config} explains why an existing file is rejected.
+
+\subsection{Resources}
+
+\begin{shiptable}{L{0.32\textwidth}L{0.58\textwidth}}
+\toprule
+URI (under \file{blackship:///}) & Contents \\
+\midrule
+\file{man} & The CLI manual, generated from the live command
+spec. \\
+\file{man.kdl} & The command tree as KDL, for structured flag
+data. \\
+\file{schema/manifest} & JSON Schema for \command{manifest\_create}. \\
+\file{schema/jailfile} & JSON Schema for \command{jailfile\_create}. \\
+\file{reference/jailfile} & Supported keywords, the Dockerfile
+constructs that do not exist here, and the TOML step order. \\
+\file{reference/jail-params} & The reserved \command{jail\_set(2)}
+parameters a manifest cannot override, and why. \\
+\bottomrule
+\end{shiptable}
+
+The manual, schemas and keyword list are generated from live code, so a new
+subcommand or parameter appears the day it lands. Use them when exact current
+syntax matters.
 
 \section{CI pattern}
 

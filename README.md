@@ -702,30 +702,39 @@ the jail in `blackship.toml` overrides it.
 name = "nginx-jail"
 version = "1.0"
 
+[build]
 from = "15.1-RELEASE"
 
-[[args]]
+[[build.args]]
 name = "NGINX_VERSION"
 default = "1.30"
 
-[[instructions]]
-type = "run"
-command = "pkg install -y nginx"
+[[build.run]]
+command = 'pkg install -y -g "nginx-${NGINX_VERSION}*"'
 
-[[instructions]]
-type = "copy"
+[[build.copy]]
 src = "nginx.conf"
 dest = "/usr/local/etc/nginx/nginx.conf"
+owner = "root:wheel"
+mode = 0o644
 
-[[expose]]
+[[build.expose]]
 port = 80
 protocol = "tcp"
 
+[start]
 cmd = "/usr/local/sbin/nginx -g 'daemon off;'"
 
 [stop]
 cmd = "/usr/local/sbin/nginx -s quit"
 ```
+
+The TOML format runs its steps in a fixed order, whatever order the tables
+appear in: `from`, `workdir`, `args`, `env`, every `run`, every `copy`, then
+`expose`. No `run` can act on a copied file, so set ownership and permissions on
+the `copy` entry itself (`owner`, `mode`); when a command must follow a copy,
+use the line format, which keeps the order as written. Unknown keys are
+rejected rather than ignored.
 
 ### Build Commands
 
