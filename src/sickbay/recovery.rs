@@ -39,7 +39,7 @@ pub struct RecoveryConfig {
 
 impl RecoveryConfig {
     /// Get cooldown as Duration
-    pub fn cooldown_duration(&self) -> std::time::Duration {
+    pub const fn cooldown_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.cooldown)
     }
 
@@ -52,11 +52,11 @@ impl RecoveryConfig {
     }
 }
 
-fn default_max_attempts() -> u32 {
+const fn default_max_attempts() -> u32 {
     3
 }
 
-fn default_cooldown() -> u64 {
+const fn default_cooldown() -> u64 {
     60
 }
 

@@ -38,9 +38,10 @@ pub fn validate_name(kind: &str, name: &str) -> Result<()> {
 /// Root directory for on-disk state stores, falling back to the packaged
 /// default when no config was loaded.
 pub fn data_root(config: Option<&BlackshipConfig>) -> PathBuf {
-    config
-        .map(|cfg| cfg.config.data_dir.clone())
-        .unwrap_or_else(|| PathBuf::from("/var/blackship"))
+    config.map_or_else(
+        || PathBuf::from("/var/blackship"),
+        |cfg| cfg.config.data_dir.clone(),
+    )
 }
 
 /// Reject a store record name that would escape its store directory.
@@ -91,8 +92,8 @@ fn validate_zfs_component(kind: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Read a config file, mapping IO errors to ConfigRead
-pub(crate) fn read_config_file(path: &Path) -> Result<String> {
+/// Read a config file, mapping IO errors to `ConfigRead`
+pub fn read_config_file(path: &Path) -> Result<String> {
     fs::read_to_string(path).map_err(|e| Error::ConfigRead {
         path: path.to_path_buf(),
         source: e,
@@ -169,7 +170,7 @@ pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
         });
     }
 
-    let mut config = base.unwrap();
+    let mut config = base.expect("paths is non-empty, checked above");
 
     if config.config.project.is_none() {
         config.config.project = Some(project_name_from_path(first_path));
@@ -180,7 +181,7 @@ pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
 }
 
 /// Root configuration structure
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BlackshipConfig {
     /// Global configuration settings
     pub config: GlobalConfig,
@@ -288,7 +289,7 @@ impl BlackshipConfig {
             .find(|j| self.full_name_matches(&j.name, name))
     }
 
-    /// Resolve a jail identifier to (service_name, full_name)
+    /// Resolve a jail identifier to (`service_name`, `full_name`)
     pub fn resolve_jail_names(&self, name: &str) -> Option<(String, String)> {
         let names_of = |jail: &JailDef| (jail.name.clone(), self.jail_name(&jail.name));
 
@@ -365,7 +366,7 @@ impl BlackshipConfig {
     ///
     /// Later values override earlier ones at the field level.
     /// Jails with the same name are deep-merged.
-    pub fn merge(mut self, other: BlackshipConfig) -> BlackshipConfig {
+    pub fn merge(mut self, other: Self) -> Self {
         // Merge global config (other overrides self)
         self.config = self.config.merge(other.config);
 
@@ -419,7 +420,7 @@ pub fn black_ship_name_from_path(path: &Path) -> String {
 }
 
 /// Global configuration settings
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GlobalConfig {
     /// Project name (used as prefix for jail names)
     /// If not set, a random Black Ship name will be used
@@ -433,7 +434,7 @@ pub struct GlobalConfig {
     #[serde(default)]
     pub zfs_enabled: bool,
 
-    /// ZFS pool name (required if zfs_enabled is true)
+    /// ZFS pool name (required if `zfs_enabled` is true)
     pub zpool: Option<String>,
 
     /// Base dataset name under the pool
@@ -475,7 +476,7 @@ pub struct GlobalConfig {
     /// Bridge VLAN configuration (FreeBSD 15.0+)
     pub bridge: Option<BridgeVlanConfig>,
 
-    /// How often `supervise` samples racct usage into scope peaks and OTel
+    /// How often `supervise` samples racct usage into scope peaks and `OTel`
     /// gauges. Defaults to 30s; `0` disables sampling.
     pub usage_sample_secs: Option<u64>,
 }
@@ -492,48 +493,48 @@ impl GlobalConfig {
     }
 
     /// Get the effective project name
-    /// Should always be set by load/load_merged, but falls back to "blackship" if not
+    /// Should always be set by `load/load_merged`, but falls back to "blackship" if not
     pub fn project_name(&self) -> &str {
         self.project.as_deref().unwrap_or("blackship")
     }
 
-    /// Merge another GlobalConfig into this one
+    /// Merge another `GlobalConfig` into this one
     /// Other's values override self's where specified
-    fn merge(self, other: GlobalConfig) -> GlobalConfig {
-        GlobalConfig {
+    fn merge(self, other: Self) -> Self {
+        Self {
             project: other.project.or(self.project),
-            data_dir: if other.data_dir != default_data_dir() {
-                other.data_dir
-            } else {
+            data_dir: if other.data_dir == default_data_dir() {
                 self.data_dir
+            } else {
+                other.data_dir
             },
             zfs_enabled: other.zfs_enabled,
             monitor_ping_url: other.monitor_ping_url.or(self.monitor_ping_url),
             zpool: other.zpool.or(self.zpool),
-            dataset: if other.dataset != default_dataset() {
-                other.dataset
-            } else {
+            dataset: if other.dataset == default_dataset() {
                 self.dataset
-            },
-            releases_dir: if other.releases_dir != default_releases_dir() {
-                other.releases_dir
             } else {
+                other.dataset
+            },
+            releases_dir: if other.releases_dir == default_releases_dir() {
                 self.releases_dir
-            },
-            cache_dir: if other.cache_dir != default_cache_dir() {
-                other.cache_dir
             } else {
+                other.releases_dir
+            },
+            cache_dir: if other.cache_dir == default_cache_dir() {
                 self.cache_dir
-            },
-            mirror_url: if other.mirror_url != default_mirror_url() {
-                other.mirror_url
             } else {
+                other.cache_dir
+            },
+            mirror_url: if other.mirror_url == default_mirror_url() {
                 self.mirror_url
-            },
-            bootstrap_archives: if other.bootstrap_archives != default_bootstrap_archives() {
-                other.bootstrap_archives
             } else {
+                other.mirror_url
+            },
+            bootstrap_archives: if other.bootstrap_archives == default_bootstrap_archives() {
                 self.bootstrap_archives
+            } else {
+                other.bootstrap_archives
             },
             rate_limit: other.rate_limit, // Take other's rate limit config
             health: other.health,         // Take other's health defaults
@@ -544,30 +545,61 @@ impl GlobalConfig {
     }
 }
 
+/// The same values serde fills in for an empty `[config]` table.
+impl Default for GlobalConfig {
+    fn default() -> Self {
+        Self {
+            project: None,
+            data_dir: default_data_dir(),
+            zfs_enabled: false,
+            zpool: None,
+            dataset: default_dataset(),
+            releases_dir: default_releases_dir(),
+            cache_dir: default_cache_dir(),
+            mirror_url: default_mirror_url(),
+            monitor_ping_url: None,
+            bootstrap_archives: default_bootstrap_archives(),
+            rate_limit: RateLimitConfig::default(),
+            health: HealthDefaults::default(),
+            retry: RetryConfig::default(),
+            bridge: None,
+            usage_sample_secs: None,
+        }
+    }
+}
+
+/// An empty manifest: default paths, no jails, no networks.
+impl Default for BlackshipConfig {
+    fn default() -> Self {
+        Self {
+            config: GlobalConfig::default(),
+            networks: Vec::new(),
+            jails: Vec::new(),
+            telemetry: None,
+        }
+    }
+}
+
 fn default_dataset() -> String {
     "blackship".into()
 }
 
 /// Get user's home directory, falling back to /root
 fn get_home_dir() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/root"))
+    std::env::var("HOME").map_or_else(|_| PathBuf::from("/root"), PathBuf::from)
 }
 
 /// Get XDG data directory for blackship (~/.local/share/blackship)
 pub fn get_xdg_data_dir() -> PathBuf {
     std::env::var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| get_home_dir().join(".local/share"))
+        .map_or_else(|_| get_home_dir().join(".local/share"), PathBuf::from)
         .join("blackship")
 }
 
 /// Get XDG cache directory for blackship (~/.cache/blackship)
 pub fn get_xdg_cache_dir() -> PathBuf {
     std::env::var("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| get_home_dir().join(".cache"))
+        .map_or_else(|_| get_home_dir().join(".cache"), PathBuf::from)
         .join("blackship")
 }
 
@@ -592,15 +624,15 @@ fn default_bootstrap_archives() -> Vec<String> {
     vec!["base".into()]
 }
 
-fn default_jail_start_capacity() -> f64 {
+const fn default_jail_start_capacity() -> f64 {
     3.0
 }
 
-fn default_health_capacity() -> f64 {
+const fn default_health_capacity() -> f64 {
     5.0
 }
 
-fn default_health_refill_rate() -> f64 {
+const fn default_health_refill_rate() -> f64 {
     0.5
 }
 
@@ -630,19 +662,19 @@ impl Default for RateLimitConfig {
     }
 }
 
-fn default_health_interval() -> u64 {
+const fn default_health_interval() -> u64 {
     30
 }
 
-fn default_health_timeout() -> u64 {
+const fn default_health_timeout() -> u64 {
     10
 }
 
-fn default_health_start_period() -> u64 {
+const fn default_health_start_period() -> u64 {
     60
 }
 
-fn default_health_retries() -> u32 {
+const fn default_health_retries() -> u32 {
     3
 }
 
@@ -681,23 +713,23 @@ impl Default for HealthDefaults {
 }
 
 // Retry configuration defaults
-fn default_base_delay_ms() -> u64 {
+const fn default_base_delay_ms() -> u64 {
     1000
 }
 
-fn default_max_delay_ms() -> u64 {
+const fn default_max_delay_ms() -> u64 {
     30000
 }
 
-fn default_multiplier() -> f64 {
+const fn default_multiplier() -> f64 {
     2.0
 }
 
-fn default_max_attempts() -> u8 {
+const fn default_max_attempts() -> u8 {
     5
 }
 
-fn default_jitter_factor() -> f64 {
+const fn default_jitter_factor() -> f64 {
     0.25
 }
 
@@ -740,7 +772,7 @@ impl Default for RetryConfig {
 /// Network configuration
 ///
 /// Used for defining virtual networks that jails can be attached to.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NetworkConfig {
     /// Network name
     pub name: String,
@@ -809,7 +841,7 @@ pub struct JailDef {
     #[serde(default)]
     pub depends_on: Vec<String>,
 
-    /// Jail parameters (exec.start, allow.raw_sockets, etc.)
+    /// Jail parameters (exec.start, `allow.raw_sockets`, etc.)
     #[serde(default)]
     pub params: HashMap<String, toml::Value>,
 
@@ -845,7 +877,7 @@ pub struct JailDef {
     pub ephemeral: Option<bool>,
 
     /// devfs ruleset applied to the jail's /dev mount.
-    /// Defaults to ruleset 4 (devfsrules_jail); set to 0 to skip mounting devfs.
+    /// Defaults to ruleset 4 (`devfsrules_jail`); set to 0 to skip mounting devfs.
     pub devfs_ruleset: Option<u32>,
 
     /// Run /etc/rc at start and /etc/rc.shutdown at stop (default: true).
@@ -875,9 +907,8 @@ impl JailDef {
         }
     }
 
-    /// The resource profile to apply at start: the QoS startup profile when
-    /// two-phase QoS is configured, else the static `resources` block.
-    pub fn startup_resources(&self) -> &crate::rctl::ResourceConfig {
+    /// The `QoS` startup profile when configured, else the static `resources` block.
+    pub const fn startup_resources(&self) -> &crate::rctl::ResourceConfig {
         match &self.qos {
             Some(qos) => &qos.startup,
             None => &self.resources,
@@ -910,11 +941,11 @@ impl JailDef {
         candidate.exists().then_some(candidate)
     }
 
-    /// Merge another JailDef into this one (Docker Compose-style deep merge)
+    /// Merge another `JailDef` into this one (Docker Compose-style deep merge)
     ///
-    /// Other's values override self's where specified (Option::Some or non-empty Vec)
-    pub fn merge(self, other: JailDef) -> JailDef {
-        JailDef {
+    /// Other's values override self's where specified (`Option::Some` or non-empty Vec)
+    pub fn merge(self, other: Self) -> Self {
+        Self {
             name: other.name, // Name should match
             path: other.path.or(self.path),
             release: other.release.or(self.release),
@@ -988,11 +1019,11 @@ impl Default for DrainConfig {
     }
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_drain_timeout() -> u64 {
+const fn default_drain_timeout() -> u64 {
     30
 }
 
@@ -1045,12 +1076,12 @@ pub struct JailNetworkConfig {
 /// DNS configuration for a jail
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct DnsConfig {
-    /// DNS servers (e.g., ["8.8.8.8", "8.8.4.4"])
+    /// DNS servers (e.g., `["8.8.8.8", "8.8.4.4"]`)
     /// If empty, uses "inherit" mode (copies from host)
     #[serde(default)]
     pub nameservers: Vec<String>,
 
-    /// Search domains (e.g., ["example.com", "local"])
+    /// Search domains (e.g., `["example.com", "local"]`)
     #[serde(default)]
     pub search: Vec<String>,
 
@@ -1082,7 +1113,7 @@ impl DnsConfig {
         let mut content = String::new();
 
         if let Some(domain) = &self.domain {
-            let _ = writeln!(content, "domain {domain}");
+            let _ = writeln!(content, "domain {domain}"); // fmt::Write into a String is infallible
         }
 
         if !self.search.is_empty() {
@@ -1097,7 +1128,7 @@ impl DnsConfig {
         }
 
         for ns in &self.nameservers {
-            let _ = writeln!(content, "nameserver {ns}");
+            let _ = writeln!(content, "nameserver {ns}"); // fmt::Write into a String is infallible
         }
 
         Some(content)

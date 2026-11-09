@@ -98,8 +98,7 @@ impl IpPool {
         subnet: impl std::fmt::Display,
     ) -> Result<IpAddr> {
         for ip in hosts {
-            if !allocated.contains(&ip) {
-                allocated.insert(ip);
+            if allocated.insert(ip) {
                 return Ok(ip);
             }
         }
@@ -138,11 +137,11 @@ impl IpPool {
 
     // Test-only accessors for verifying internal state
     #[cfg(test)]
-    pub fn subnet(&self) -> IpNet {
+    pub const fn subnet(&self) -> IpNet {
         self.subnet
     }
 
-    pub fn gateway(&self) -> IpAddr {
+    pub const fn gateway(&self) -> IpAddr {
         self.gateway
     }
 

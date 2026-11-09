@@ -2,8 +2,8 @@ use super::*;
 
 #[test]
 fn test_resolve_stop_prefers_manifest_over_jailfile() {
-    let dir = std::env::temp_dir().join(format!("blackship-stop-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let jailfile = dir.join("Jailfile");
     std::fs::write(&jailfile, "FROM 15.1-RELEASE\nSTOP from-jailfile\n").unwrap();
 
@@ -33,8 +33,6 @@ stop = "from-manifest"
 
     let neither: JailDef = toml::from_str("name = \"web\"\n").unwrap();
     assert_eq!(neither.resolve_stop(), None);
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -200,4 +198,14 @@ name = "demo-api"
     assert!(config.resolve_jail_names("demo").is_none());
     assert!(config.resolve_jail_names("demo-").is_none());
     assert!(config.resolve_jail_names("zzz").is_none());
+}
+
+#[test]
+fn default_global_config_matches_an_empty_config_table() {
+    let parsed: BlackshipConfig = toml::from_str("[config]\n").unwrap();
+    let built = BlackshipConfig::default();
+    assert_eq!(
+        toml::to_string(&parsed).unwrap(),
+        toml::to_string(&built).unwrap()
+    );
 }

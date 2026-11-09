@@ -16,10 +16,10 @@ use std::net::IpAddr;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkBackend {
-    /// if_bridge + if_epair (the default)
+    /// `if_bridge` + `if_epair` (the default)
     #[default]
     Epair,
-    /// ng_bridge + ng_eiface (netgraph)
+    /// `ng_bridge` + `ng_eiface` (netgraph)
     Netgraph,
 }
 
@@ -59,12 +59,12 @@ impl VnetConfig {
     }
 
     /// Set VLAN ID for the jail's interface
-    pub fn with_vlan_id(mut self, vlan_id: u16) -> Self {
+    pub const fn with_vlan_id(mut self, vlan_id: u16) -> Self {
         self.vlan_id = Some(vlan_id);
         self
     }
 
-    pub fn with_backend(mut self, backend: NetworkBackend) -> Self {
+    pub const fn with_backend(mut self, backend: NetworkBackend) -> Self {
         self.backend = backend;
         self
     }
@@ -72,9 +72,9 @@ impl VnetConfig {
 
 /// Wait for a dying jail's interface to be swept back to the host vnet.
 ///
-/// vnet_if_return moves a dead jail's ifnets home asynchronously. Destroying
+/// `vnet_if_return` moves a dead jail's ifnets home asynchronously. Destroying
 /// an interface while that sweep is in flight races the kernel's bpf list
-/// (bpf_vmove panics on dead_bpf_if; observed on 16.0-CURRENT). Once the
+/// (`bpf_vmove` panics on `dead_bpf_if`; observed on 16.0-CURRENT). Once the
 /// ifnet is host-visible again the sweep is done and teardown is safe.
 fn wait_for_host_return(ifname: &str) {
     for _ in 0..50 {
@@ -140,6 +140,7 @@ impl VnetSetup {
         if let Some(ref mac) = config.mac_address
             && let Err(e) = epair.set_mac_address(mac)
         {
+            // Rollback; keep the original error.
             let _ = epair.destroy();
             return Err(e);
         }
@@ -150,6 +151,7 @@ impl VnetSetup {
             bridge.add_member(epair.host_side())
         };
         if let Err(e) = add_result {
+            // Rollback; keep the original error.
             let _ = epair.destroy();
             return Err(e);
         }
@@ -174,6 +176,7 @@ impl VnetSetup {
         if let Some(ref mac) = config.mac_address
             && let Err(e) = eiface.set_mac_address(mac)
         {
+            // Rollback; keep the original error.
             let _ = eiface.destroy();
             return Err(e);
         }
@@ -232,6 +235,7 @@ impl VnetSetup {
         match &self.interface {
             VnetInterface::Epair(epair) => {
                 if let Ok(bridge) = Bridge::open(&self.bridge_name) {
+                    // Best-effort: destroy detaches it anyway.
                     let _ = bridge.remove_member(epair.host_side());
                 }
                 epair.destroy()
@@ -279,6 +283,7 @@ impl VnetSetup {
                     )));
                 }
                 if let Ok(bridge) = Bridge::open(&record.bridge) {
+                    // Best-effort: destroy detaches it anyway.
                     let _ = bridge.remove_member(&record.host_interface);
                 }
                 EpairInterface::from_existing(

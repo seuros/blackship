@@ -7,6 +7,9 @@
 //! No host uplink is attached: the bridge must be wired to a NIC externally
 //! (e.g. `ngctl`) or jails sit on an isolated segment with no gateway.
 
+// FFI module: libnetgraph(3) control sockets.
+#![allow(unsafe_code)]
+
 use crate::error::{Error, Result};
 use crate::network::ioctl;
 use std::ffi::{CStr, CString};
@@ -75,6 +78,7 @@ const _: [(); SIZEOF_LINKINFO] = [(); std::mem::size_of::<NgLinkInfo>()];
 
 // --- libnetgraph FFI ---
 
+// SAFETY: prototypes match libnetgraph's <netgraph.h>.
 #[link(name = "netgraph")]
 unsafe extern "C" {
     fn NgMkSockNode(name: *const c_char, csp: *mut c_int, dsp: *mut c_int) -> c_int;
@@ -98,9 +102,10 @@ fn fill_fixed<const N: usize>(buf: &mut [c_char; N], s: &str) -> Result<()> {
     if bytes.len() > N {
         return Err(Error::Network(format!("String too long for buffer: {s}")));
     }
+    // SAFETY: bytes.len() <= N checked above; buffers are distinct.
     unsafe {
         std::ptr::copy_nonoverlapping(
-            bytes.as_ptr() as *const c_char,
+            bytes.as_ptr().cast::<c_char>(),
             buf.as_mut_ptr(),
             bytes.len(),
         );
@@ -129,21 +134,37 @@ struct HookRecord {
 /// A netgraph control socket pair (control + data).
 struct NgSocket {
     cs: c_int,
-    _ds: c_int,
+    ds: c_int,
 }
 
 impl NgSocket {
     fn new() -> Result<Self> {
         let mut cs: c_int = -1;
         let mut ds: c_int = -1;
-        let rc = unsafe { NgMkSockNode(std::ptr::null(), &mut cs, &mut ds) };
+        // SAFETY: valid out-pointers; null name lets the kernel pick one.
+        let rc = unsafe { NgMkSockNode(std::ptr::null(), &raw mut cs, &raw mut ds) };
         if rc < 0 {
             return Err(ng_error("NgMkSockNode failed"));
         }
-        Ok(Self { cs, _ds: ds })
+        Ok(Self { cs, ds })
     }
 
-    fn send_msg(
+    fn send_msg(&self, path: &str, cookie: i32, cmd: i32) -> Result<()> {
+        self.send_raw(path, cookie, cmd, std::ptr::null(), 0)
+    }
+
+    fn send_msg_with<T>(&self, path: &str, cookie: i32, cmd: i32, arg: &T) -> Result<()> {
+        self.send_raw(
+            path,
+            cookie,
+            cmd,
+            std::ptr::from_ref::<T>(arg).cast(),
+            std::mem::size_of::<T>(),
+        )
+    }
+
+    /// Sound only via the callers above: null/0, or a live `&T` and its size.
+    fn send_raw(
         &self,
         path: &str,
         cookie: i32,
@@ -152,6 +173,7 @@ impl NgSocket {
         arglen: usize,
     ) -> Result<()> {
         let cpath = CString::new(path).map_err(|e| Error::Network(format!("Invalid path: {e}")))?;
+        // SAFETY: cpath outlives the call; arg/arglen are valid per the callers.
         let rc = unsafe { NgSendMsg(self.cs, cpath.as_ptr(), cookie, cmd, arg, arglen) };
         if rc < 0 {
             return Err(ng_error(&format!("NgSendMsg({path}, cmd={cmd}) failed")));
@@ -162,15 +184,16 @@ impl NgSocket {
     /// Receive a reply (header + data). 64 KiB buffer holds ~400+ hook lists.
     fn recv_msg(&self) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; NG_MESG_HEADER_SIZE + 65536];
+        // SAFETY: buf is writable for buf.len() bytes; null path is allowed.
         let rc = unsafe { NgRecvMsg(self.cs, buf.as_mut_ptr(), buf.len(), std::ptr::null_mut()) };
-        if rc < 0 {
+        let Ok(received) = usize::try_from(rc) else {
             return Err(ng_error("NgRecvMsg failed"));
-        }
-        let received = rc as usize;
+        };
         if received < NG_MESG_HEADER_SIZE {
             return Err(Error::Network("NgRecvMsg: truncated response".into()));
         }
-        let header = unsafe { std::ptr::read_unaligned(buf.as_ptr() as *const NgMesgHeader) };
+        // SAFETY: full header received; unaligned read of POD.
+        let header = unsafe { std::ptr::read_unaligned(buf.as_ptr().cast::<NgMesgHeader>()) };
         let arglen = header.arglen as usize;
         if NG_MESG_HEADER_SIZE + arglen > received {
             return Err(Error::Network(
@@ -181,18 +204,13 @@ impl NgSocket {
     }
 
     fn mkpeer(&self, path: &str, type_: &str, ourhook: &str, peerhook: &str) -> Result<()> {
+        // SAFETY: plain-data struct; all-zero is valid.
         let mut arg: NgmMkpeer = unsafe { std::mem::zeroed() };
         fill_fixed(&mut arg.type_, type_)?;
         fill_fixed(&mut arg.ourhook, ourhook)?;
         fill_fixed(&mut arg.peerhook, peerhook)?;
 
-        self.send_msg(
-            path,
-            NGM_GENERIC_COOKIE,
-            NGM_MKPEER,
-            &arg as *const _ as *const c_void,
-            std::mem::size_of::<NgmMkpeer>(),
-        )
+        self.send_msg_with(path, NGM_GENERIC_COOKIE, NGM_MKPEER, &arg)
     }
 
     /// Name a node. Passes "%s" as the format to avoid format-string injection.
@@ -200,6 +218,7 @@ impl NgSocket {
         let cpath = CString::new(path).map_err(|e| Error::Network(format!("Invalid path: {e}")))?;
         let cname = CString::new(name).map_err(|e| Error::Network(format!("Invalid name: {e}")))?;
         let fmt = c"%s";
+        // SAFETY: strings outlive the call; "%s" consumes the one char* vararg.
         let rc = unsafe { NgNameNode(self.cs, cpath.as_ptr(), fmt.as_ptr(), cname.as_ptr()) };
         if rc < 0 {
             return Err(ng_error(&format!("NgNameNode({path}, {name}) failed")));
@@ -208,16 +227,11 @@ impl NgSocket {
     }
 
     fn rmhook(&self, path: &str, hook: &str) -> Result<()> {
+        // SAFETY: plain-data struct; all-zero is valid.
         let mut arg: NgmRmhook = unsafe { std::mem::zeroed() };
         fill_fixed(&mut arg.ourhook, hook)?;
 
-        self.send_msg(
-            path,
-            NGM_GENERIC_COOKIE,
-            NGM_RMHOOK,
-            &arg as *const _ as *const c_void,
-            std::mem::size_of::<NgmRmhook>(),
-        )
+        self.send_msg_with(path, NGM_GENERIC_COOKIE, NGM_RMHOOK, &arg)
     }
 
     /// Query all hooks on a node; returns (next free link index, hooks).
@@ -226,10 +240,11 @@ impl NgSocket {
         path: &str,
         expected_type: Option<&str>,
     ) -> Result<(u32, Vec<HookRecord>)> {
-        self.send_msg(path, NGM_GENERIC_COOKIE, NGM_LISTHOOKS, std::ptr::null(), 0)?;
+        self.send_msg(path, NGM_GENERIC_COOKIE, NGM_LISTHOOKS)?;
 
         let buf = self.recv_msg()?;
-        let header = unsafe { std::ptr::read_unaligned(buf.as_ptr() as *const NgMesgHeader) };
+        // SAFETY: recv_msg guarantees a full header; unaligned read of POD.
+        let header = unsafe { std::ptr::read_unaligned(buf.as_ptr().cast::<NgMesgHeader>()) };
         let arglen = header.arglen as usize;
 
         let data = &buf[NG_MESG_HEADER_SIZE..NG_MESG_HEADER_SIZE + arglen];
@@ -238,12 +253,12 @@ impl NgSocket {
         if data.len() < std::mem::size_of::<NgNodeInfo>() {
             return Ok((0, Vec::new()));
         }
-        let nodeinfo = unsafe { std::ptr::read_unaligned(data.as_ptr() as *const NgNodeInfo) };
+        // SAFETY: length checked above; unaligned read of POD.
+        let nodeinfo = unsafe { std::ptr::read_unaligned(data.as_ptr().cast::<NgNodeInfo>()) };
 
         if let Some(expected) = expected_type {
-            let type_bytes = unsafe { &*(&nodeinfo.type_ as *const [c_char] as *const [u8]) };
-            let type_cstr = CStr::from_bytes_until_nul(type_bytes).unwrap_or(c"");
-            let actual = type_cstr.to_str().unwrap_or("");
+            let actual =
+                String::from_utf8(crate::sys::c_buf_bytes(&nodeinfo.type_)).unwrap_or_default();
             if actual != expected {
                 return Err(Error::Network(format!(
                     "Node '{path}' is type '{actual}', expected '{expected}'"
@@ -267,16 +282,13 @@ impl NgSocket {
             if off + link_size > data.len() {
                 break;
             }
+            // SAFETY: bounds checked above; unaligned read of POD.
             let link =
-                unsafe { std::ptr::read_unaligned(data[off..].as_ptr() as *const NgLinkInfo) };
-            let ourhook_bytes = unsafe { &*(&link.ourhook as *const [c_char] as *const [u8]) };
-            let hook_name = CStr::from_bytes_until_nul(ourhook_bytes).unwrap_or(c"");
-            let peertype_bytes =
-                unsafe { &*(&link.nodeinfo.type_ as *const [c_char] as *const [u8]) };
-            let peer_type = CStr::from_bytes_until_nul(peertype_bytes).unwrap_or(c"");
-
-            let hook_str = hook_name.to_str().unwrap_or("").to_string();
-            let type_str = peer_type.to_str().unwrap_or("").to_string();
+                unsafe { std::ptr::read_unaligned(data[off..].as_ptr().cast::<NgLinkInfo>()) };
+            let hook_str =
+                String::from_utf8(crate::sys::c_buf_bytes(&link.ourhook)).unwrap_or_default();
+            let type_str = String::from_utf8(crate::sys::c_buf_bytes(&link.nodeinfo.type_))
+                .unwrap_or_default();
 
             if let Some(idx_str) = hook_str.strip_prefix("link")
                 && let Ok(idx) = idx_str.parse::<u32>()
@@ -298,41 +310,28 @@ impl NgSocket {
 
     /// Make the bridge persistent so it survives hook disconnects.
     fn set_persistent(&self, path: &str) -> Result<()> {
-        self.send_msg(
-            path,
-            NGM_BRIDGE_COOKIE,
-            NGM_BRIDGE_SET_PERSISTENT,
-            std::ptr::null(),
-            0,
-        )
+        self.send_msg(path, NGM_BRIDGE_COOKIE, NGM_BRIDGE_SET_PERSISTENT)
     }
 
     /// Shut down a netgraph node.
     fn shutdown_node(&self, path: &str) -> Result<()> {
-        self.send_msg(path, NGM_GENERIC_COOKIE, NGM_SHUTDOWN, std::ptr::null(), 0)
+        self.send_msg(path, NGM_GENERIC_COOKIE, NGM_SHUTDOWN)
     }
 
     /// Query an eiface node for its interface name (e.g. "ngeth0").
     fn eiface_get_ifname(&self, path: &str) -> Result<String> {
-        self.send_msg(
-            path,
-            NGM_EIFACE_COOKIE,
-            NGM_EIFACE_GET_IFNAME,
-            std::ptr::null(),
-            0,
-        )?;
+        self.send_msg(path, NGM_EIFACE_COOKIE, NGM_EIFACE_GET_IFNAME)?;
 
         let buf = self.recv_msg()?;
-        let header = unsafe { std::ptr::read_unaligned(buf.as_ptr() as *const NgMesgHeader) };
+        // SAFETY: recv_msg guarantees a full header; unaligned read of POD.
+        let header = unsafe { std::ptr::read_unaligned(buf.as_ptr().cast::<NgMesgHeader>()) };
         let arglen = header.arglen as usize;
         if arglen == 0 {
             return Err(Error::Network("eiface returned empty ifname".into()));
         }
         let data = &buf[NG_MESG_HEADER_SIZE..NG_MESG_HEADER_SIZE + arglen];
-        if !data.contains(&0) {
-            return Err(Error::Network("eiface ifname not NUL-terminated".into()));
-        }
-        let cstr = unsafe { CStr::from_ptr(data.as_ptr() as *const c_char) };
+        let cstr = CStr::from_bytes_until_nul(data)
+            .map_err(|_| Error::Network("eiface ifname not NUL-terminated".into()))?;
         cstr.to_str()
             .map(std::string::ToString::to_string)
             .map_err(|e| Error::Network(format!("Invalid ifname: {e}")))
@@ -341,16 +340,17 @@ impl NgSocket {
 
 impl Drop for NgSocket {
     fn drop(&mut self) {
+        // SAFETY: we own both fds and close them exactly once.
         unsafe {
             libc::close(self.cs);
-            libc::close(self._ds);
+            libc::close(self.ds);
         }
     }
 }
 
 // --- Public API ---
 
-/// An ng_bridge node and its connected ng_eiface peers.
+/// An `ng_bridge` node and its connected `ng_eiface` peers.
 #[derive(Debug, Clone)]
 pub struct NgBridge {
     /// ng node name.
@@ -360,7 +360,7 @@ pub struct NgBridge {
 }
 
 impl NgBridge {
-    /// Create a new ng_bridge node, loading kernel modules if needed.
+    /// Create a new `ng_bridge` node, loading kernel modules if needed.
     pub fn create(name: &str) -> Result<Self> {
         load_ng_modules()?;
 
@@ -384,7 +384,7 @@ impl NgBridge {
         })
     }
 
-    /// Open an existing ng_bridge node by name.
+    /// Open an existing `ng_bridge` node by name.
     pub fn open(name: &str) -> Result<Self> {
         let sock = NgSocket::new()?;
         let path = format!("{name}:");
@@ -398,7 +398,7 @@ impl NgBridge {
         })
     }
 
-    /// Create or open an existing ng_bridge.
+    /// Create or open an existing `ng_bridge`.
     pub fn create_or_open(name: &str) -> Result<Self> {
         match Self::open(name) {
             Ok(b) => Ok(b),
@@ -406,7 +406,7 @@ impl NgBridge {
         }
     }
 
-    /// Create an ng_eiface peer on this bridge; cleans up on partial failure.
+    /// Create an `ng_eiface` peer on this bridge; cleans up on partial failure.
     pub fn add_eiface(&mut self) -> Result<NgEiface> {
         let sock = NgSocket::new()?;
         let bridge_path = format!("{}:", self.name);
@@ -444,13 +444,14 @@ impl NgBridge {
         let ifname = match sock.eiface_get_ifname(&eiface_path) {
             Ok(name) => name,
             Err(e) => {
+                // Rollback; keep the original error.
                 let _ = sock.shutdown_node(&eiface_path);
                 return Err(e);
             }
         };
 
         if let Err(e) = ioctl::set_interface_up(&ifname, true) {
-            // Shutting down the eiface node destroys both it and its ifnet.
+            // Rollback: shutting down the eiface destroys it and its ifnet.
             let _ = sock.shutdown_node(&eiface_path);
             return Err(e);
         }
@@ -464,30 +465,27 @@ impl NgBridge {
 
     /// Shut down all attached eiface peers, then the bridge node itself.
     ///
-    /// ng_eiface does NOT self-destruct on hook disconnect, so each peer needs an
-    /// explicit shutdown while still addressable. Non-eiface peers (ng_ether
+    /// `ng_eiface` does NOT self-destruct on hook disconnect, so each peer needs an
+    /// explicit shutdown while still addressable. Non-eiface peers (`ng_ether`
     /// uplinks) are left alone; bridge shutdown just disconnects their hooks.
     pub fn destroy(&self) -> Result<()> {
         let sock = NgSocket::new()?;
         let bridge_path = format!("{}:", self.name);
 
         let mut first_err: Option<Error> = None;
-        match sock.query_hooks(&bridge_path, None) {
-            Ok((_, hooks)) => {
-                for hook in &hooks {
-                    if hook.peer_type == "eiface" {
-                        let peer_path = format!("{}:{}", self.name, hook.hook_name);
-                        if let Err(e) = sock.shutdown_node(&peer_path)
-                            && first_err.is_none()
-                        {
-                            first_err = Some(e);
-                        }
+        if let Ok((_, hooks)) = sock.query_hooks(&bridge_path, None) {
+            for hook in &hooks {
+                if hook.peer_type == "eiface" {
+                    let peer_path = format!("{}:{}", self.name, hook.hook_name);
+                    if let Err(e) = sock.shutdown_node(&peer_path)
+                        && first_err.is_none()
+                    {
+                        first_err = Some(e);
                     }
                 }
             }
-            Err(_) => {
-                // Bridge may already be partially gone; try shutdown anyway.
-            }
+        } else {
+            // Bridge may already be partially gone; try shutdown anyway.
         }
 
         // Bail rather than destroy the bridge and orphan a live eiface.
@@ -499,7 +497,7 @@ impl NgBridge {
     }
 }
 
-/// An ng_eiface node: like one side of an epair, movable into a jail VNET.
+/// An `ng_eiface` node: like one side of an epair, movable into a jail VNET.
 #[derive(Debug, Clone)]
 pub struct NgEiface {
     /// Name of the parent bridge node.
@@ -543,7 +541,7 @@ impl NgEiface {
         // Best-effort: the bridge may already be gone.
         if !self.link_hook.is_empty() {
             let bridge_path = format!("{}:", self.bridge_name);
-            let _ = sock.rmhook(&bridge_path, &self.link_hook);
+            let _ = sock.rmhook(&bridge_path, &self.link_hook); // gone bridge is fine
         }
 
         // Address by ifname so this works whether or not the bridge hook survives.

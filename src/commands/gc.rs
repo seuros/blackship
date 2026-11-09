@@ -6,22 +6,38 @@ use crate::error::Result;
 use crate::gc::{self, Orphan, Reaper};
 use crate::manifest;
 
+/// Flags for `blackship gc`.
+#[allow(clippy::struct_excessive_bools)] // independent CLI switches, not a state machine
+pub struct GcOptions {
+    /// Report what would be reclaimed without touching anything.
+    pub dry_run: bool,
+    /// Reap even resources that look in use.
+    pub force: bool,
+    /// Include orphans only reachable with `--force` (unreferenced datasets etc.).
+    pub prune_unreferenced: bool,
+    /// Machine-readable output.
+    pub json: bool,
+}
+
 pub fn handle_gc(
     config_path: &Path,
     verbose: bool,
-    jail: Option<String>,
-    dry_run: bool,
-    force: bool,
-    prune_unreferenced: bool,
-    json: bool,
+    jail: Option<&str>,
+    opts: &GcOptions,
 ) -> Result<()> {
+    let GcOptions {
+        dry_run,
+        force,
+        prune_unreferenced,
+        json,
+    } = *opts;
     let config = manifest::load(config_path)?;
     let reaper = Reaper::new(&config, verbose)?;
     let survey = reaper.survey()?;
 
     let mut orphans = gc::classify(&survey);
-    if let Some(jail) = &jail {
-        orphans.retain(|orphan| &orphan.jail == jail);
+    if let Some(jail) = jail {
+        orphans.retain(|orphan| orphan.jail == jail);
     }
     if !prune_unreferenced {
         orphans.retain(|orphan| !orphan.requires_force);
@@ -52,8 +68,8 @@ pub fn handle_gc(
     }
 
     if !json {
-        let reaped = orphans.len() - failed;
-        println!("Reclaimed {} of {} orphans.", reaped, orphans.len());
+        let reclaimed = orphans.len() - failed;
+        println!("Reclaimed {} of {} orphans.", reclaimed, orphans.len());
     }
 
     Ok(())

@@ -5,7 +5,7 @@ use byteorder::{LittleEndian, NetworkEndian, WriteBytesExt};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// Jail parameter value types
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParamValue {
     /// Integer value (maps to C int)
     Int(i32),
@@ -23,22 +23,22 @@ impl ParamValue {
     /// Convert the parameter value to bytes for FFI
     pub fn as_bytes(&self) -> Result<Vec<u8>, Error> {
         match self {
-            ParamValue::Int(v) => {
+            Self::Int(v) => {
                 let mut buf = Vec::with_capacity(4);
                 buf.write_i32::<LittleEndian>(*v).map_err(Error::Io)?;
                 Ok(buf)
             }
-            ParamValue::String(s) => {
+            Self::String(s) => {
                 let cstring = std::ffi::CString::new(s.clone())?;
                 Ok(cstring.into_bytes_with_nul())
             }
-            ParamValue::Bool(b) => {
-                let v = if *b { 1i32 } else { 0i32 };
+            Self::Bool(b) => {
+                let v = i32::from(*b);
                 let mut buf = Vec::with_capacity(4);
                 buf.write_i32::<LittleEndian>(v).map_err(Error::Io)?;
                 Ok(buf)
             }
-            ParamValue::Ipv4(addrs) => {
+            Self::Ipv4(addrs) => {
                 let mut buf = Vec::with_capacity(addrs.len() * 4);
                 for addr in addrs {
                     buf.write_u32::<NetworkEndian>(u32::from(*addr))
@@ -46,7 +46,7 @@ impl ParamValue {
                 }
                 Ok(buf)
             }
-            ParamValue::Ipv6(addrs) => {
+            Self::Ipv6(addrs) => {
                 let mut buf = Vec::with_capacity(addrs.len() * 16);
                 for addr in addrs {
                     buf.extend_from_slice(&addr.octets());
@@ -59,61 +59,63 @@ impl ParamValue {
 
 impl From<i32> for ParamValue {
     fn from(v: i32) -> Self {
-        ParamValue::Int(v)
+        Self::Int(v)
     }
 }
 
 impl From<bool> for ParamValue {
     fn from(v: bool) -> Self {
-        ParamValue::Bool(v)
+        Self::Bool(v)
     }
 }
 
 impl From<String> for ParamValue {
     fn from(v: String) -> Self {
-        ParamValue::String(v)
+        Self::String(v)
     }
 }
 
 impl From<&str> for ParamValue {
     fn from(v: &str) -> Self {
-        ParamValue::String(v.to_string())
+        Self::String(v.to_string())
     }
 }
 
 impl From<Ipv4Addr> for ParamValue {
     fn from(v: Ipv4Addr) -> Self {
-        ParamValue::Ipv4(vec![v])
+        Self::Ipv4(vec![v])
     }
 }
 
 impl From<Vec<Ipv4Addr>> for ParamValue {
     fn from(v: Vec<Ipv4Addr>) -> Self {
-        ParamValue::Ipv4(v)
+        Self::Ipv4(v)
     }
 }
 
 impl From<Ipv6Addr> for ParamValue {
     fn from(v: Ipv6Addr) -> Self {
-        ParamValue::Ipv6(vec![v])
+        Self::Ipv6(vec![v])
     }
 }
 
 impl From<Vec<Ipv6Addr>> for ParamValue {
     fn from(v: Vec<Ipv6Addr>) -> Self {
-        ParamValue::Ipv6(v)
+        Self::Ipv6(v)
     }
 }
 
-/// Convert a TOML value to a ParamValue
+/// Convert a TOML value to a `ParamValue`
 impl TryFrom<&toml::Value> for ParamValue {
     type Error = Error;
 
     fn try_from(value: &toml::Value) -> Result<Self, Self::Error> {
         match value {
-            toml::Value::Integer(i) => Ok(ParamValue::Int(*i as i32)),
-            toml::Value::Boolean(b) => Ok(ParamValue::Bool(*b)),
-            toml::Value::String(s) => Ok(ParamValue::String(s.clone())),
+            toml::Value::Integer(i) => i32::try_from(*i).map(Self::Int).map_err(|_| {
+                Error::ConfigValidation(format!("Integer parameter out of range: {i}"))
+            }),
+            toml::Value::Boolean(b) => Ok(Self::Bool(*b)),
+            toml::Value::String(s) => Ok(Self::String(s.clone())),
             _ => Err(Error::ConfigValidation(format!(
                 "Unsupported parameter type: {value:?}"
             ))),

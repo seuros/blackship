@@ -66,7 +66,7 @@ fn test_idents_for_narrows_to_one_jid() {
         vec![JailIdent::Jid(19)],
         "a stale jid must not take the live descriptor registration with it"
     );
-    assert!(idents_for(&map, "web", Some(99)).is_empty());
+    assert_eq!(idents_for(&map, "web", Some(99)), Vec::<JailIdent>::new());
 }
 
 #[test]

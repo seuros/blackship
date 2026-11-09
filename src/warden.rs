@@ -47,9 +47,9 @@ pub enum WardenEvent {
     JailStopped { name: String, jid: i32 },
     /// A jail's health check passed for the first time since it last failed
     JailHealthy { name: String },
-    /// A jail exhausted its startup QoS budget without a health signal
+    /// A jail exhausted its startup `QoS` budget without a health signal
     QosTimeout { name: String },
-    /// Register a jail for kqueue monitoring (sent via WardenHandle after restart)
+    /// Register a jail for kqueue monitoring (sent via `WardenHandle` after restart)
     RegisterJail {
         name: String,
         jid: i32,
@@ -88,7 +88,7 @@ impl IntentionalStops {
 /// Pick the kqueue identity to monitor a jail under.
 ///
 /// A descriptor outlives jid reuse, so it wins whenever one is held.
-fn monitor_ident(jid: i32, descriptor_fd: Option<i32>) -> JailIdent {
+const fn monitor_ident(jid: i32, descriptor_fd: Option<i32>) -> JailIdent {
     match descriptor_fd {
         Some(fd) => JailIdent::Descriptor(fd),
         None => JailIdent::Jid(jid),
@@ -297,10 +297,7 @@ impl Warden {
         let (tx, rx) = mpsc::channel(100);
 
         // Try to create kqueue source on FreeBSD 16+
-        let kqueue = if OsVersion::detect_kernel()
-            .map(|v| v.supports_jail_kqueue())
-            .unwrap_or(false)
-        {
+        let kqueue = if OsVersion::detect_kernel().is_ok_and(|v| v.supports_jail_kqueue()) {
             match JailEventSource::new() {
                 Ok(source) => {
                     println!("Warden: Using kqueue jail event monitoring");
@@ -401,7 +398,7 @@ impl Warden {
     }
 
     /// Process kqueue events (non-blocking poll)
-    fn process_kqueue_events(&mut self) -> Vec<(MonitoredJail, JailEvent)> {
+    fn process_kqueue_events(&self) -> Vec<(MonitoredJail, JailEvent)> {
         let Some(kq) = &self.kqueue else {
             return Vec::new();
         };
@@ -547,7 +544,8 @@ impl Warden {
         }
     }
 
-    /// Move a jail from its startup QoS profile to its steady one.
+    /// Move a jail from its startup `QoS` profile to its steady one.
+    #[allow(clippy::needless_pass_by_ref_mut)] // &self makes run()'s future need Warden: Sync, which it is not
     async fn shift_to_steady(&mut self, name: &str, trigger: &str) {
         let result = {
             let br = self.bridge.lock().await;
@@ -589,6 +587,7 @@ impl Warden {
 
     /// Request the Warden to shutdown
     pub async fn request_shutdown(sender: &mpsc::Sender<WardenEvent>) {
+        // Receiver gone means already shut down.
         let _ = sender.send(WardenEvent::Shutdown).await;
     }
 }
@@ -654,7 +653,7 @@ impl WardenHandle {
         })
     }
 
-    /// Notify that a jail exhausted its startup QoS budget
+    /// Notify that a jail exhausted its startup `QoS` budget
     pub async fn notify_qos_timeout(&self, name: &str) -> Result<()> {
         self.sender
             .send(WardenEvent::QosTimeout {

@@ -9,7 +9,7 @@ use super::Bridge;
 
 impl Bridge {
     /// Initialize the PF firewall anchor for port forwarding
-    pub fn init_bulkhead(&self) -> Result<()> {
+    pub fn init_bulkhead() -> Result<()> {
         BulkheadManager::init()
     }
 
@@ -78,9 +78,7 @@ impl Bridge {
         if self.verbose {
             println!(
                 "Exposed port {}:{}/{} -> {}:{}",
-                bind_ip
-                    .map(|ip| ip.to_string())
-                    .unwrap_or_else(|| "*".to_string()),
+                bind_ip.map_or_else(|| "*".to_string(), |ip| ip.to_string()),
                 external_port,
                 protocol,
                 jail_ip,

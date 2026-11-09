@@ -37,8 +37,11 @@ fn empty_config_defaults_to_local_collector() {
     assert!(cfg.headers.is_empty());
 }
 
+#[cfg(feature = "telemetry")]
 #[test]
 fn rejects_invalid_headers() {
+    use super::otlp::build_headers;
+
     let mut headers = BTreeMap::new();
     headers.insert("bad header".to_string(), "value".to_string());
     assert!(build_headers(&headers).is_err());
@@ -51,6 +54,7 @@ fn rejects_invalid_headers() {
 #[test]
 fn emit_and_shutdown_are_noops_when_uninitialized() {
     init(None);
+    #[cfg(feature = "telemetry")]
     assert!(meter().is_none());
     emit(&AuditRecord::new("demo", AuditEvent::Created));
     shutdown();

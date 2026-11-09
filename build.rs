@@ -1,7 +1,7 @@
 //! Generates FreeBSD ioctl constants from the system headers.
 //!
-//! build/sys_consts.c includes the real headers and prints Rust constants;
-//! the SIOC* values are _IOW()/_IOWR() macro expansions that bindgen cannot
+//! `build/sys_consts.c` includes the real headers and prints Rust constants;
+//! the `SIOC*` values are `_IOW()`/`_IOWR()` macro expansions that bindgen cannot
 //! reach, so they are read from the C preprocessor rather than transcribed.
 
 use std::path::PathBuf;
@@ -14,9 +14,10 @@ fn main() {
     println!("cargo:rerun-if-changed={SHIM}");
     println!("cargo:rerun-if-env-changed=CC");
 
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("freebsd") {
-        panic!("blackship targets FreeBSD only; {SHIM} needs its headers");
-    }
+    assert!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("freebsd"),
+        "blackship targets FreeBSD only; {SHIM} needs its headers"
+    );
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR unset"));
     let exe = out_dir.join("sys_consts_gen");

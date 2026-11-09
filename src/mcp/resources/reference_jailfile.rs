@@ -6,6 +6,8 @@
 //! absences cannot be derived from code that does not contain them; it is
 //! checked against the parser dispatch in `src/blueprint/parser.rs`.
 
+use std::fmt::Write as _;
+
 use mcp_host::prelude::*;
 use mcp_host::registry::router::McpResourceRouter;
 
@@ -70,7 +72,7 @@ fn render() -> String {
     );
 
     for keyword in supported_keywords() {
-        page.push_str(&format!("- `{keyword}`\n"));
+        let _ = writeln!(page, "- `{keyword}`"); // fmt::Write into a String is infallible
     }
     page.push_str(
         "- `#` at the start of a line is a comment, and is preserved as an instruction.\n\n\
@@ -81,7 +83,7 @@ fn render() -> String {
     );
 
     for (name, why) in UNSUPPORTED {
-        page.push_str(&format!("- `{name}` — {why}\n"));
+        let _ = writeln!(page, "- `{name}` — {why}"); // fmt::Write into a String is infallible
     }
 
     page
@@ -119,7 +121,7 @@ fn supported_keywords() -> Vec<&'static str> {
 ///
 /// The `match` is exhaustive on purpose: a new [`Instruction`] variant will
 /// not compile until it is added here and to [`supported_keywords`].
-fn keyword(instruction: &Instruction) -> &'static str {
+const fn keyword(instruction: &Instruction) -> &'static str {
     match instruction {
         Instruction::From(_)
         | Instruction::Arg(_)
@@ -138,10 +140,12 @@ fn keyword(instruction: &Instruction) -> &'static str {
     }
 }
 
-pub fn mount(router: McpResourceRouter<McpState>) -> McpResourceRouter<McpState> {
-    router.with_resource(
-        McpState::reference_jailfile_resource_info(),
+pub fn mount(
+    router: McpResourceRouter<McpState>,
+) -> Result<McpResourceRouter<McpState>, AppsError> {
+    Ok(router.with_resource(
+        McpState::reference_jailfile_resource_info()?,
         McpState::reference_jailfile_handler,
         None,
-    )
+    ))
 }

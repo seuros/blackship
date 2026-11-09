@@ -63,8 +63,7 @@ pub fn summarize(records: &[AuditRecord]) -> Summary {
                         .detail
                         .get("reason")
                         .or_else(|| record.detail.get("error"))
-                        .map(String::as_str)
-                        .unwrap_or("unknown")
+                        .map_or("unknown", String::as_str)
                 ));
             }
             AuditEvent::Destroyed => {
@@ -86,7 +85,7 @@ pub fn summarize(records: &[AuditRecord]) -> Summary {
     summary
 }
 
-pub fn handle_audit(config_path: &Path, jail: String, json: bool) -> Result<()> {
+pub fn handle_audit(config_path: &Path, jail: &str, json: bool) -> Result<()> {
     let config = manifest::load(config_path)?;
     let project = config.config.project_name();
     let log = AuditLog::from_config(Some(&config));
@@ -96,9 +95,9 @@ pub fn handle_audit(config_path: &Path, jail: String, json: bool) -> Result<()> 
         .strip_prefix(project)
         .is_some_and(|rest| rest.starts_with('-'));
     let candidates = if prefixed {
-        vec![jail.clone()]
+        vec![jail.to_string()]
     } else {
-        vec![format!("{project}-{jail}"), jail.clone()]
+        vec![format!("{project}-{jail}"), jail.to_string()]
     };
 
     let mut resolved = None;
@@ -170,7 +169,7 @@ fn print_timeline(full_name: &str, records: &[AuditRecord], summary: &Summary) {
             if !detail.is_empty() {
                 detail.push(' ');
             }
-            let _ = write!(detail, "{key}={value}");
+            let _ = write!(detail, "{key}={value}"); // fmt::Write into a String is infallible
         }
         println!(
             "  {}  {:<14} {}",
@@ -206,10 +205,10 @@ fn print_timeline(full_name: &str, records: &[AuditRecord], summary: &Summary) {
 }
 
 fn format_ts(ts: i64) -> String {
-    let secs = ts.max(0) as u64;
+    let secs = ts.max(0);
     let days = secs / 86_400;
     let time = secs % 86_400;
-    let (year, month, day) = civil_from_days(days as i64);
+    let (year, month, day) = civil_from_days(days);
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}Z",
         year,
@@ -221,17 +220,17 @@ fn format_ts(ts: i64) -> String {
     )
 }
 
-/// Howard's `civil_from_days`: days since the Unix epoch to a calendar date.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+/// Howard Hinnant's `civil_from_days`: Unix days to (year, month, day).
+const fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
+    let doe = z - era * 146_097;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
+    let y = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 

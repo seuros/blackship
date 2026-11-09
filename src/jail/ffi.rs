@@ -1,6 +1,6 @@
 //! FFI bindings for FreeBSD jail syscalls
 //!
-//! This code is adapted from libjail-rs (https://github.com/fubarnetes/libjail-rs)
+//! This code is adapted from libjail-rs (<https://github.com/fubarnetes/libjail-rs>)
 //! Original authors: Fabian Freyer <fabian.freyer@physik.tu-berlin.de>
 //! License: BSD-3-Clause
 //!
@@ -21,6 +21,9 @@
 //!    contributors may be used to endorse or promote products derived from
 //!    this software without specific prior written permission.
 
+// FFI module: jail_set(2)/jail_get(2)/jail_remove(2) over iovec arrays.
+#![allow(unsafe_code)]
+
 use crate::error::Error;
 use bitflags::bitflags;
 
@@ -32,6 +35,7 @@ macro_rules! io_err {
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::mem;
+use std::os::unix::io::FromRawFd;
 use std::path::Path;
 use std::ptr;
 
@@ -44,7 +48,7 @@ fn decode_errmsg(errmsg: &[u8; 256]) -> String {
         .unwrap_or_default()
 }
 
-/// Map jail_set result code + errmsg to a Result
+/// Map `jail_set` result code + errmsg to a Result
 fn check_jail_set_result(jid: i32, errmsg: &[u8; 256]) -> Result<i32, Error> {
     match jid {
         e if e < 0 => match errmsg[0] {
@@ -55,7 +59,7 @@ fn check_jail_set_result(jid: i32, errmsg: &[u8; 256]) -> Result<i32, Error> {
     }
 }
 
-/// Map jail_get result code + errmsg to a Result
+/// Map `jail_get` result code + errmsg to a Result
 fn check_jail_get_result(jid: i32, errmsg: &[u8; 256]) -> Result<i32, Error> {
     match jid {
         e if e < 0 => match errmsg[0] {
@@ -66,24 +70,38 @@ fn check_jail_get_result(jid: i32, errmsg: &[u8; 256]) -> Result<i32, Error> {
     }
 }
 
-/// Call libc::jail_get and check the result. `errmsg_ptr` aliases a buffer one
-/// of the iovecs writes, so it is only dereferenced after the syscall returns.
+/// iovec count as the `u_int` `jail_set(2)`/`jail_get(2)` take.
+fn iov_count(jiov: &[libc::iovec]) -> Result<u32, Error> {
+    u32::try_from(jiov.len()).map_err(|_| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "too many jail parameters",
+        ))
+    })
+}
+
+/// One iovec; `iov_base` is `void *` by ABI even for read-only buffers.
+const fn iov<T>(base: *const T, len: usize) -> libc::iovec {
+    libc::iovec {
+        iov_base: base.cast_mut().cast(),
+        iov_len: len,
+    }
+}
+
+/// `jail_get` plus result check; `errmsg_ptr` aliases an iovec, so read it only after the call.
 fn jail_get_call(jiov: &mut Vec<libc::iovec>, errmsg_ptr: *const [u8; 256]) -> Result<i32, Error> {
-    let jid = unsafe {
-        libc::jail_get(
-            jiov.as_mut_ptr(),
-            jiov.len() as u32,
-            JailFlags::empty().bits(),
-        )
-    };
+    let count = iov_count(jiov)?;
+    // SAFETY: jiov buffers are live and writable where jail_get copies back.
+    let jid = unsafe { libc::jail_get(jiov.as_mut_ptr(), count, JailFlags::empty().bits()) };
+    // SAFETY: live buffer; the kernel's write finished when jail_get returned.
     let errmsg = unsafe { &*errmsg_ptr };
     check_jail_get_result(jid, errmsg)
 }
 
-/// NUL-terminated (name, value) byte pairs backing a jail_set/jail_get iovec array.
+/// NUL-terminated (name, value) byte pairs backing a `jail_set/jail_get` iovec array.
 type RawParams = Vec<(Vec<u8>, Vec<u8>)>;
 
-/// Convert a params map into raw bytes suitable for jail_set/jail_get iovecs
+/// Convert a params map into raw bytes suitable for `jail_set/jail_get` iovecs
 fn build_raw_params(params: &HashMap<String, ParamValue>) -> Result<RawParams, Error> {
     params
         .iter()
@@ -111,10 +129,7 @@ macro_rules! iovec {
         vec![iovec!($key), iovec!(mut $value)]
     };
     ($value:expr, $size:expr) => {
-        libc::iovec {
-            iov_base: $value as *mut libc::c_void,
-            iov_len: $size,
-        }
+        iov($value, $size)
     };
     ($name:expr) => {
         iovec!($name.as_ptr(), $name.len())
@@ -156,8 +171,8 @@ const SYS_JAIL_REMOVE_JD: libc::c_int = 598;
 /// Create a jail with the given path and parameters
 ///
 /// Returns the jail ID (jid) on success
-pub fn jail_create(path: &Path, params: HashMap<String, ParamValue>) -> Result<i32, Error> {
-    let raw_params = build_raw_params(&params)?;
+pub fn jail_create(path: &Path, params: &HashMap<String, ParamValue>) -> Result<i32, Error> {
+    let raw_params = build_raw_params(params)?;
 
     let mut jiov: Vec<libc::iovec> = raw_params
         .iter()
@@ -170,7 +185,7 @@ pub fn jail_create(path: &Path, params: HashMap<String, ParamValue>) -> Result<i
     let pathstr = CString::new(pathstr)?.into_bytes_with_nul();
 
     // Set persist and errmsg
-    let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
+    let mut errmsg = [0u8; 256];
     jiov.append(
         &mut vec![
             iovec!(b"path\0" => pathstr),
@@ -182,18 +197,14 @@ pub fn jail_create(path: &Path, params: HashMap<String, ParamValue>) -> Result<i
         .collect(),
     );
 
-    let jid = unsafe {
-        libc::jail_set(
-            jiov[..].as_mut_ptr(),
-            jiov.len() as u32,
-            JailFlags::CREATE.bits(),
-        )
-    };
+    let count = iov_count(&jiov)?;
+    // SAFETY: every iovec buffer is live; jail_set writes only the mutable errmsg.
+    let jid = unsafe { libc::jail_set(jiov[..].as_mut_ptr(), count, JailFlags::CREATE.bits()) };
 
     check_jail_set_result(jid, &errmsg)
 }
 
-/// Update parameters of a running jail (jail_set with JAIL_UPDATE).
+/// Update parameters of a running jail (`jail_set` with `JAIL_UPDATE`).
 ///
 /// All-or-nothing: a non-updatable key fails the whole call and the kernel
 /// applies none of it.
@@ -205,10 +216,10 @@ pub fn jail_update(jid: i32, params: &HashMap<String, ParamValue>) -> Result<(),
         .flat_map(|(key, value)| iovec!(key => value))
         .collect();
 
-    let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
+    let mut errmsg = [0u8; 256];
     jiov.append(
         &mut vec![
-            iovec!(b"jid\0" => (&jid as *const _, mem::size_of::<i32>())),
+            iovec!(b"jid\0" => (&raw const jid, mem::size_of::<i32>())),
             iovec!(b"errmsg\0" => mut errmsg),
         ]
         .into_iter()
@@ -216,13 +227,9 @@ pub fn jail_update(jid: i32, params: &HashMap<String, ParamValue>) -> Result<(),
         .collect(),
     );
 
-    let ret = unsafe {
-        libc::jail_set(
-            jiov[..].as_mut_ptr(),
-            jiov.len() as u32,
-            JailFlags::UPDATE.bits(),
-        )
-    };
+    let count = iov_count(&jiov)?;
+    // SAFETY: every iovec buffer is live; jail_set writes only the mutable errmsg.
+    let ret = unsafe { libc::jail_set(jiov[..].as_mut_ptr(), count, JailFlags::UPDATE.bits()) };
 
     check_jail_set_result(ret, &errmsg).map(|_| ())
 }
@@ -231,30 +238,17 @@ pub fn jail_update(jid: i32, params: &HashMap<String, ParamValue>) -> Result<(),
 ///
 /// If the name can be parsed as an i32, it's returned directly
 pub fn jail_getid(name: &str) -> Result<i32, Error> {
-    let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
+    let mut errmsg = [0u8; 256];
 
     // Try parsing as number first
     if let Ok(jid) = name.parse::<i32>() {
         return Ok(jid);
     }
 
-    let name = CString::new(name)?.into_bytes_with_nul();
-
-    let mut jiov: Vec<libc::iovec> =
-        vec![iovec!(b"name\0" => name), iovec!(b"errmsg\0" => mut errmsg)]
-            .into_iter()
-            .flatten()
-            .collect();
-
-    jail_get_call(&mut jiov, &errmsg as *const _)
-}
-
-pub fn jail_getname(jid: i32) -> Result<String, Error> {
-    let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
-    let mut name: [u8; 256] = unsafe { mem::zeroed() };
+    // jail_get copies every parameter back out, the key included.
+    let mut name = CString::new(name)?.into_bytes_with_nul();
 
     let mut jiov: Vec<libc::iovec> = vec![
-        iovec!(b"jid\0" => (&jid as *const _, mem::size_of::<i32>())),
         iovec!(b"name\0" => mut name),
         iovec!(b"errmsg\0" => mut errmsg),
     ]
@@ -262,7 +256,24 @@ pub fn jail_getname(jid: i32) -> Result<String, Error> {
     .flatten()
     .collect();
 
-    jail_get_call(&mut jiov, &errmsg as *const _)?;
+    jail_get_call(&mut jiov, &raw const errmsg)
+}
+
+pub fn jail_getname(mut jid: i32) -> Result<String, Error> {
+    let mut errmsg = [0u8; 256];
+    let mut name = [0u8; 256];
+
+    let mut jiov: Vec<libc::iovec> = vec![
+        // jail_get writes the key back too.
+        iovec!(b"jid\0" => (&raw mut jid, mem::size_of::<i32>())),
+        iovec!(b"name\0" => mut name),
+        iovec!(b"errmsg\0" => mut errmsg),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    jail_get_call(&mut jiov, &raw const errmsg)?;
 
     let len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
     Ok(String::from_utf8_lossy(&name[..len]).into_owned())
@@ -271,24 +282,26 @@ pub fn jail_getname(jid: i32) -> Result<String, Error> {
 /// Get the next jail ID after the given one
 ///
 /// Used to iterate through all jails
-pub fn jail_nextjid(lastjid: i32) -> Result<i32, Error> {
-    let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
+pub fn jail_nextjid(mut lastjid: i32) -> Result<i32, Error> {
+    let mut errmsg = [0u8; 256];
 
     let mut jiov: Vec<libc::iovec> = vec![
-        iovec!(b"lastjid\0" => (&lastjid as *const _, mem::size_of::<i32>())),
+        // jail_get writes the key back too.
+        iovec!(b"lastjid\0" => (&raw mut lastjid, mem::size_of::<i32>())),
         iovec!(b"errmsg\0" => mut errmsg),
     ]
     .into_iter()
     .flatten()
     .collect();
 
-    jail_get_call(&mut jiov, &errmsg as *const _)
+    jail_get_call(&mut jiov, &raw const errmsg)
 }
 
 /// Remove a jail by its ID
 ///
 /// This will kill all processes in the jail and remove it
 pub fn jail_remove(jid: i32) -> Result<(), Error> {
+    // SAFETY: integer arg.
     let ret = unsafe { libc::jail_remove(jid) };
     match ret {
         0 => Ok(()),
@@ -303,9 +316,9 @@ pub fn jail_remove(jid: i32) -> Result<(), Error> {
 /// the jail.
 pub fn jail_create_with_descriptor(
     path: &Path,
-    params: HashMap<String, ParamValue>,
+    params: &HashMap<String, ParamValue>,
 ) -> Result<(i32, JailDescriptor), Error> {
-    let raw_params = build_raw_params(&params)?;
+    let raw_params = build_raw_params(params)?;
 
     let mut jiov: Vec<libc::iovec> = raw_params
         .iter()
@@ -319,14 +332,14 @@ pub fn jail_create_with_descriptor(
 
     // desc parameter receives the file descriptor
     let mut desc_fd: i32 = -1;
-    let mut errmsg: [u8; 256] = unsafe { mem::zeroed() };
+    let mut errmsg = [0u8; 256];
 
     jiov.append(
         &mut vec![
             iovec!(b"path\0" => pathstr),
             iovec!(b"errmsg\0" => mut errmsg),
             iovec!(b"persist\0" => ()),
-            iovec!(b"desc\0" => (&mut desc_fd as *mut i32 as *mut u8, mem::size_of::<i32>())),
+            iovec!(b"desc\0" => ((&raw mut desc_fd).cast::<u8>(), mem::size_of::<i32>())),
         ]
         .into_iter()
         .flatten()
@@ -334,7 +347,9 @@ pub fn jail_create_with_descriptor(
     );
 
     let flags = JailFlags::CREATE | JailFlags::GET_DESC | JailFlags::OWN_DESC;
-    let jid = unsafe { libc::jail_set(jiov[..].as_mut_ptr(), jiov.len() as u32, flags.bits()) };
+    let count = iov_count(&jiov)?;
+    // SAFETY: every iovec buffer is live; jail_set writes only errmsg and desc_fd.
+    let jid = unsafe { libc::jail_set(jiov[..].as_mut_ptr(), count, flags.bits()) };
 
     check_jail_set_result(jid, &errmsg)?;
     if desc_fd < 0 {
@@ -342,7 +357,7 @@ pub fn jail_create_with_descriptor(
             "jail_set returned success but descriptor fd is negative".into(),
         ));
     }
-    use std::os::unix::io::FromRawFd;
+    // SAFETY: OWN_DESC yields a fresh, non-negative fd nothing else owns.
     let owned_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(desc_fd) };
     Ok((jid, JailDescriptor { fd: owned_fd }))
 }
@@ -350,6 +365,7 @@ pub fn jail_create_with_descriptor(
 /// Remove a jail via its owning descriptor (FreeBSD 16+)
 pub fn jail_remove_jd(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Error> {
     use std::os::unix::io::AsRawFd;
+    // SAFETY: integer fd, kept open by the borrow.
     let ret = unsafe { libc::syscall(SYS_JAIL_REMOVE_JD, fd.as_raw_fd()) };
     if ret != 0 {
         return io_err!();
@@ -401,7 +417,7 @@ pub struct RunningJails {
 }
 
 impl RunningJails {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { lastjid: 0 }
     }
 }

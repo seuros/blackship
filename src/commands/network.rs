@@ -26,8 +26,7 @@ pub fn list(config: Option<&manifest::BlackshipConfig>) -> Result<Vec<NetworkSta
         .list()?
         .into_iter()
         .map(|record| {
-            // NgBridge::open needs a control socket (root); the host
-            // eiface's ifnet is visible to everyone, so check that.
+            // NgBridge::open needs root; the host eiface's ifnet is visible to all.
             let alive = match record.backend.as_str() {
                 "netgraph" => {
                     record
@@ -96,33 +95,12 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
                 host_iface: None,
             };
 
-            if let Some(config) = config
-                && let Some(existing) = config
-                    .networks
-                    .iter()
-                    .find(|existing| existing.name == name)
-            {
-                let configured_gateway = if let Some(gateway) = existing.gateway {
-                    gateway.to_string()
-                } else {
-                    let configured_subnet: IpNet = existing.subnet.parse().map_err(|e| {
-                        error::Error::Network(format!(
-                            "Invalid subnet '{}' for network '{}': {}",
-                            existing.subnet, existing.name, e
-                        ))
-                    })?;
-                    IpPool::new(configured_subnet)?.gateway().to_string()
-                };
-                if existing.subnet != record.subnet || configured_gateway != record.gateway {
-                    return Err(error::Error::Network(format!(
-                        "Network '{name}' is already defined differently in blackship.toml"
-                    )));
-                }
-            }
+            ensure_matches_manifest(config, &record)?;
 
             network::ensure::ensure_network(&mut record)?;
 
             if let Err(err) = store.create(&record) {
+                // Rollback; keep the original error.
                 let _ = network::bridge::destroy_bridge(&bridge, true);
                 return Err(err);
             }
@@ -154,32 +132,71 @@ pub fn handle(config: Option<&manifest::BlackshipConfig>, action: NetworkAction)
             store.delete(&name)?;
             println!("Destroyed network '{}' on bridge '{}'", name, record.bridge);
         }
-        NetworkAction::List => {
-            let networks = list(config)?;
-            if networks.is_empty() {
-                println!("No networks found.");
-            } else {
-                println!("Networks:");
-                for network in networks {
-                    let host_iface = network
-                        .host_iface
-                        .as_deref()
-                        .map(|i| format!(" host_iface={i}"))
-                        .unwrap_or_default();
-                    println!(
-                        "  {}: bridge={} backend={} subnet={} gateway={}{} status={}",
-                        network.name,
-                        network.bridge,
-                        network.backend,
-                        network.subnet,
-                        network.gateway,
-                        host_iface,
-                        network.status
-                    );
-                }
-            }
-        }
+        NetworkAction::List => list_networks(config)?,
     }
 
+    Ok(())
+}
+
+/// Reject a network that blackship.toml declares with a different subnet or gateway.
+fn ensure_matches_manifest(
+    config: Option<&manifest::BlackshipConfig>,
+    record: &network::NetworkRecord,
+) -> Result<()> {
+    use ipnet::IpNet;
+    use network::IpPool;
+
+    let Some(existing) = config.and_then(|c| {
+        c.networks
+            .iter()
+            .find(|existing| existing.name == record.name)
+    }) else {
+        return Ok(());
+    };
+
+    let configured_gateway = if let Some(gateway) = existing.gateway {
+        gateway.to_string()
+    } else {
+        let configured_subnet: IpNet = existing.subnet.parse().map_err(|e| {
+            error::Error::Network(format!(
+                "Invalid subnet '{}' for network '{}': {}",
+                existing.subnet, existing.name, e
+            ))
+        })?;
+        IpPool::new(configured_subnet)?.gateway().to_string()
+    };
+    if existing.subnet != record.subnet || configured_gateway != record.gateway {
+        return Err(error::Error::Network(format!(
+            "Network '{}' is already defined differently in blackship.toml",
+            record.name
+        )));
+    }
+    Ok(())
+}
+
+fn list_networks(config: Option<&manifest::BlackshipConfig>) -> Result<()> {
+    let networks = list(config)?;
+    if networks.is_empty() {
+        println!("No networks found.");
+        return Ok(());
+    }
+    println!("Networks:");
+    for network in networks {
+        let host_iface = network
+            .host_iface
+            .as_deref()
+            .map(|i| format!(" host_iface={i}"))
+            .unwrap_or_default();
+        println!(
+            "  {}: bridge={} backend={} subnet={} gateway={}{} status={}",
+            network.name,
+            network.bridge,
+            network.backend,
+            network.subnet,
+            network.gateway,
+            host_iface,
+            network.status
+        );
+    }
     Ok(())
 }

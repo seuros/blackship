@@ -69,7 +69,7 @@ fn test_phase_diff_removes_resources_dropped_by_target() {
     let (removals, additions) = phase_diff("web", &startup, &steady);
 
     assert_eq!(removals, vec!["jail:web:openfiles"]);
-    assert!(additions.is_empty());
+    assert_eq!(additions, Vec::<String>::new());
 }
 
 #[test]
@@ -120,8 +120,8 @@ fn test_phase_diff_identical_profiles_are_noop() {
 
     let (removals, additions) = phase_diff("web", &profile, &profile);
 
-    assert!(removals.is_empty());
-    assert!(additions.is_empty());
+    assert_eq!(removals, Vec::<String>::new());
+    assert_eq!(additions, Vec::<String>::new());
 }
 
 #[test]

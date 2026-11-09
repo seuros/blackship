@@ -2,23 +2,14 @@ use super::*;
 
 #[test]
 fn test_sha256_computation() {
-    use std::io::Write;
-    let temp_dir = std::env::temp_dir();
-    let test_file = temp_dir.join("blackship_test_sha256.txt");
+    let tmp = tempfile::tempdir().unwrap();
+    let test_file = tmp.path().join("hello.txt");
+    fs::write(&test_file, b"hello world\n").unwrap();
 
-    // Create a test file with known content
-    let mut file = File::create(&test_file).unwrap();
-    file.write_all(b"hello world\n").unwrap();
-    drop(file);
-
-    let hash = sha256_file(&test_file).unwrap();
-
-    // Verify hash is 64 hex characters (SHA256 output)
-    assert_eq!(hash.len(), 64);
-    assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
-
-    // Clean up
-    let _ = fs::remove_file(&test_file);
+    assert_eq!(
+        sha256_file(&test_file).unwrap(),
+        "a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447"
+    );
 }
 
 #[test]

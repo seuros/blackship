@@ -18,7 +18,7 @@ pub struct EpairInterface {
 }
 
 impl EpairInterface {
-    pub(crate) fn from_existing(host_side: String, jail_side: String) -> Self {
+    pub(crate) const fn from_existing(host_side: String, jail_side: String) -> Self {
         Self {
             host_side,
             jail_side,
@@ -40,13 +40,19 @@ impl EpairInterface {
 
         // Bring host side up using native ioctl
         if let Err(e) = ioctl::set_interface_up(&host_side, true) {
+            // Rollback; keep the original error.
             let _ = ioctl::destroy_interface(&host_side);
             return Err(e);
         }
 
         // Ownership marker: only the host side keeps groups (VNET transfer
         // strips them from the jail side), so cleanup checks the a-end.
-        let _ = crate::sys::tag_interface(&host_side);
+        // Untagged epairs are never reclaimed by cleanup_state.
+        if let Err(e) = crate::sys::tag_interface(&host_side) {
+            // Rollback; keep the original error.
+            let _ = ioctl::destroy_interface(&host_side);
+            return Err(e);
+        }
 
         Ok(Self::from_existing(host_side, jail_side))
     }

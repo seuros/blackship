@@ -6,9 +6,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::manifest;
 
 #[derive(Debug, Default)]
@@ -18,31 +17,11 @@ struct JailStats {
     rss_kib: u64,
 }
 
-pub(crate) fn run_json(program: &str, args: &[&str]) -> Result<serde_json::Value> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|e| Error::CommandFailed {
-            command: program.to_string(),
-            message: e.to_string(),
-        })?;
-    if !output.status.success() {
-        return Err(Error::CommandFailed {
-            command: format!("{} {}", program, args.join(" ")),
-            message: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
-    }
-    serde_json::from_slice(&output.stdout).map_err(|e| Error::CommandFailed {
-        command: program.to_string(),
-        message: format!("invalid libxo JSON: {e}"),
-    })
-}
-
 pub fn handle(config_path: &Path, jail: Option<String>, json: bool) -> Result<()> {
     let config = manifest::load_or_default(config_path)?;
 
     // JID -> jail name
-    let jls = run_json("/usr/sbin/jls", &["--libxo", "json", "jid", "name"])?;
+    let jls = crate::sys::run_json("/usr/sbin/jls", &["--libxo", "json", "jid", "name"])?;
     let mut names: HashMap<String, String> = HashMap::new();
     if let Some(jails) = jls
         .get("jail-information")
@@ -60,7 +39,7 @@ pub fn handle(config_path: &Path, jail: Option<String>, json: bool) -> Result<()
     }
 
     // Aggregate per-process CPU and RSS by jail id
-    let ps = run_json("/bin/ps", &["ax", "-o", "jid,pcpu,rss", "--libxo", "json"])?;
+    let ps = crate::sys::run_json("/bin/ps", &["ax", "-o", "jid,pcpu,rss", "--libxo", "json"])?;
     let mut stats: HashMap<String, JailStats> = HashMap::new();
     if let Some(processes) = ps
         .get("process-information")
@@ -121,7 +100,10 @@ pub fn handle(config_path: &Path, jail: Option<String>, json: bool) -> Result<()
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&out).expect("serde_json::Value always serializes")
+        );
     } else if rows.is_empty() {
         println!("No running jails.");
     } else {

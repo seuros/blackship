@@ -12,15 +12,28 @@ keywords = ["freebsd", "jail", "manager", "state-machine"]
 categories = ["command-line-utilities", "os::freebsd-apis"]
 exclude = ["**/tests.rs"]
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "blackship"
+path = "src/main.rs"
+required-features = ["cli"]
+
 [features]
-default = ["mcp"]
-mcp = ["dep:mcp-host", "dep:schemars", "dep:tracing", "dep:tracing-subscriber"]
+default = ["cli", "mcp"]
+# The `blackship` binary and its argument parser. Library consumers can
+# drop it with `default-features = false`.
+cli = ["dep:usage-rs", "telemetry"]
+# OTLP export of lifecycle events and racct gauges (`[telemetry]`).
+telemetry = ["dep:rama"]
+mcp = ["cli", "dep:mcp-host", "dep:schemars", "dep:tracing", "dep:tracing-subscriber"]
 # state_machine! expands cfg(feature = "inspect") into the calling crate.
 inspect = ["state-machines/inspect"]
 
 [dependencies]
 # CLI
-usage-rs = { version = "7", features = ["completions"] }
+usage-rs = { version = "7", features = ["completions"], optional = true }
 
 # Config
 serde = { version = "1.0", features = ["derive"] }
@@ -35,7 +48,7 @@ thiserror = "2.0"
 
 # FFI
 libc = "0.2"
-nix = { version = "0.31", features = ["user", "mount", "process", "signal"] }
+nix = { version = "0.31", features = ["user", "mount", "process", "signal", "fs", "hostname"] }
 bitflags = "2.11"
 byteorder = "1.5"
 
@@ -54,10 +67,10 @@ ipnet = "2.12"
 nom = "8.0"
 
 # State machine and resilience (seuros crates)
-state-machines = { version = "0.31", features = ["dynamic", "runtime-send", "serde"] }
-breaker-machines = "0.19"
-chrono-machines = "0.8"
-throttle-machines = "0.2.1"
+state-machines = { version = "0.34.1", features = ["dynamic", "runtime-send", "serde"] }
+breaker-machines = "0.24.0"
+chrono-machines = "0.11.1"
+throttle-machines = "0.5.0"
 rand = "0.10"
 
 # Async runtime for Warden
@@ -65,16 +78,25 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 jiff = "0.2"
 
 # Telemetry
-rama = { version = "0.4", features = ["opentelemetry", "grpc", "http-full", "rustls"] }
-mcp-host = { version = "0.9.0", features = ["macros"], optional = true }
+rama = { version = "0.4", features = ["opentelemetry", "grpc", "http-full", "rustls"], optional = true }
+mcp-host = { version = "0.23.0", features = ["macros"], optional = true }
 schemars = { version = "1.2.2", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
 [dev-dependencies]
-state-machines = { version = "0.31", features = [
-    "dynamic",
-    "runtime-send",
-    "serde",
-    "inspect",
-] }
+state-machines = { version = "0.34.1", features = ["dynamic", "runtime-send", "serde", "inspect"] }
+tempfile = "3.27.0"
+
+[lints.rust]
+# FFI lives in the modules that opt in with #![allow(unsafe_code)]; anything
+# else reaching for unsafe fails the build.
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Rewrites plain `if let .. else` into nested map_or_else closures; in
+# error-heavy code that reads worse, not better.
+option_if_let_else = "allow"

@@ -45,13 +45,13 @@ fn detect_format(file: &Path) -> ForeignFormat {
 
 pub fn handle_foreign_import(
     config_path: &Path,
-    file: PathBuf,
+    file: &Path,
     name: Option<String>,
-    from: Option<String>,
+    from: Option<&str>,
 ) -> Result<()> {
     let config = manifest::load_or_default(config_path)?;
-    let format = match from.as_deref() {
-        Some("auto") | None => detect_format(&file),
+    let format = match from {
+        Some("auto") | None => detect_format(file),
         Some(explicit) => ForeignFormat::parse(explicit)?,
     };
 
@@ -63,13 +63,14 @@ pub fn handle_foreign_import(
     }
 
     let staging = config.config.cache_dir.join("foreign-import");
+    // Stale leftovers from a previous import; usually absent, so errors are noise.
     let _ = crate::sys::remove_tree_with_flags(&staging);
     std::fs::create_dir_all(&staging)?;
 
     // bsdtar reads zip, tar, and every compression in use here.
     let status = Command::new("/usr/bin/tar")
         .arg("-xf")
-        .arg(&file)
+        .arg(file)
         .arg("-C")
         .arg(&staging)
         .status()
@@ -83,8 +84,8 @@ pub fn handle_foreign_import(
 
     let (jail_name, root_source, ip_hint, release_hint) = match format {
         ForeignFormat::Iocage => import_iocage(&staging, name)?,
-        ForeignFormat::Ezjail => import_ezjail(&staging, &file, name)?,
-        ForeignFormat::Rootfs => import_rootfs(&staging, &file, name)?,
+        ForeignFormat::Ezjail => import_ezjail(&staging, file, name)?,
+        ForeignFormat::Rootfs => import_rootfs(&staging, file, name)?,
     };
 
     manifest::validate_name("jail", &jail_name)?;
@@ -116,6 +117,7 @@ pub fn handle_foreign_import(
             "Failed to copy imported root into place".to_string(),
         ));
     }
+    // The import succeeded; a leftover staging dir is wiped by the next import.
     let _ = crate::sys::remove_tree_with_flags(&staging);
 
     println!("Imported '{}' -> {}", file.display(), target.display());

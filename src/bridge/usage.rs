@@ -5,7 +5,7 @@ use crate::scope::PeakMetrics;
 use super::Bridge;
 
 impl Bridge {
-    /// Sample racct usage into the scope record's peaks and the OTel gauges.
+    /// Sample racct usage into the scope record's peaks and the `OTel` gauges.
     pub fn sample_usage(&self, full_name: &str) {
         let Ok(Some(mut scope)) = self.scope_store.get(full_name) else {
             return;

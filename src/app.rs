@@ -9,9 +9,14 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::Command as ProcessCommand;
+use std::process::{Command as ProcessCommand, Stdio};
 
 /// Run the Blackship CLI application.
+///
+/// # Errors
+///
+/// Parsing, privilege escalation or the subcommand fails; rendered in the
+/// requested output format.
 pub fn run() -> std::result::Result<(), CliError> {
     let cli = parse_cli()?;
     let format = cli.format;
@@ -75,7 +80,7 @@ struct AppContext {
 }
 
 impl AppContext {
-    fn new(config_path: PathBuf, verbose: bool, format: OutputFormat) -> Self {
+    const fn new(config_path: PathBuf, verbose: bool, format: OutputFormat) -> Self {
         Self {
             config_path,
             verbose,
@@ -83,6 +88,7 @@ impl AppContext {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // flat one-arm-per-subcommand dispatch table
     fn dispatch(self, command: Commands) -> Result<()> {
         match command {
             Commands::Exec {
@@ -119,7 +125,7 @@ impl AppContext {
                     detach,
                     network.as_deref(),
                     &command,
-                    config.as_ref(),
+                    config,
                 )
             }
 
@@ -138,7 +144,7 @@ impl AppContext {
                 volumes,
             } => {
                 let config = self.load_config_if_present()?;
-                commands::container::remove_jails(&jails, force, volumes, config.as_ref())
+                commands::container::remove_jails(&jails, force, volumes, config)
             }
 
             Commands::Console { jail, user } => {
@@ -158,10 +164,10 @@ impl AppContext {
                 release,
                 toml,
                 force,
-            } => commands::build::handle_init(file, release, toml, force),
+            } => commands::build::handle_init(&file, release, toml, force),
 
             Commands::Armada { files, action } => {
-                commands::armada::handle(&self.config_path, self.verbose, files, action)
+                commands::armada::handle(&self.config_path, self.verbose, &files, action)
             }
 
             Commands::Migrate {
@@ -171,8 +177,8 @@ impl AppContext {
                 keep,
             } => commands::migrate::handle_migrate(
                 &self.config_path,
-                jail,
-                target,
+                &jail,
+                &target,
                 remote_dataset,
                 keep,
             ),
@@ -199,7 +205,7 @@ impl AppContext {
                 pkgbase,
             } => commands::bootstrap::handle_bootstrap(
                 &self.config_path,
-                release,
+                &release,
                 force,
                 archives,
                 pkgbase,
@@ -235,7 +241,7 @@ impl AppContext {
             } => commands::build::handle_build(
                 &self.config_path,
                 self.verbose,
-                file,
+                &file,
                 name,
                 crate::cli::into_pairs(build_args),
                 context,
@@ -255,10 +261,10 @@ impl AppContext {
             } => commands::ports::handle_expose(
                 &self.config_path,
                 self.verbose,
-                jail,
+                &jail,
                 port,
                 internal,
-                proto,
+                &proto,
                 bind_ip,
             ),
 
@@ -267,12 +273,12 @@ impl AppContext {
                     let forwards = commands::ports::list_ports(&self.config_path, jail.as_deref())?;
                     crate::output::print_success(&forwards)
                 } else {
-                    commands::ports::handle_ports(&self.config_path, jail)
+                    commands::ports::handle_ports(&self.config_path, jail.as_deref())
                 }
             }
 
             Commands::Unexpose { jail } => {
-                commands::ports::handle_unexpose(&self.config_path, self.verbose, jail)
+                commands::ports::handle_unexpose(&self.config_path, self.verbose, &jail)
             }
 
             Commands::Cleanup { jail, force } => {
@@ -287,16 +293,12 @@ impl AppContext {
                 steady,
                 startup,
                 show,
-            } => commands::qos::handle_qos(
-                &self.config_path,
-                self.verbose,
-                jail,
-                steady,
-                startup,
-                show,
-            ),
+            } => {
+                let request = commands::qos::QosRequest::from_flags(steady, startup, show)?;
+                commands::qos::handle_qos(&self.config_path, self.verbose, &jail, request)
+            }
             Commands::Audit { jail, json } => {
-                commands::audit::handle_audit(&self.config_path, jail, json)
+                commands::audit::handle_audit(&self.config_path, &jail, json)
             }
             Commands::Gc {
                 jail,
@@ -307,18 +309,20 @@ impl AppContext {
             } => commands::gc::handle_gc(
                 &self.config_path,
                 self.verbose,
-                jail,
-                dry_run,
-                force,
-                prune_unreferenced,
-                json,
+                jail.as_deref(),
+                &commands::gc::GcOptions {
+                    dry_run,
+                    force,
+                    prune_unreferenced,
+                    json,
+                },
             ),
 
             Commands::Export {
                 jail,
                 output,
                 zfs_send,
-            } => commands::snapshot::handle_export(&self.config_path, jail, output, zfs_send),
+            } => commands::snapshot::handle_export(&self.config_path, &jail, output, zfs_send),
 
             Commands::Import {
                 file,
@@ -328,11 +332,16 @@ impl AppContext {
             } => match from {
                 Some(from) => commands::foreign::handle_foreign_import(
                     &self.config_path,
-                    file,
+                    &file,
                     name,
-                    Some(from),
+                    Some(&from),
                 ),
-                None => commands::snapshot::handle_import(&self.config_path, file, name, force),
+                None => commands::snapshot::handle_import(
+                    &self.config_path,
+                    &file,
+                    name.as_deref(),
+                    force,
+                ),
             },
 
             Commands::Snapshot { action } => {
@@ -340,11 +349,11 @@ impl AppContext {
             }
 
             Commands::Commit { jail, release } => {
-                commands::snapshot::handle_commit(&self.config_path, jail, release)
+                commands::snapshot::handle_commit(&self.config_path, &jail, &release)
             }
 
             Commands::Clone { source, name } => {
-                commands::snapshot::handle_clone(&self.config_path, source, name)
+                commands::snapshot::handle_clone(&self.config_path, &source, &name)
             }
 
             Commands::Up { jail, all, dry_run } => {
@@ -363,8 +372,8 @@ impl AppContext {
             }
 
             Commands::Eva { jail, all, dry_run } => {
-                let mut bridge = self.verbose_bridge()?;
-                commands::lifecycle::handle_eva(&mut bridge, jail.as_deref(), all, dry_run)
+                let bridge = self.verbose_bridge()?;
+                commands::lifecycle::handle_eva(&bridge, jail.as_deref(), all, dry_run)
             }
 
             Commands::Ps { json } => {
@@ -372,7 +381,8 @@ impl AppContext {
                 if self.format == OutputFormat::Json {
                     crate::output::print_success(&bridge.ps_data())
                 } else {
-                    bridge.ps(json)
+                    bridge.ps(json);
+                    Ok(())
                 }
             }
 
@@ -385,39 +395,41 @@ impl AppContext {
                 }
             }
 
-            Commands::Setup { enable_pf } => {
-                if enable_pf {
-                    crate::bulkhead::enable_pf()?;
-                }
-                let config = manifest::load_or_default(&self.config_path)?;
+            Commands::Setup { enable_pf } => self.setup(enable_pf),
+        }
+    }
 
-                // Recreate persisted networks: bridges and host eifaces do
-                // not survive a reboot, the records do.
-                let net_store = crate::network::NetworkStore::from_config(Some(&config));
-                for mut record in net_store.list()? {
-                    let name = record.name.clone();
-                    match crate::network::ensure::ensure_network(&mut record) {
-                        Ok(changed) => {
-                            if changed {
-                                net_store.save(&record)?;
-                            }
-                            println!("Network '{}' ready on bridge '{}'.", name, record.bridge);
-                        }
-                        Err(e) => {
-                            eprintln!("Warning: failed to reapply network '{name}': {e}");
-                        }
+    /// `blackship setup`: enable PF, recreate persisted networks, prepare the host.
+    fn setup(&self, enable_pf: bool) -> Result<()> {
+        if enable_pf {
+            crate::bulkhead::enable_pf()?;
+        }
+        let config = manifest::load_or_default(&self.config_path)?;
+
+        // Bridges and eifaces do not survive a reboot; their records do.
+        let net_store = crate::network::NetworkStore::from_config(Some(&config));
+        for mut record in net_store.list()? {
+            let name = record.name.clone();
+            match crate::network::ensure::ensure_network(&mut record) {
+                Ok(changed) => {
+                    if changed {
+                        net_store.save(&record)?;
                     }
+                    println!("Network '{}' ready on bridge '{}'.", name, record.bridge);
                 }
-
-                let mut bridge = Bridge::new(config)?.verbose(self.verbose);
-                bridge.prepare_host()?;
-                bridge.init_bulkhead()?;
-                bridge.sync_bulkhead()?;
-                println!("System setup complete.");
-                println!("PF anchor 'blackship' initialized for port forwarding.");
-                Ok(())
+                Err(e) => {
+                    eprintln!("Warning: failed to reapply network '{name}': {e}");
+                }
             }
         }
+
+        let mut bridge = Bridge::new(config)?.verbose(self.verbose);
+        bridge.prepare_host()?;
+        Bridge::init_bulkhead()?;
+        bridge.sync_bulkhead()?;
+        println!("System setup complete.");
+        println!("PF anchor 'blackship' initialized for port forwarding.");
+        Ok(())
     }
 
     /// Resolve a runtime jail target through the config when possible, so
@@ -461,13 +473,14 @@ impl AppContext {
 }
 
 fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
-    if !command.requires_root() || unsafe { libc::geteuid() } == 0 {
+    // SAFETY: geteuid(2) takes no arguments and cannot fail.
+    if !command.requires_root() || nix::unistd::geteuid().is_root() {
         return Ok(());
     }
 
     let escalator = find_escalator().ok_or_else(|| {
         Error::User(
-            "This command requires root privileges. Blackship could not find 'sudo' or 'doas' in PATH. Install one of them, or run this command as root.".into(),
+            "This command requires root privileges. Blackship could not find 'mdo', 'doas', or 'sudo'. Configure one of them, or run this command as root.".into(),
         )
     })?;
 
@@ -486,40 +499,42 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
 }
 
 fn find_escalator() -> Option<&'static str> {
-    // Absolute paths: an earlier PATH entry could supply a fake sudo/doas to steal creds.
-    [
-        "/usr/local/bin/doas",
-        "/usr/local/bin/sudo",
-        "/usr/bin/sudo",
-    ]
-    .into_iter()
-    .find(|path| {
-        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    find_escalator_with(|path| {
+        if !std::fs::metadata(path)
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        {
+            return false;
+        }
+
+        path != "/usr/bin/mdo" || mdo_can_elevate(path)
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::requested_json;
-    use std::ffi::OsString;
-
-    fn args(values: &[&str]) -> Vec<OsString> {
-        values.iter().map(OsString::from).collect()
-    }
-
-    #[test]
-    fn detects_both_json_option_forms() {
-        assert!(requested_json(&args(&["--format", "json", "ps"])));
-        assert!(requested_json(&args(&["--format=json", "check"])));
-        assert!(requested_json(&args(&[
-            "--format", "text", "--format", "json", "ps"
-        ])));
-    }
-
-    #[test]
-    fn ignores_format_words_after_double_dash() {
-        assert!(!requested_json(&args(&[
-            "exec", "web", "--", "echo", "--format", "json"
-        ])));
-    }
+fn mdo_can_elevate(path: &str) -> bool {
+    // mdo ships in the base system even when the caller has no applicable
+    // mac_do rule. Probe its non-interactive authorization so an unusable mdo
+    // does not take precedence over a configured doas or sudo.
+    ProcessCommand::new(path)
+        .arg("/usr/bin/true")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
+
+fn find_escalator_with(mut is_usable: impl FnMut(&str) -> bool) -> Option<&'static str> {
+    // Absolute paths: an earlier PATH entry could supply a fake escalator to steal creds.
+    // mdo is part of the FreeBSD base system and mac_do recognizes this canonical path.
+    const ESCALATORS: [&str; 4] = [
+        "/usr/bin/mdo",
+        "/usr/local/bin/doas",
+        "/usr/local/bin/sudo",
+        "/usr/bin/sudo",
+    ];
+
+    ESCALATORS.into_iter().find(|path| is_usable(path))
+}
+
+#[cfg(test)]
+mod tests;

@@ -25,7 +25,7 @@ pub struct NetworkRecord {
     pub bridge: String,
     pub subnet: String,
     pub gateway: String,
-    /// "epair" (if_bridge) or "netgraph" (ng_bridge)
+    /// "epair" (`if_bridge`) or "netgraph" (`ng_bridge`)
     #[serde(default = "default_backend_epair")]
     pub backend: String,
     /// Host-side gateway interface for netgraph networks (e.g., ngeth1)
@@ -120,7 +120,7 @@ impl NetworkStore {
     }
 
     /// Write a record, replacing any existing one (used to refresh
-    /// runtime-assigned fields like host_iface).
+    /// runtime-assigned fields like `host_iface`).
     pub fn save(&self, record: &NetworkRecord) -> Result<()> {
         validate_network_name(&record.name)?;
         fs::create_dir_all(&self.root)
@@ -314,7 +314,7 @@ impl NetworkLeaseStore {
                 released.push((network_name.to_string(), ip));
             }
 
-            let _ = self.release(network_name, owner)?;
+            self.release(network_name, owner)?;
         }
 
         Ok(released)
@@ -386,7 +386,10 @@ impl VnetStateStore {
             }
             match read_toml::<VnetStateRecord>(&path, "VNET state metadata") {
                 Ok(record) => records.push(record),
-                Err(e) => eprintln!("Warning: skipping VNET state record {path:?}: {e}"),
+                Err(e) => eprintln!(
+                    "Warning: skipping VNET state record {}: {e}",
+                    path.display()
+                ),
             }
         }
         records.sort_by(|a, b| a.owner.cmp(&b.owner));
@@ -468,7 +471,7 @@ pub fn load_runtime_networks(
                 )));
             }
             existing.bridge = bridge;
-            existing.backend = record.backend.clone();
+            existing.backend.clone_from(&record.backend);
         } else {
             networks.insert(
                 record.name.clone(),
@@ -565,7 +568,7 @@ pub fn allocate_and_record(
             Ok(()) => return Ok(ip),
             // Address taken between our read and our write: the allocator
             // has already marked it used, so the next round picks another.
-            Err(Error::Network(msg)) if msg.contains("already leased") => continue,
+            Err(Error::Network(msg)) if msg.contains("already leased") => {}
             Err(e) => return Err(e),
         }
     }
@@ -594,24 +597,16 @@ impl FileLock {
             .truncate(false)
             .open(path)
             .map_err(|e| Error::Network(format!("Failed to open lock file: {e}")))?;
-        let fd = std::os::unix::io::AsRawFd::as_raw_fd(&file);
-        if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
-            return Err(Error::Network(format!(
-                "Failed to lock {}: {}",
-                path.display(),
-                std::io::Error::last_os_error()
-            )));
-        }
+        file.lock()
+            .map_err(|e| Error::Network(format!("Failed to lock {}: {e}", path.display())))?;
         Ok(Self { file })
     }
 }
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        let fd = std::os::unix::io::AsRawFd::as_raw_fd(&self.file);
-        unsafe {
-            libc::flock(fd, libc::LOCK_UN);
-        }
+        // Closing the file releases the lock anyway.
+        let _ = self.file.unlock();
     }
 }
 

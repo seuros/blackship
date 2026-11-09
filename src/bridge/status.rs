@@ -1,6 +1,7 @@
 //! Status and dry-run operations
 
 use crate::error::Result;
+use crate::hooks::HookPhase;
 use crate::jail::jail_getid;
 use serde::Serialize;
 
@@ -53,8 +54,7 @@ impl Bridge {
                     .network
                     .as_ref()
                     .and_then(|n| n.ip)
-                    .map(|ip| ip.to_string())
-                    .unwrap_or_else(|| "none".to_string());
+                    .map_or_else(|| "none".to_string(), |ip| ip.to_string());
 
                 println!("  [START] {full_name}");
                 println!("          Path: {}", path.display());
@@ -64,25 +64,14 @@ impl Bridge {
                     println!("          ZFS: would create dataset");
                 }
 
-                if !jail_def.hooks.is_empty() {
-                    let pre_start: Vec<_> = jail_def
-                        .hooks
-                        .iter()
-                        .filter(|h| h.phase == crate::hooks::HookPhase::PreStart)
-                        .collect();
-                    let post_start: Vec<_> = jail_def
-                        .hooks
-                        .iter()
-                        .filter(|h| h.phase == crate::hooks::HookPhase::PostStart)
-                        .collect();
-
-                    if !pre_start.is_empty() {
-                        println!("          Hooks: {} pre_start", pre_start.len());
-                    }
-                    if !post_start.is_empty() {
-                        println!("          Hooks: {} post_start", post_start.len());
-                    }
-                }
+                print_hook_counts(
+                    jail_def,
+                    "          ",
+                    [
+                        (HookPhase::PreStart, "pre_start"),
+                        (HookPhase::PostStart, "post_start"),
+                    ],
+                );
                 println!();
             }
         }
@@ -105,26 +94,15 @@ impl Bridge {
 
             println!("  [STOP] {full_name} (currently {status})");
 
-            if let Some(jail_def) = self.config.get_jail(&service_name)
-                && !jail_def.hooks.is_empty()
-            {
-                let pre_stop: Vec<_> = jail_def
-                    .hooks
-                    .iter()
-                    .filter(|h| h.phase == crate::hooks::HookPhase::PreStop)
-                    .collect();
-                let post_stop: Vec<_> = jail_def
-                    .hooks
-                    .iter()
-                    .filter(|h| h.phase == crate::hooks::HookPhase::PostStop)
-                    .collect();
-
-                if !pre_stop.is_empty() {
-                    println!("         Hooks: {} pre_stop", pre_stop.len());
-                }
-                if !post_stop.is_empty() {
-                    println!("         Hooks: {} post_stop", post_stop.len());
-                }
+            if let Some(jail_def) = self.config.get_jail(&service_name) {
+                print_hook_counts(
+                    jail_def,
+                    "         ",
+                    [
+                        (HookPhase::PreStop, "pre_stop"),
+                        (HookPhase::PostStop, "post_stop"),
+                    ],
+                );
             }
         }
 
@@ -141,9 +119,13 @@ impl Bridge {
     }
 
     /// Print jail status
-    pub fn ps(&self, json: bool) -> Result<()> {
+    pub fn ps(&self, json: bool) {
         if json {
-            println!("{}", serde_json::to_string_pretty(&self.ps_data()).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&self.ps_data())
+                    .expect("JailStatus always serializes")
+            );
         } else {
             println!("{:<20} {:<10} {:<10}", "NAME", "STATE", "JID");
             println!("{}", "-".repeat(42));
@@ -164,8 +146,6 @@ impl Bridge {
                 println!("{full_name:<20} {state:<10} {jid:<10}");
             }
         }
-
-        Ok(())
     }
 
     /// Return jail status without writing terminal output.
@@ -284,5 +264,19 @@ impl Bridge {
             zfs_enabled: self.zfs.is_some(),
             jail_paths,
         })
+    }
+}
+
+/// Dry-run line per phase that has hooks: `Hooks: 2 pre_start`.
+fn print_hook_counts(
+    jail_def: &crate::manifest::JailDef,
+    indent: &str,
+    phases: [(HookPhase, &str); 2],
+) {
+    for (phase, label) in phases {
+        let count = jail_def.hooks.iter().filter(|h| h.phase == phase).count();
+        if count > 0 {
+            println!("{indent}Hooks: {count} {label}");
+        }
     }
 }

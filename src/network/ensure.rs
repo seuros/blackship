@@ -1,6 +1,6 @@
 //! Idempotent realization of network records.
 //!
-//! `ensure_network` makes the host match a NetworkRecord: bridge present,
+//! `ensure_network` makes the host match a `NetworkRecord`: bridge present,
 //! gateway addressed, forwarding on. Used by `network create` and re-applied
 //! by `setup` after a reboot, when bridges and eifaces no longer exist.
 
@@ -12,7 +12,7 @@ use ipnet::IpNet;
 
 /// Ensure the record's backing interfaces exist and are configured.
 ///
-/// Returns true when the record was changed (netgraph host_iface renamed)
+/// Returns true when the record was changed (netgraph `host_iface` renamed)
 /// and needs to be persisted again.
 pub fn ensure_network(record: &mut NetworkRecord) -> Result<bool> {
     let subnet: IpNet = record
@@ -36,10 +36,13 @@ fn ensure_epair(record: &NetworkRecord, gateway_with_prefix: &str) -> Result<boo
     }
     let bridge = Bridge::create(&record.bridge)?;
     if let Err(e) = bridge.set_address(gateway_with_prefix) {
+        // Rollback; keep the original error.
         let _ = bridge.destroy();
         return Err(e);
     }
-    let _ = crate::sys::tag_interface(&record.bridge);
+    if let Err(e) = crate::sys::tag_interface(&record.bridge) {
+        eprintln!("Warning: could not tag bridge {}: {e}", record.bridge);
+    }
     crate::sys::set_sysctl_int("net.inet.ip.forwarding", 1)?;
     Ok(false)
 }
@@ -62,10 +65,13 @@ fn ensure_netgraph(record: &mut NetworkRecord, gateway_with_prefix: &str) -> Res
     let eiface = bridge.add_eiface()?;
     let ifname = eiface.ifname().to_string();
     if let Err(e) = ioctl::set_ipv4_address(&ifname, gateway_with_prefix) {
+        // Rollback; keep the original error.
         let _ = eiface.destroy();
         return Err(e);
     }
-    let _ = crate::sys::tag_interface(&ifname);
+    if let Err(e) = crate::sys::tag_interface(&ifname) {
+        eprintln!("Warning: could not tag {ifname}: {e}");
+    }
     crate::sys::set_sysctl_int("net.inet.ip.forwarding", 1)?;
 
     let changed = record.host_iface.as_deref() != Some(ifname.as_str());

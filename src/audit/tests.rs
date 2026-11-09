@@ -1,17 +1,17 @@
 use super::*;
 
-fn temp_root() -> PathBuf {
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("blackship-audit-{unique}"))
+fn temp_root() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("blackship-audit-")
+        .tempdir()
+        .expect("scratch dir")
 }
 
 #[test]
 fn appends_and_reads_back_in_order() {
-    let root = temp_root();
-    let log = AuditLog::new(root.clone());
+    let tmp = temp_root();
+    let root = tmp.path().to_path_buf();
+    let log = AuditLog::new(root);
 
     log.append(&AuditRecord::new("demo", AuditEvent::Created))
         .unwrap();
@@ -28,20 +28,19 @@ fn appends_and_reads_back_in_order() {
         Some("zfs")
     );
     assert_eq!(records[2].detail.get("jid").map(String::as_str), Some("42"));
-
-    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
 fn rotation_preserves_history_across_generations() {
-    let root = temp_root();
+    let tmp = temp_root();
+    let root = tmp.path().to_path_buf();
     let log = AuditLog::new(root.clone());
 
     log.append(&AuditRecord::new("demo", AuditEvent::Created))
         .unwrap();
 
     let path = root.join("demo.jsonl");
-    let padding = vec![b'\n'; MAX_LOG_BYTES as usize];
+    let padding = vec![b'\n'; usize::try_from(MAX_LOG_BYTES).unwrap()];
     fs::OpenOptions::new()
         .append(true)
         .open(&path)
@@ -57,13 +56,12 @@ fn rotation_preserves_history_across_generations() {
     assert_eq!(records.len(), 2);
     assert_eq!(records[0].event, AuditEvent::Created);
     assert_eq!(records[1].event, AuditEvent::Destroyed);
-
-    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
 fn read_tolerates_missing_and_malformed_lines() {
-    let root = temp_root();
+    let tmp = temp_root();
+    let root = tmp.path().to_path_buf();
     let log = AuditLog::new(root.clone());
     assert!(log.read("absent").unwrap().is_empty());
 
@@ -77,13 +75,12 @@ fn read_tolerates_missing_and_malformed_lines() {
         .unwrap();
 
     assert_eq!(log.read("demo").unwrap().len(), 1);
-
-    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
 fn rejects_path_traversal() {
-    let log = AuditLog::new(temp_root());
+    let tmp = temp_root();
+    let log = AuditLog::new(tmp.path().to_path_buf());
     assert!(log.read("../escape").is_err());
     assert!(
         log.append(&AuditRecord::new("a/b", AuditEvent::Created))

@@ -48,7 +48,7 @@ fn test_diff_params_change_and_skip() {
         diff.display,
         vec!["host.hostname: old.example -> new.example"]
     );
-    assert!(diff.immutable_diffs.is_empty());
+    assert_eq!(diff.immutable_diffs, Vec::<String>::new());
 }
 
 #[test]
@@ -86,6 +86,6 @@ fn test_diff_params_idempotent() {
 
     let diff = diff_params(&desired, &live, &[]);
     assert!(diff.changes.is_empty());
-    assert!(diff.display.is_empty());
-    assert!(diff.immutable_diffs.is_empty());
+    assert_eq!(diff.display, Vec::<String>::new());
+    assert_eq!(diff.immutable_diffs, Vec::<String>::new());
 }

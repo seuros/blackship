@@ -10,7 +10,7 @@ mod core;
 mod dns;
 mod eva;
 mod graph;
-pub(crate) mod lifecycle;
+pub mod lifecycle;
 mod ports;
 mod qos;
 mod status;

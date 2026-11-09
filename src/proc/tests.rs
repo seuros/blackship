@@ -59,7 +59,7 @@ fn test_backgrounded_grandchild_does_not_wedge_the_drain() {
     );
 }
 
-/// Regression: `closefrom(3)` made this a SIGABRT child, not NotFound.
+/// Regression: `closefrom(3)` made this a SIGABRT child, not `NotFound`.
 #[test]
 fn test_missing_command_reports_not_found() {
     let mut cmd = Command::new("/nonexistent/blackship-does-not-exist");

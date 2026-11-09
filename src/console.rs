@@ -87,16 +87,16 @@ pub fn exec_in_jail(jail: &str, command: &[String], opts: &ExecOptions) -> Resul
                 if !assignments.is_empty() {
                     assignments.push(' ');
                 }
-                let _ = write!(assignments, "{key}={escaped}");
+                let _ = write!(assignments, "{key}={escaped}"); // fmt::Write into a String is infallible
             } else {
-                let _ = write!(script, "export {key}={escaped}; ");
+                let _ = write!(script, "export {key}={escaped}; "); // fmt::Write into a String is infallible
             }
         }
 
         // Add working directory change (properly escaped)
         if let Some(ref workdir) = opts.workdir {
             let escaped_workdir = shell_quote(workdir);
-            let _ = write!(script, "cd {escaped_workdir} || exit 1; ");
+            let _ = write!(script, "cd {escaped_workdir} || exit 1; "); // fmt::Write into a String is infallible
         }
 
         script.push_str("exec ");

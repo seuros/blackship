@@ -55,7 +55,7 @@ pub fn write_atomic(path: &Path, content: &str, label: &str) -> Result<()> {
                 file = Some(f);
                 break;
             }
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
             Err(e) => {
                 return Err(Error::State(format!(
                     "Failed to create {label} temp file: {e}"
@@ -73,7 +73,7 @@ pub fn write_atomic(path: &Path, content: &str, label: &str) -> Result<()> {
     }
 
     fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = fs::remove_file(&tmp_path);
+        let _ = fs::remove_file(&tmp_path); // best-effort; the rename error is reported
         Error::State(format!("Failed to finalize {label}: {e}"))
     })
 }

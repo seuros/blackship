@@ -16,8 +16,8 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-/// Create backoff strategy from RetryConfig
-pub(crate) fn backoff_from_config(config: &RetryConfig) -> ExponentialBackoff {
+/// Create backoff strategy from `RetryConfig`
+pub const fn backoff_from_config(config: &RetryConfig) -> ExponentialBackoff {
     ExponentialBackoff::new()
         .base_delay_ms(config.base_delay_ms)
         .max_delay_ms(config.max_delay_ms)
@@ -105,7 +105,10 @@ pub fn download_file(
         .and_then(|s| s.parse().ok());
 
     if let Some(len) = content_length {
-        eprintln!("Size: {} bytes ({:.2} MB)", len, len as f64 / 1_048_576.0);
+        // Two-decimal display only; exact below 2^53 bytes anyway.
+        #[allow(clippy::cast_precision_loss)]
+        let megabytes = len as f64 / 1_048_576.0;
+        eprintln!("Size: {len} bytes ({megabytes:.2} MB)");
     }
 
     // Unlink then O_EXCL: never write through a symlink planted at dest.
@@ -121,9 +124,9 @@ pub fn download_file(
     // Download with progress
     let mut reader = response.into_body().into_reader();
     let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 65536]; // 64KB buffer
+    let mut buffer = vec![0u8; 65536]; // 64KB buffer, on the heap
     let mut downloaded: u64 = 0;
-    let mut last_progress = 0;
+    let mut last_progress: u64 = 0;
 
     loop {
         let bytes_read = reader
@@ -144,12 +147,12 @@ pub fn download_file(
         downloaded += bytes_read as u64;
 
         // Print progress every 10%
-        if let Some(total) = content_length {
-            let progress = (downloaded * 100 / total) as usize;
-            if progress >= last_progress + 10 {
-                eprintln!("Progress: {progress}% ({downloaded} / {total} bytes)");
-                last_progress = progress;
-            }
+        if let Some(total) = content_length
+            && let Some(progress) = (downloaded * 100).checked_div(total)
+            && progress >= last_progress + 10
+        {
+            eprintln!("Progress: {progress}% ({downloaded} / {total} bytes)");
+            last_progress = progress;
         }
     }
 
@@ -180,7 +183,7 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 65536];
+    let mut buffer = vec![0u8; 65536];
 
     loop {
         let bytes_read = reader

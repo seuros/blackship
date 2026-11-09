@@ -40,7 +40,7 @@ pub fn handle_down(
 }
 
 pub fn handle_eva(
-    bridge: &mut bridge::Bridge,
+    bridge: &bridge::Bridge,
     jail: Option<&str>,
     all: bool,
     dry_run: bool,

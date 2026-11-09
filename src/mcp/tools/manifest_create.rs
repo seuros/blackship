@@ -4,7 +4,7 @@
 //! a project cannot start without — project name, data locations, ZFS, and the
 //! jails themselves with their release, network, and resource limits — and
 //! leaves the long tail (telemetry, named networks, hooks, health checks,
-//! drain, QoS phases, cascade, mounts, rate limiting, retry, bridge VLANs) to
+//! drain, `QoS` phases, cascade, mounts, rate limiting, retry, bridge VLANs) to
 //! hand-editing. Those keys all have working defaults, so a manifest without
 //! them is a manifest that runs; `params` is the escape hatch for raw jail
 //! parameters that would otherwise need a new field here.
@@ -21,6 +21,8 @@ use serde_json::json;
 use toml::{Table, Value as TomlValue};
 
 use super::super::McpState;
+use super::insert_string;
+use super::json_output;
 use super::super::elicit;
 
 /// A manifest to author.
@@ -197,15 +199,12 @@ impl McpState {
         );
 
         if report["valid"] != json!(true) {
-            let text = serde_json::to_string_pretty(&json!({
+            return json_output(&json!({
                 "written": false,
                 "reason": "The rendered manifest does not validate, so the operator was not \
                            asked. Fix the diagnostics and call this tool again.",
                 "validation": report,
-            }))
-            .map_err(|e| ToolError::Execution(format!("Failed to serialize result: {e}")))?;
-
-            return Ok(ToolOutput::text(text));
+            }));
         }
 
         let outcome = elicit::write_with_approval(
@@ -221,10 +220,7 @@ impl McpState {
             object.insert("rendered".to_string(), json!(rendered));
         }
 
-        let text = serde_json::to_string_pretty(&payload)
-            .map_err(|e| ToolError::Execution(format!("Failed to serialize result: {e}")))?;
-
-        Ok(ToolOutput::text(text))
+        json_output(&payload)
     }
 }
 
@@ -360,12 +356,6 @@ fn param_value(value: &JailParamValue) -> TomlValue {
     }
 }
 
-/// Insert `key` only when the caller supplied a value.
-fn insert_string(table: &mut Table, key: &str, value: Option<&str>) {
-    if let Some(value) = value {
-        table.insert(key.to_string(), TomlValue::String(value.to_string()));
-    }
-}
 
 /// Insert `key` only when the list is non-empty, so defaults stay implicit.
 fn insert_strings(table: &mut Table, key: &str, values: &[String]) {
