@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.0](https://github.com/seuros/blackship/compare/blackship-v0.2.1...blackship-v0.3.0) (2026-11-09)
+
+
+### Features
+
+* **cli:** add capabilities discovery ([#24](https://github.com/seuros/blackship/issues/24)) ([977fee9](https://github.com/seuros/blackship/commit/977fee9546a1d5d82ef8440563bd93135a5c5e03))
+* **cli:** add privilege escalation controls ([#19](https://github.com/seuros/blackship/issues/19)) ([829f8c4](https://github.com/seuros/blackship/commit/829f8c4e5dce72abf8c92dd034d38556e37baf2f))
+* **cli:** add structured lifecycle plans ([#23](https://github.com/seuros/blackship/issues/23)) ([4b106a4](https://github.com/seuros/blackship/commit/4b106a4aef73b4d8a07c79910759350ea5867d6d))
+* **cli:** extend structured read-only output ([#22](https://github.com/seuros/blackship/issues/22)) ([017d9dc](https://github.com/seuros/blackship/commit/017d9dcb53205a7ca1746aa8f3e3de2571d810dd))
+* **container:** allow_chflags for baking images with pkgbase ([3bb9d40](https://github.com/seuros/blackship/commit/3bb9d405825345a3eb79aebc6e6fc11983d24ed4))
+* **container:** hand a container over to another owner ([cd12ef2](https://github.com/seuros/blackship/commit/cd12ef20128e44a7b8ead854122e8bb966b8eecd))
+* **container:** nosuid and noexec for nullfs mounts ([8a1050a](https://github.com/seuros/blackship/commit/8a1050a76ed145621b5a13921192ab5514a7f819))
+
+
+### Bug Fixes
+
+* **build:** support FreeBSD 15.1 jail headers ([#21](https://github.com/seuros/blackship/issues/21)) ([2417759](https://github.com/seuros/blackship/commit/241775956b7aee66ffbc7fd6d3281e484efd7d87))
+* **container:** give VNET containers a resolver ([80724f5](https://github.com/seuros/blackship/commit/80724f52ded46cd264fabf8496b4c70c13ccd7e7))
+* **container:** reap a timed-out command before sweeping its jail ([025ff3a](https://github.com/seuros/blackship/commit/025ff3acce62d6d4ac60b944a605962ed9ced7ca))
+* **rctl:** NUL-terminate rule strings and expand size suffixes ([c506956](https://github.com/seuros/blackship/commit/c506956f7143052b5d2d4faf845e30b442291986))
+
+
+### Miscellaneous Chores
+
+* release 0.3.0 ([d2b6ab7](https://github.com/seuros/blackship/commit/d2b6ab71ec0d17ed0700398d1f23f92920e88e01))
+
 ## [0.2.1](https://github.com/seuros/blackship/compare/blackship-v0.2.0...blackship-v0.2.1) (2026-11-09)
 
 
