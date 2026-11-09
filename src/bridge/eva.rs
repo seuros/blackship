@@ -178,6 +178,65 @@ fn jls_json(full_name: &str, keys: &[&str]) -> Result<HashMap<String, String>> {
 }
 
 impl Bridge {
+    /// Build the machine-readable plan behind an `eva --dry-run` invocation.
+    pub(crate) fn eva_plan_data(&self, jail: Option<&str>) -> Result<Vec<serde_json::Value>> {
+        self.jails_for_up(jail)?
+            .iter()
+            .map(|name| {
+                let (service_name, full_name) = self.resolve_jail_names(name)?;
+                let Some(jail_def) = self.config.get_jail(&service_name) else {
+                    return Ok(serde_json::json!({
+                        "action": "skip",
+                        "jail": full_name,
+                        "reason": "not_configured"
+                    }));
+                };
+
+                let Ok(jid) = jail_getid(&full_name) else {
+                    return Ok(serde_json::json!({
+                        "action": "skip",
+                        "jail": full_name,
+                        "reason": "not_running"
+                    }));
+                };
+
+                let is_vnet = jail_def
+                    .network
+                    .as_ref()
+                    .is_some_and(|network| network.vnet);
+                let static_ip = jail_def.network.as_ref().and_then(|network| network.ip);
+                let path = jail_def.effective_path(&self.config.config, &full_name);
+                let mut desired = build_jail_params(jail_def, &full_name, is_vnet, static_ip)?;
+                desired.insert(
+                    crate::sys::consts::JAIL_PARAM_PATH.to_string(),
+                    ParamValue::String(path.display().to_string()),
+                );
+
+                let keys: Vec<&str> = desired.keys().map(String::as_str).collect();
+                let (live, unreadable) = read_live_params(&full_name, &keys);
+                let diff = diff_params(&desired, &live, &unreadable);
+                let resources = self.effective_resources(&full_name, jail_def);
+                let rctl_rules = resources.to_rules(&full_name);
+                let cpu_list =
+                    crate::rctl::resolve_cpu_list(resources, self.other_cpuset_pins(&service_name));
+                let no_changes =
+                    diff.changes.is_empty() && !resources.has_rctl_rules() && cpu_list.is_none();
+
+                Ok(serde_json::json!({
+                    "action": "update",
+                    "jail": full_name,
+                    "jid": jid,
+                    "parameter_changes": diff.display,
+                    "restart_required": diff.immutable_diffs,
+                    "unreadable_parameters": unreadable,
+                    "rctl_rules": rctl_rules,
+                    "cpu_list": cpu_list,
+                    "no_changes": no_changes,
+                }))
+            })
+            .collect()
+    }
+
     /// Hot-update running jails to match the manifest (EVA).
     pub fn eva(&self, jail: Option<&str>) -> Result<()> {
         self.eva_inner(jail, false)

@@ -42,6 +42,46 @@ fn test_stop_order() {
 }
 
 #[test]
+fn test_machine_up_plan_preserves_dependency_order() {
+    let bridge = Bridge::new(test_config()).unwrap();
+    let plan = bridge.up_plan_data(Some("frontend")).unwrap();
+    let names: Vec<_> = plan
+        .iter()
+        .map(|step| step["jail"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(
+        names,
+        vec![
+            "blackship-database",
+            "blackship-backend",
+            "blackship-frontend"
+        ]
+    );
+    assert!(plan.iter().all(|step| step["action"] == "start"));
+}
+
+#[test]
+fn test_machine_down_plan_preserves_reverse_dependency_order() {
+    let bridge = Bridge::new(test_config()).unwrap();
+    let plan = bridge.down_plan_data(Some("database")).unwrap();
+    let names: Vec<_> = plan
+        .iter()
+        .map(|step| step["jail"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(
+        names,
+        vec![
+            "blackship-frontend",
+            "blackship-backend",
+            "blackship-database"
+        ]
+    );
+    assert!(plan.iter().all(|step| step["action"] == "stop"));
+}
+
+#[test]
 fn test_constructor_defers_zfs_initialization() {
     let config: BlackshipConfig = toml::from_str(
         r#"

@@ -292,6 +292,10 @@ blackship --format json check
 blackship --format json network list
 blackship --format json ports
 blackship --format json ports web
+blackship --format json up web --dry-run
+blackship --format json down web --dry-run
+blackship --format json restart web --dry-run
+blackship --format json eva web --dry-run
 ```
 
 Successful commands write an envelope to standard output:
@@ -323,6 +327,11 @@ Commands without a complete JSON contract fail with
 `unsupported_output_format`; they never fall back to mixed human-readable
 output. Existing command-local flags such as `blackship ps --json` retain
 their original, unenveloped output for compatibility.
+
+Lifecycle commands support the global JSON format in dry-run mode. Their
+`data` object contains the requested operation and its ordered steps, allowing
+management tools to preview dependency-aware changes without parsing terminal
+text or modifying the host. Live lifecycle operations remain text-only.
 
 ## Configuration Reference
 

@@ -37,6 +37,58 @@ pub struct JailPathStatus {
 }
 
 impl Bridge {
+    /// Build the machine-readable plan behind an `up --dry-run` invocation.
+    pub(crate) fn up_plan_data(&self, jail: Option<&str>) -> Result<Vec<serde_json::Value>> {
+        self.jails_for_up(jail)?
+            .iter()
+            .map(|name| {
+                let (service_name, full_name) = self.resolve_jail_names(name)?;
+                let jail_def = self
+                    .config
+                    .get_jail(&service_name)
+                    .ok_or_else(|| crate::error::Error::JailNotFound(service_name.clone()))?;
+                let path = jail_def.effective_path(&self.config.config, &full_name);
+                let ip = jail_def
+                    .network
+                    .as_ref()
+                    .and_then(|network| network.ip)
+                    .map(|ip| ip.to_string());
+                Ok(serde_json::json!({
+                    "action": "start",
+                    "jail": full_name,
+                    "path": path.display().to_string(),
+                    "ip": ip,
+                    "currently_running": jail_getid(&full_name).is_ok(),
+                    "create_zfs_dataset": self.zfs.is_some() && jail_def.path.is_none(),
+                    "hooks": {
+                        "pre_start": hook_count(jail_def, HookPhase::PreStart),
+                        "post_start": hook_count(jail_def, HookPhase::PostStart),
+                    }
+                }))
+            })
+            .collect()
+    }
+
+    /// Build the machine-readable plan behind a `down --dry-run` invocation.
+    pub(crate) fn down_plan_data(&self, jail: Option<&str>) -> Result<Vec<serde_json::Value>> {
+        self.jails_for_down(jail)?
+            .iter()
+            .map(|name| {
+                let (service_name, full_name) = self.resolve_jail_names(name)?;
+                let jail_def = self.config.get_jail(&service_name);
+                Ok(serde_json::json!({
+                    "action": "stop",
+                    "jail": full_name,
+                    "currently_running": jail_getid(&full_name).is_ok(),
+                    "hooks": {
+                        "pre_stop": jail_def.map_or(0, |jail| hook_count(jail, HookPhase::PreStop)),
+                        "post_stop": jail_def.map_or(0, |jail| hook_count(jail, HookPhase::PostStop)),
+                    }
+                }))
+            })
+            .collect()
+    }
+
     /// Dry run: show what 'up' would do without making changes
     pub fn up_dry_run(&self, jail: Option<&str>) -> Result<()> {
         println!("=== DRY RUN - No changes will be made ===\n");
@@ -265,6 +317,10 @@ impl Bridge {
             jail_paths,
         })
     }
+}
+
+fn hook_count(jail: &crate::manifest::JailDef, phase: HookPhase) -> usize {
+    jail.hooks.iter().filter(|hook| hook.phase == phase).count()
 }
 
 /// Dry-run line per phase that has hooks: `Hooks: 2 pre_start`.

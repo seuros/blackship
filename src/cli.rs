@@ -768,15 +768,19 @@ pub enum NetworkAction {
 impl Commands {
     /// Whether this command has a complete machine-readable output contract.
     pub const fn supports_machine_output(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Ps { .. }
-                | Self::Check
-                | Self::Ports { .. }
-                | Self::Network {
-                    action: NetworkAction::List
-                }
-        )
+            | Self::Check
+            | Self::Ports { .. }
+            | Self::Network {
+                action: NetworkAction::List,
+            } => true,
+            Self::Up { dry_run, .. }
+            | Self::Down { dry_run, .. }
+            | Self::Restart { dry_run, .. }
+            | Self::Eva { dry_run, .. } => *dry_run,
+            _ => false,
+        }
     }
 
     pub fn requires_root(&self) -> bool {
