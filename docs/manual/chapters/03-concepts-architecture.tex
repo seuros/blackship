@@ -1,0 +1,112 @@
+\chapter{Concepts and Architecture}
+\label{ch:architecture}
+
+Blackship is best understood as a transaction coordinator around native
+FreeBSD subsystems. It calculates a plan, records ownership, applies host
+mutations in order, and rolls them back in reverse order if a later step fails.
+
+\section{Control flow}
+
+\begin{center}
+\begin{tikzpicture}[
+  node distance=0.75cm and 0.55cm,
+  box/.style={draw=steel,rounded corners=2pt,fill=codeback,minimum height=0.75cm,
+              text width=2.3cm,align=center,font=\small},
+  arrow/.style={-{Latex[length=2mm]},thick,color=signalred}
+]
+  \node[box] (cli) {CLI / JSON / Library / MCP};
+  \node[box,right=of cli] (manifest) {Manifest and Jailfile parsers};
+  \node[box,right=of manifest] (bridge) {Bridge and dependency graph};
+  \node[box,below=of manifest] (state) {Scope, audit, network, and lease stores};
+  \node[box,below=of cli] (freebsd) {jail, jls, jexec, mount, rc};
+  \node[box,below=of bridge] (host) {ZFS, PF, VNET, rctl, cpuset};
+  \draw[arrow] (cli) -- (manifest);
+  \draw[arrow] (manifest) -- (bridge);
+  \draw[arrow] (bridge) -- (host);
+  \draw[arrow] (bridge) -- (freebsd);
+  \draw[arrow,<->] (bridge) -- (state);
+  \draw[arrow] (state) -- (host);
+\end{tikzpicture}
+\end{center}
+
+The CLI is intentionally thin. The same core abstractions back ephemeral
+library containers and long-lived manifest jails. Errors retain typed causes at
+the library boundary and stable codes at the JSON boundary.
+
+\section{Manifest, service, and project names}
+
+The manifest is a desired-state document. Each \setting{[[jails]]} table has a
+short service name. Blackship prefixes that name with the project name when it
+creates the kernel jail, avoiding collisions between projects. Commands accept
+the short name, the full name, an unambiguous prefix, a matching tag, or
+\command{ALL} where a selector is allowed.
+
+Dependencies form a directed acyclic graph. Starting a target walks its
+prerequisites in topological order. Stopping a target normally walks its
+dependents in reverse order. A cycle or unknown dependency is a configuration
+error, not an ordering guess.
+
+\section{Releases, roots, and images}
+
+A \emph{release} is a complete FreeBSD userland that can seed a jail. It may
+come from official distribution archives, pkgbase, or \command{blackship
+commit}. A jail root is a writable instance of that release.
+
+With ZFS, the release dataset owns a \command{@pristine} snapshot and jail
+roots are clones. Without ZFS, Blackship copies the release directory. A
+Jailfile modifies a root in reproducible steps; on ZFS, each completed
+\command{RUN} or \command{COPY} can become a cached layer snapshot.
+
+\section{Lifecycle and state machines}
+
+The lifecycle distinguishes declared intent from partial host reality. A jail
+moves through creation, startup, running, draining, stopping, cleanup, and
+failure states. Blackship checkpoints ownership before each external mutation.
+Consequently, cleanup can reason about a half-created interface or mount even
+when no running jail exists.
+
+The main lifecycle operations are:
+
+\begin{description}
+  \item[up] provision and start selected jails with their dependencies;
+  \item[down] drain and stop selected jails in dependency-safe order;
+  \item[restart] perform the stop and start plans;
+  \item[eva] reconcile live-safe parameters, resource rules, and CPU placement
+    without restarting; and
+  \item[gc] compare durable ownership with live host state and reclaim or report
+    leftovers.
+\end{description}
+
+\section{Durable stores}
+
+Files beneath the configured data directory serve different purposes:
+
+\begin{longtable}{L{0.22\textwidth}L{0.68\textwidth}}
+\toprule
+Store & Role \\
+\midrule
+Scope & Current ownership and the rollback work-list for a jail. \\
+Audit & Append-only JSONL lifecycle history that survives scope deletion. \\
+Networks & Persistent named-network definitions, recreated after reboot. \\
+Leases & Serialized address ownership for concurrent jail creation. \\
+Port forwards & PF mappings that can be reloaded after PF restart. \\
+Container registry & Ownership records for ephemeral library/CLI containers. \\
+\bottomrule
+\end{longtable}
+
+\section{Failure model}
+
+Host operations can fail between any two syscalls. Blackship therefore avoids
+the fiction that a multi-step jail start is atomic. It instead makes rollback
+explicit and idempotent. A failed start removes resources it created; a later
+\command{cleanup} or \command{gc} can finish the work after interruption.
+
+Resource-limit and VNET attachment failures are fatal. Running a jail after an
+isolation control failed would violate the manifest more seriously than
+returning an error.
+
+\begin{shipnote}[Inspect before applying]
+The structured dry-run plans are calculated from the same dependency and drift
+logic used by real operations. Use \command{--format json ... --dry-run} in a UI
+or \command{--dry-run} at the terminal before broad changes.
+\end{shipnote}

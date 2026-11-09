@@ -1,0 +1,162 @@
+\chapter{Networking and Storage}
+\label{ch:networking-storage}
+
+\section{VNET backends}
+
+A VNET jail owns its network stack. Blackship can attach that stack through two
+native FreeBSD dataplanes:
+
+\begin{longtable}{L{0.25\textwidth}L{0.30\textwidth}L{0.30\textwidth}}
+\toprule
+Property & epair backend & netgraph backend \\
+\midrule
+Host switching & \command{if\_bridge} & \command{ng\_bridge} node \\
+Jail interface & epair peer & \command{ng\_eiface} \\
+Gateway location & bridge interface & host-side \command{ng\_eiface} \\
+VLAN filtering & supported on capable kernels & not supported \\
+Default & yes & no \\
+\bottomrule
+\end{longtable}
+
+Create a persisted named network rather than manually creating only a bridge:
+
+\begin{lstlisting}[language=bash]
+blackship network create frontend \
+  --subnet 10.20.0.0/24 \
+  --gateway 10.20.0.1 \
+  --backend epair \
+  --bridge blackship0
+\end{lstlisting}
+
+The record survives reboot; transient interfaces do not. \command{blackship
+setup} realizes missing bridges and gateway interfaces from the record.
+
+\section{Netgraph topology}
+
+For a netgraph network, one host-side eiface carries the gateway and each jail
+receives another eiface on a free \command{linkN} hook:
+
+\begin{center}
+\begin{tikzpicture}[
+  n/.style={draw=steel,fill=codeback,rounded corners,align=center,font=\small},
+  a/.style={-{Latex[length=2mm]},thick,color=signalred},node distance=0.8cm]
+  \node[n] (bridge) {ng\_bridge\\ngbridge0};
+  \node[n,left=of bridge] (host) {ngeth0\\host gateway\\10.20.0.1};
+  \node[n,right=of bridge,yshift=0.65cm] (web) {ngeth1\\jail web\\10.20.0.10};
+  \node[n,right=of bridge,yshift=-0.65cm] (db) {ngeth2\\jail db\\10.20.0.11};
+  \draw[a,<->] (host) -- node[above,font=\scriptsize]{link0} (bridge);
+  \draw[a,<->] (bridge) -- node[above,font=\scriptsize]{link1} (web);
+  \draw[a,<->] (bridge) -- node[below,font=\scriptsize]{link2} (db);
+\end{tikzpicture}
+\end{center}
+
+Outbound traffic requires host forwarding and usually PF NAT. Blackship enables
+forwarding while realizing a gateway, but site-specific egress belongs in the
+host PF policy:
+
+\begin{lstlisting}
+nat on $ext_if inet from 10.20.0.0/24 to any -> ($ext_if)
+\end{lstlisting}
+
+\subsection{Bridge-name collision}
+
+Loading \command{ng\_ether} creates netgraph nodes for ethernet interfaces,
+including \command{if\_bridge} devices. An epair network named
+\command{blackship0} can therefore occupy that name in both namespaces. Use a
+different name such as \command{ngbridge0} for an actual netgraph bridge.
+
+\section{Address and interface ownership}
+
+Address claims are serialized in the lease store, so concurrent creators cannot
+receive the same IP. Host-side interfaces are placed in the
+\command{blackship} interface group. Cleanup verifies group ownership before
+destroying an interface found by name, protecting an unrelated interface after
+name reuse.
+
+The default MAC uses FreeBSD's OUI plus a stable hash of jail and bridge names.
+It survives restart while differing between clones. Explicitly configure a MAC
+only when an external network policy requires it.
+
+\section{PF port forwarding}
+
+\begin{lstlisting}[language=bash]
+blackship expose web --port 443 --bind-ip 192.0.2.10
+blackship expose web --port 8080 --internal 80 --proto tcp
+blackship ports web
+blackship unexpose web
+\end{lstlisting}
+
+Blackship writes dedicated PF anchors instead of rewriting the host ruleset.
+Persisted forward definitions can be reapplied with \command{setup}. Ensure the
+main ruleset contains the required \command{rdr-anchor} and \command{anchor}
+statements before publishing a service.
+
+Draining uses a per-jail sub-anchor to reject new TCP SYN packets while allowing
+existing states to expire. It is not a substitute for application-level
+readiness removal, but closes the race between a load balancer update and jail
+teardown.
+
+\section{ZFS layout and provisioning}
+
+With \setting{zpool = "zroot"} and \setting{dataset = "blackship"}, Blackship
+organizes release and jail datasets beneath that root. Release datasets expose a
+\command{@pristine} seed; jails clone from it and mount at the same
+\file{data\_dir/jails/name} path used by directory-backed roots.
+
+Advantages include:
+
+\begin{itemize}
+  \item near-instant, copy-on-write provisioning;
+  \item cheap point-in-time snapshots and clones;
+  \item rolling build-layer snapshots;
+  \item zero-copy commit into reusable releases; and
+  \item native send/receive for backup and migration.
+\end{itemize}
+
+\section{Snapshot workflow}
+
+\begin{lstlisting}[language=bash]
+blackship snapshot create web before-upgrade
+blackship exec web -- pkg upgrade -y
+
+# Rollback requires a stopped jail.
+blackship down web
+blackship snapshot rollback web before-upgrade --force
+blackship up web
+
+blackship clone web@before-upgrade web-test
+\end{lstlisting}
+
+Snapshot and commit operations stage configuration under \file{.blackship/}
+inside the dataset so a sent snapshot carries the metadata needed to understand
+its origin.
+
+\section{Export, import, and migration}
+
+\begin{lstlisting}[language=bash]
+# Portable archive.
+blackship export web --output web.tar.zst
+
+# ZFS stream.
+blackship export web --output web.zfs --zfs-send
+
+# Restore or rename.
+blackship import web.tar.zst --name web-restored
+
+# Import a foreign jail layout.
+blackship import legacy.tar --from auto --name legacy
+
+# Move a stopped jail over SSH/ZFS receive.
+blackship migrate web admin@other-host
+\end{lstlisting}
+
+Foreign import supports iocage, ezjail, plain rootfs, or automatic detection.
+Review the resulting manifest and networking before first start. Migration
+requires compatible ZFS and SSH authority on the destination and does not make
+an incompatible FreeBSD userland/kernel combination safe.
+
+\begin{shipwarning}[Know the dataset before forcing]
+Forced rollback destroys newer snapshots. Forced garbage collection or manual
+\command{zfs destroy -r} can remove data Blackship cannot reconstruct. List the
+resolved datasets and take an export before destructive recovery.
+\end{shipwarning}

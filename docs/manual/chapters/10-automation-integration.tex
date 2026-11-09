@@ -1,0 +1,142 @@
+\chapter{Automation and Integration}
+\label{ch:automation}
+
+\section{Armada orchestration}
+
+Armada is the multi-jail, compose-style interface. It can initialize a
+manifest, merge several files, build missing roots, and apply lifecycle actions
+to selected services.
+
+\begin{lstlisting}[language=bash]
+blackship armada init
+blackship armada -f base.toml -f production.toml config --show
+blackship armada -f base.toml -f production.toml up --detach
+blackship armada ps
+\end{lstlisting}
+
+Later files override earlier values. Keep secrets and host-local paths in a
+protected final override rather than the shared base manifest. Validate the
+merged view, not only each input in isolation.
+
+\section{JSON clients}
+
+A management application should begin with:
+
+\begin{enumerate}
+  \item \command{blackship --format json capabilities};
+  \item a schema-version check;
+  \item \command{check} against the selected manifest;
+  \item read-only status calls; and
+  \item a structured dry run before offering an apply action.
+\end{enumerate}
+
+Invoke Blackship with a fixed executable path and explicit working directory.
+Capture stdout and stderr separately. Decode the envelope only from the stream
+documented for the exit case. Never parse the human message to determine an
+error category.
+
+Use \command{--no-escalate} when the parent application owns authorization, or
+\command{--non-interactive} in unattended jobs. An interactive privilege prompt
+inside a GUI or CI pipe is both confusing and prone to deadlock.
+
+\section{Rust library}
+
+The library API supports ephemeral jails without the CLI, parser, MCP server,
+or telemetry runtime:
+
+\begin{lstlisting}[language=TOML]
+[dependencies]
+blackship = { version = "0.2", default-features = false }
+\end{lstlisting}
+
+\begin{lstlisting}[language=Rust]
+use blackship::{ContainerSpec, Exec, Host, Limits, Network, Selector};
+use std::time::Duration;
+
+let host = Host::new("/var/db/ci/blackship")
+    .with_zfs("zroot", "ci/blackship");
+
+host.reap_orphans(&Selector::prefix("job-"))?;
+host.ensure_release("15.1-RELEASE")?;
+
+let job = host.create(
+    &ContainerSpec::new("job-42", "15.1-RELEASE")
+        .network(Network::Inherit)
+        .limits(Limits::new().memory("4g").max_processes(512)),
+)?;
+
+let result = job.exec(
+    Exec::shell("make test")
+        .cwd("/work")
+        .env("CI", "true")
+        .timeout(Duration::from_secs(900)),
+)?;
+
+job.destroy()?;
+\end{lstlisting}
+
+\command{Host} is a clonable description of layout and storage, not a remote
+connection. Containers own independent host descriptions and can be used from
+several threads. Dropping a container attempts cleanup; call \command{destroy}
+when errors must be observed or \command{keep} when the instance should outlive
+the handle.
+
+A non-zero executed command is represented in the execution result, while
+failure to create, enter, supervise, or clean the jail is a typed
+\command{blackship::Error}. Library calls require appropriate privilege and
+never re-execute through an escalation helper.
+
+\section{Cargo features}
+
+\begin{longtable}{L{0.20\textwidth}L{0.16\textwidth}L{0.54\textwidth}}
+\toprule
+Feature & Default & Adds \\
+\midrule
+\command{cli} & yes & Binary and usage parser; implies telemetry. \\
+\command{mcp} & yes & MCP host, schemas, tracing, and stdio server; implies CLI. \\
+\command{telemetry} & through CLI & OTLP export through rama. \\
+\command{inspect} & no & State-machine introspection. \\
+\bottomrule
+\end{longtable}
+
+\section{MCP server}
+
+\command{blackship mcp} speaks Model Context Protocol over stdin/stdout. It is
+an authoring and validation surface, not a privileged lifecycle daemon. Its
+read-only tools expose host facts and the real manifest/Jailfile parsers.
+File-producing tools render and validate a draft, then require operator
+elicitation before an atomic write.
+
+The gate fails closed: refusal, timeout, an unsupported client, missing
+confirmation, a nonexistent destination directory, or failed validation leaves
+no file behind. Replacing a file requires an additional overwrite decision.
+
+MCP resources include a generated CLI manual, KDL command tree, JSON schemas,
+Jailfile reference, and reserved jail-parameter reference. Because these are
+generated from live code, use them when exact current syntax matters.
+
+\section{CI pattern}
+
+A CI adapter can map one job to one ephemeral jail:
+
+\begin{enumerate}
+  \item reap orphaned jobs with a narrow prefix or label selector;
+  \item ensure the requested release or committed image exists;
+  \item create a uniquely named jail and bounded mounts/resources;
+  \item copy or mount the workspace;
+  \item execute steps with explicit timeouts;
+  \item copy reports out; and
+  \item destroy the jail in a finally/defer path.
+\end{enumerate}
+
+Timeout supervision kills the workload from the host side so a process inside
+the jail cannot evade it. Use read-only mounts for shared source or caches when
+the job should not mutate host data.
+
+\section{Versioning expectations}
+
+Pin crate and binary versions in automation. Treat the JSON
+\setting{schema\_version} independently from the Blackship package version.
+Feature-detect optional behavior with \command{capabilities}, and never assume a
+host has ZFS, PF, RCTL, or an authorized escalator solely because another host
+did.

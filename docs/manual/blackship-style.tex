@@ -1,0 +1,143 @@
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{geometry}
+\geometry{paper=letterpaper,inner=1.05in,outer=0.85in,top=0.85in,bottom=0.9in}
+\usepackage{microtype}
+\DisableLigatures{encoding = *, family = tt*}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc,positioning,shapes.geometric}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{hyperref}
+\usepackage{bookmark}
+
+\definecolor{voidblack}{HTML}{090B10}
+\definecolor{hull}{HTML}{161C27}
+\definecolor{steel}{HTML}{5F6B7A}
+\definecolor{ash}{HTML}{D8DCE3}
+\definecolor{signalred}{HTML}{A92C35}
+\definecolor{ember}{HTML}{E35D4F}
+\definecolor{plasma}{HTML}{7FB7BE}
+\definecolor{codeback}{HTML}{F2F4F7}
+\definecolor{linkblue}{HTML}{245E78}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=signalred,
+  urlcolor=linkblue,
+  citecolor=linkblue,
+  pdftitle={Blackship: Technical Manual},
+  pdfauthor={The Blackship contributors},
+  pdfsubject={FreeBSD jail orchestration},
+  pdfkeywords={FreeBSD, jails, ZFS, VNET, PF, orchestration}
+}
+
+\titleformat{\chapter}[display]
+  {\normalfont\bfseries\color{voidblack}}
+  {\filleft\Large\color{signalred}\MakeUppercase{\chaptertitlename}\ \thechapter}
+  {1ex}
+  {\titlerule\vspace{1.2ex}\Huge}
+\titleformat{\section}{\Large\bfseries\color{voidblack}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{signalred}}{\thesubsection}{0.7em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE]{\small\scshape Blackship Technical Manual}
+\fancyhead[RO]{\small\scshape\nouppercase{\leftmark}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+\setlength{\headheight}{14pt}
+
+\setlist{nosep,leftmargin=1.5em}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.65em}
+\renewcommand{\arraystretch}{1.15}
+\emergencystretch=2em
+
+\lstdefinelanguage{TOML}{
+  sensitive=true,
+  morecomment=[l]{\#},
+  morestring=[b]",
+  alsoletter={-},
+  morekeywords={true,false}
+}
+\lstdefinelanguage{Jailfile}{
+  sensitive=true,
+  morecomment=[l]{\#},
+  morekeywords={FROM,LABEL,ARG,ENV,RUN,COPY,WORKDIR,EXPOSE,CMD,STOP}
+}
+\lstdefinelanguage{JSON}{
+  sensitive=true,
+  morestring=[b]",
+  morecomment=[l]{//},
+  morekeywords={true,false,null}
+}
+\lstdefinelanguage{Rust}{
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  morekeywords={as,async,await,break,const,continue,crate,dyn,else,enum,extern,
+    false,fn,for,if,impl,in,let,loop,match,mod,move,mut,pub,ref,return,self,
+    Self,static,struct,super,trait,true,type,unsafe,use,where,while}
+}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codeback},
+  frame=single,
+  rulecolor=\color{steel!55},
+  breaklines=true,
+  breakatwhitespace=false,
+  keepspaces=true,
+  columns=fullflexible,
+  showstringspaces=false,
+  keywordstyle=\bfseries\color{signalred},
+  commentstyle=\itshape\color{steel},
+  stringstyle=\color{linkblue},
+  numbers=none,
+  xleftmargin=0.4em,
+  xrightmargin=0.4em,
+  aboveskip=0.8em,
+  belowskip=0.8em
+}
+
+\newtcolorbox{shipnote}[1][Note]{
+  enhanced,
+  breakable,
+  colback=plasma!8,
+  colframe=plasma!65!black,
+  title=\textbf{#1},
+  coltitle=white,
+  fonttitle=\bfseries,
+  boxrule=0.7pt,
+  arc=1pt
+}
+\newtcolorbox{shipwarning}[1][Caution]{
+  enhanced,
+  breakable,
+  colback=ember!7,
+  colframe=signalred,
+  title=\textbf{#1},
+  coltitle=white,
+  fonttitle=\bfseries,
+  boxrule=0.8pt,
+  arc=1pt
+}
+
+\newcommand{\command}[1]{\texttt{#1}}
+\newcommand{\file}[1]{\path{#1}}
+\newcommand{\setting}[1]{\texttt{#1}}
+\newcommand{\Blackship}{\textsc{Blackship}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}

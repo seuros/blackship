@@ -1,0 +1,118 @@
+\chapter{Security and Reliability}
+\label{ch:security}
+
+\section{Security boundary}
+
+A FreeBSD jail is operating-system-level isolation, not hardware virtualization.
+It shares the host kernel. Blackship reduces configuration error and limits
+resource/network exposure, but cannot strengthen a jail beyond the guarantees
+of the running FreeBSD kernel and its policy.
+
+Use a VM boundary for untrusted tenants that require independent kernels or for
+workloads whose compromise impact cannot include the host kernel. Keep the host
+patched and avoid granting broad jail parameters merely to make an application
+work.
+
+\section{Least privilege}
+
+Most inspection and authoring operations are unprivileged. Host mutations need
+root. The CLI's escalation order is mdo, doas, then sudo, using canonical paths.
+The library never escalates.
+
+For interactive administration, define narrowly scoped \command{mac\_do} or
+doas policy rather than unrestricted root shells. For a management UI, separate
+the unprivileged planning process from the small authorized apply path and pass
+\command{--no-escalate} to the former.
+
+\section{Environment and path hygiene}
+
+On mdo re-exec, Blackship resets \command{HOME}, \command{USER}, and
+\command{LOGNAME} to root and removes XDG directory overrides. This prevents a
+privileged invocation from continuing to use attacker-controlled user paths.
+
+The executable and escalators should be installed in root-owned locations.
+Automation should use an absolute Blackship path, a known working directory,
+and an explicit manifest. Do not accept an arbitrary manifest path from an
+untrusted caller and then authorize its lifecycle operations.
+
+Jailfile copies are bounded to the build context and jail root. Symlink and
+parent-directory escapes are rejected. MCP writes use a temporary file in the
+target directory followed by rename, preventing an interrupted write from
+truncating an existing manifest.
+
+\section{Network policy}
+
+VNET offers a separate network stack; shared networking does not. PF rules
+still belong to the host security policy. Audit the base ruleset, NAT, Blackship
+anchors, and external interface exposure together.
+
+Port forwarding defaults should bind only where required. A service intended
+for localhost should not be published on every host address. DNS and gateway
+values in a manifest are configuration, not authentication.
+
+Blackship verifies interface ownership before cleanup and serializes address
+leases, reducing races and accidental deletion. Operators should nevertheless
+avoid manually renaming or reusing managed interfaces while jails are active.
+
+\section{Storage and secrets}
+
+Jail roots, snapshots, exports, build contexts, staged manifests, and ZFS send
+streams may contain secrets. Protect them according to the most sensitive jail
+content. A snapshot is not sanitized because the live file was later deleted.
+
+Keep telemetry tokens and local credentials in protected overrides. Review
+Jailfiles before building: \command{RUN} is privileged application installation
+inside a root filesystem and may fetch or execute external content.
+
+\section{Reliability model}
+
+Blackship records ownership before mutation and performs reverse-order rollback.
+Cleanup is designed to be idempotent, because a crash can interrupt either the
+forward path or rollback itself. Scope records are current work-lists; audit
+records are durable history.
+
+The project treats isolation failures as fatal. It does not continue after a
+requested VNET attach or resource policy fails. This fail-closed behavior may
+surface host misconfiguration earlier than a hand-written jail script, which is
+the intended result.
+
+\section{Safe change procedure}
+
+\begin{enumerate}
+  \item identify the exact project, target selector, and resolved full jail names;
+  \item validate the manifest and merged overrides;
+  \item inspect capabilities and current status;
+  \item snapshot or export state that cannot be recreated;
+  \item generate a dry-run plan;
+  \item apply with non-interactive escalation only when credentials are already
+    available;
+  \item verify health and network reachability; and
+  \item inspect audit and a GC dry run for residual resources.
+\end{enumerate}
+
+\section{Backup and recovery}
+
+Test restoration, not only backup creation. A complete recovery plan includes:
+
+\begin{itemize}
+  \item the manifest and Jailfiles in version control;
+  \item portable exports or replicated ZFS snapshots for mutable jail data;
+  \item the pool/dataset naming expected on the destination;
+  \item host PF, loader, rc, and escalation policy outside Blackship's data tree;
+  \item release availability compatible with the destination kernel; and
+  \item a procedure to recreate named networks and forwards with
+    \command{blackship setup}.
+\end{itemize}
+
+\begin{shipwarning}[Force means proof has been relaxed]
+Forced cleanup and garbage collection exist for damaged states where ownership
+cannot be established normally. They are not routine shortcuts. Capture status,
+scope/audit files, mounts, interfaces, PF anchors, and datasets before forcing;
+that evidence is often what explains the incident.
+\end{shipwarning}
+
+\section{Auditability}
+
+Use stable JSON error codes and audit events for automated decisions. Retain
+the package version and capability report alongside incident logs. Human CLI
+text is for diagnosis and may evolve; it is not a durable event schema.

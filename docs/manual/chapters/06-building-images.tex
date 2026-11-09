@@ -1,0 +1,163 @@
+\chapter{Releases, Jailfiles, and Images}
+\label{ch:images}
+
+Blackship separates the base FreeBSD userland from application-specific image
+construction. Releases are reusable roots; Jailfiles describe deterministic
+changes; a running or built jail can be committed back into another release.
+
+\section{Bootstrapping releases}
+
+\begin{lstlisting}[language=bash]
+blackship bootstrap 15.1-RELEASE
+blackship bootstrap 15.1-RELEASE --archives base,lib32
+blackship bootstrap 15.1-RELEASE --pkgbase
+blackship releases list
+blackship releases verify 15.1-RELEASE
+\end{lstlisting}
+
+FreeBSD 16 and newer use pkgbase automatically. For pkgbase, repository
+metadata is checked through the FreeBSD fingerprint trust chain. With ZFS, a
+successful bootstrap creates a release dataset and \command{@pristine}
+snapshot. Blackship refuses to treat an incomplete root as a valid release.
+
+\section{Line-oriented Jailfiles}
+
+The default format deliberately resembles a Dockerfile while retaining
+FreeBSD semantics:
+
+\begin{lstlisting}[language=Jailfile]
+FROM 15.1-RELEASE
+LABEL service=web version=1.0
+ARG NGINX_VERSION=1.26
+ENV NGINX_VERSION=${NGINX_VERSION}
+RUN pkg install -y nginx
+RUN sysrc nginx_enable=YES
+COPY nginx.conf /usr/local/etc/nginx/nginx.conf
+COPY public/ /usr/local/www/nginx/
+WORKDIR /usr/local/www/nginx
+EXPOSE 80/tcp
+CMD /usr/local/sbin/nginx -g 'daemon off;'
+STOP /usr/local/sbin/nginx -s quit
+\end{lstlisting}
+
+\begin{longtable}{L{0.17\textwidth}L{0.73\textwidth}}
+\toprule
+Instruction & Meaning \\
+\midrule
+\command{FROM} & Required base release or committed image. \\
+\command{LABEL} & Image metadata. \\
+\command{ARG} & Build-time variable with an optional default. \\
+\command{ENV} & Environment metadata available to later instructions. \\
+\command{RUN} & Command executed while building the jail root. \\
+\command{COPY} & Copy from the bounded build context into the jail root. \\
+\command{WORKDIR} & Set/create the working directory for later steps. \\
+\command{EXPOSE} & Document an intended service port; it does not create PF rules. \\
+\command{CMD} & Default image command metadata. \\
+\command{STOP} & Command run before rc shutdown; manifest \setting{stop} wins. \\
+\bottomrule
+\end{longtable}
+
+Source resolution refuses absolute paths and parent traversal. Destination
+writes refuse symlink escapes from the jail root. Ownership is resolved against
+the jail, not the host.
+
+\section{TOML Jailfiles}
+
+The alternative format is convenient for generated configuration:
+
+\begin{lstlisting}[language=TOML]
+[metadata]
+name = "web"
+version = "1.0"
+
+from = "15.1-RELEASE"
+
+[[args]]
+name = "NGINX_VERSION"
+default = "1.26"
+
+[[instructions]]
+type = "run"
+command = "pkg install -y nginx"
+
+[[instructions]]
+type = "copy"
+src = "nginx.conf"
+dest = "/usr/local/etc/nginx/nginx.conf"
+
+[[expose]]
+port = 80
+protocol = "tcp"
+
+cmd = "/usr/local/sbin/nginx -g 'daemon off;'"
+
+[stop]
+cmd = "/usr/local/sbin/nginx -s quit"
+\end{lstlisting}
+
+Generate either form with \command{blackship init}; pass \command{--toml} for
+the structured variant.
+
+\section{Build, inspect, and validate}
+
+\begin{lstlisting}[language=bash]
+blackship template validate Jailfile
+blackship template inspect Jailfile
+blackship build --file Jailfile --name web --dry-run
+blackship build --file Jailfile --name web \
+  --build-arg NGINX_VERSION=1.26
+\end{lstlisting}
+
+Dry run does not bootstrap a missing release or mutate storage. Validation
+should be part of CI before a privileged build job.
+
+\section{ZFS layer cache}
+
+Every cacheable \command{RUN} and \command{COPY} contributes to a rolling hash
+of the base release, earlier instructions, build arguments, and copied content.
+A completed step is snapshotted as \command{bs-layer-N-hash}. A rebuild finds
+the longest matching prefix, rolls back to it, and resumes at the first changed
+step.
+
+Changing an early instruction invalidates it and all later layers. Changing an
+unrelated file outside a \command{COPY} source does not. This makes build
+contexts both faster and more predictable than timestamp-only caching.
+
+\section{Commit and reuse}
+
+\begin{lstlisting}[language=bash]
+blackship build --file runner/Jailfile --name runner
+blackship commit runner runner-golden
+blackship run --name ci-42 --release runner-golden -- ./run-tests.sh
+\end{lstlisting}
+
+Commit stages the known jail definition and Jailfile under
+\file{.blackship/}, snapshots the root, clones it into the release tree, and
+promotes it so the result is independently reusable. Choose immutable,
+meaningful release names; consumers should not need to know whether the seed
+came from FreeBSD or a committed image.
+
+\section{Armada build references}
+
+\begin{lstlisting}[language=TOML]
+[[jails]]
+name = "web"
+build = "./web"
+depends_on = ["database"]
+
+[[jails]]
+name = "worker"
+jailfile = "./worker/Worker.jailfile"
+\end{lstlisting}
+
+\setting{build} names a directory containing \file{Jailfile};
+\setting{jailfile} names an explicit file. Armada's \command{up} builds missing
+roots by default, \command{--build} forces a rebuild, and
+\command{--no-build} fails when a required root does not already exist.
+
+\begin{shipnote}[Builds are not runtime configuration]
+Put packages, files, and service enablement in a Jailfile. Put host attachment,
+resource policy, addresses, dependencies, and operational hooks in the
+manifest. Keeping the boundary clear makes images reusable and manifests
+auditable.
+\end{shipnote}

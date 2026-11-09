@@ -1,0 +1,142 @@
+\chapter{Troubleshooting}
+\label{ch:troubleshooting}
+
+Start every investigation with the non-mutating facts:
+
+\begin{lstlisting}[language=bash]
+blackship capabilities
+blackship check
+blackship ps
+blackship up --all --dry-run
+blackship gc --dry-run
+\end{lstlisting}
+
+Add \command{--verbose} for command diagnostics. Preserve audit and scope data
+before manual cleanup.
+
+\section{A jail will not start}
+
+\begin{enumerate}
+  \item run \command{check} for dependency, name, and path errors;
+  \item verify the selected release with \command{releases verify};
+  \item inspect the dry-run path, address, hooks, and dataset action;
+  \item confirm RCTL is enabled if resources are configured;
+  \item inspect named network state and required kernel modules; and
+  \item run \command{cleanup <jail>} only after recording the original error.
+\end{enumerate}
+
+A VNET or resource-limit error is fatal by design. Fix the host capability or
+remove the unsupported requirement; do not expect Blackship to run the jail
+with weaker isolation.
+
+\section{RCTL is unavailable}
+
+Check the read-only loader tunable:
+
+\begin{lstlisting}[language=bash]
+sysctl kern.racct.enable
+\end{lstlisting}
+
+It cannot be enabled at runtime. Add \command{kern.racct.enable="1"} to
+\file{/boot/loader.conf} and reboot. After reboot, validate the actual rules
+with \command{rctl -l jail:<full-name>}.
+
+\section{Network creation or attachment fails}
+
+\begin{lstlisting}[language=bash]
+blackship network list
+ifconfig -g blackship
+sysctl net.inet.ip.forwarding
+pfctl -sr
+pfctl -sn
+\end{lstlisting}
+
+For netgraph, inspect node names and avoid reusing an \command{if\_bridge} name.
+For epair, confirm the bridge and interface modules are available. Verify that
+the jail address belongs to the named subnet and is not already leased.
+
+If outbound packets leave the jail but not the host, check forwarding and NAT.
+If inbound forwarding fails, confirm both the Blackship anchor and the anchor
+load statements in \file{/etc/pf.conf}; then run \command{blackship setup} after
+any PF reload.
+
+\section{The jail has no DNS}
+
+Inspect \file{/etc/resolv.conf} inside the jail and the manifest's DNS mode.
+Custom nameservers must be reachable from the jail's subnet. In inherited mode,
+ensure the host resolver file existed when the root was prepared. DNS failure
+with working IP connectivity is not a bridge failure.
+
+\section{A netgraph bridge name is already in use}
+
+\command{ng\_ether} gives ethernet interfaces netgraph node names. If an
+\command{if\_bridge} named \command{blackship0} already exists, create the
+netgraph network as \command{ngbridge0} or another distinct name. The two bridge
+types share a naming namespace even though their switching implementations
+differ.
+
+\section{EVA reports restart-required drift}
+
+Path, VNET, addresses, and certain jail parameters are immutable for Blackship's
+live-reconciliation model. EVA reports them without applying them. Schedule:
+
+\begin{lstlisting}[language=bash]
+blackship restart <jail> --dry-run
+blackship restart <jail>
+\end{lstlisting}
+
+If \command{jls} cannot report a requested key, EVA may label it unreadable and
+apply an updatable desired value blind. Review that result on the host's exact
+FreeBSD version.
+
+\section{A build unexpectedly reruns steps}
+
+The layer key includes the base release, prior instructions, build arguments,
+and copied content. A change early in the Jailfile correctly invalidates later
+layers. Confirm that generated files in a \command{COPY} source are stable and
+that the same build arguments are supplied. Check available ZFS snapshots; the
+layer cache is a ZFS feature.
+
+\section{Snapshot rollback is refused}
+
+Stop the jail before rollback. If newer snapshots exist, a non-forced rollback
+protects them. List snapshots, export anything needed, and only then decide
+whether \command{--force} is appropriate.
+
+\section{Residual resources remain after a crash}
+
+Run a GC dry run and compare its report with \command{mount}, \command{jls},
+\command{ifconfig -g blackship}, PF anchors, rctl rules, and ZFS datasets.
+Normal GC reclaims proven ownership. Use targeted \command{cleanup} for one
+jail. Force only after confirming that a reported resource does not belong to a
+different live workload.
+
+\section{Automatic escalation fails}
+
+Run the command once with \command{--no-escalate} to confirm that privilege is
+the only issue. Check \command{capabilities} for installed helper paths. For
+mdo, verify the applicable \command{mac\_do} rule; installation alone does not
+grant authorization. For unattended execution, ensure doas/sudo policy permits
+the command without a password and use \command{--non-interactive}.
+
+\section{JSON automation receives an error}
+
+Confirm the global option precedes the command and that the command supports the
+contract. Streaming health/watch and log/follow output is not a single JSON
+envelope. On failure read stderr, check \setting{ok = false}, branch on the
+stable error \setting{code}, and log the message for operators.
+
+\section{An ephemeral run cannot ping}
+
+Ephemeral \command{run} jails are intentionally not granted raw sockets,
+arbitrary socket families, or chflags. Use a managed manifest jail with an
+explicitly reviewed policy for workloads that require those facilities. Do not
+broaden all ephemeral jobs to accommodate one diagnostic command.
+
+\section{When to report a bug}
+
+Include the Blackship version, \command{capabilities} output, FreeBSD release,
+minimal manifest with secrets removed, exact command, verbose error, relevant
+audit records, and whether ZFS/PF/RCTL/VNET are enabled. State whether the issue
+reproduces after a dry-run-only invocation. Never attach private keys, tokens,
+full production roots, or unsanitized ZFS streams.

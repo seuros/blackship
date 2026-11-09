@@ -1,0 +1,97 @@
+\chapter{Overview}
+\label{ch:overview}
+
+\Blackship{} is a FreeBSD jail orchestrator. It turns a TOML manifest and
+optional Jailfiles into repeatable jail lifecycle operations: acquire a
+userland, create or clone a root filesystem, configure isolation and resources,
+attach networking, run hooks, supervise health, and reclaim every resource when
+the jail stops.
+
+The project sits between FreeBSD's native tools and a full cluster platform. It
+does not replace \command{jail(8)}, ZFS, PF, rctl, cpuset, or rc; it coordinates
+them and records enough state to recover from partial failure.
+
+\section{Who this is for}
+
+Blackship is designed for:
+
+\begin{itemize}
+  \item FreeBSD administrators who want declarative, dependency-aware jails;
+  \item application teams running several cooperating services on one host;
+  \item CI systems that need fast, disposable FreeBSD environments;
+  \item management interfaces that need stable JSON rather than scraped text;
+  \item developers who want a Rust library for ephemeral jail workloads; and
+  \item operators who value native FreeBSD facilities over a parallel runtime.
+\end{itemize}
+
+It is particularly effective on ZFS hosts. A bootstrapped release can be
+snapshotted once and cloned for each jail, making creation fast and
+space-efficient. The non-ZFS path remains supported, but uses full directory
+copies and cannot offer snapshots, clones, or ZFS send/receive.
+
+\section{What it is not}
+
+Blackship is not a Linux container compatibility layer, a virtual-machine
+manager, a multi-host scheduler, or a Kubernetes implementation. A jail shares
+the FreeBSD kernel with its host. Workloads that need a different kernel,
+hardware emulation, live migration, or hostile multi-tenant isolation should be
+evaluated against bhyve or another VM boundary.
+
+Blackship also does not invent a package or service manager inside the jail.
+Jailfiles run ordinary FreeBSD commands, and managed jails normally boot through
+\file{/etc/rc} and stop through \file{/etc/rc.shutdown}.
+
+\section{Major capabilities}
+
+\begin{description}[style=nextline]
+  \item[Declarative manifests]
+    Describe jails, dependencies, hooks, VNET, health checks, resource limits,
+    QoS phases, draining, and storage in \file{blackship.toml}.
+  \item[Dependency-aware lifecycle]
+    Start prerequisites first and stop dependents first. Select a jail by name,
+    unambiguous prefix, tag, or \command{ALL}.
+  \item[Release and image management]
+    Bootstrap FreeBSD releases from distribution sets or pkgbase, build Jailfiles
+    with a ZFS layer cache, and commit configured roots as reusable releases.
+  \item[Native networking]
+    Create VNET jails using either \command{if\_bridge}/epair or
+    \command{ng\_bridge}/\command{ng\_eiface}, allocate addresses, configure DNS,
+    and publish services through PF anchors.
+  \item[Operational control]
+    Apply live-safe changes with EVA, supervise health, enforce rctl and cpuset
+    policy, drain connections, inspect audit history, and garbage-collect
+    orphaned resources.
+  \item[Integration surfaces]
+    Use versioned JSON envelopes, Armada multi-file orchestration, a Rust library,
+    shell completion, or the optional MCP server.
+\end{description}
+
+\section{A typical workflow}
+
+The normal path is deliberately short:
+
+\begin{enumerate}
+  \item install Blackship on a supported FreeBSD host;
+  \item bootstrap a base release;
+  \item define one or more jails in \file{blackship.toml};
+  \item create a named network when VNET is required;
+  \item validate and preview the plan;
+  \item start the target or the entire dependency graph; and
+  \item observe, update, snapshot, export, or stop it using the same manifest.
+\end{enumerate}
+
+\begin{shipnote}[One source of truth]
+The manifest describes desired jail configuration. Runtime stores beneath the
+data directory record what Blackship actually created. Do not edit those stores
+by hand; use the CLI, or reconcile manual host changes with \command{eva},
+\command{cleanup}, or \command{gc}.
+\end{shipnote}
+
+\section{Documentation conventions}
+
+The manual uses \emph{service name} for the short name in the manifest and
+\emph{full jail name} for the project-prefixed kernel name. The word
+\emph{release} means a bootstrapped FreeBSD userland or a committed compatible
+image, not the host kernel release. A \emph{named network} is a persisted
+Blackship record that can be recreated after reboot; it is not merely a bridge
+interface that happens to exist.

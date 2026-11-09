@@ -1,0 +1,44 @@
+\thispagestyle{empty}
+\vspace*{\fill}
+
+{\Large\bfseries Blackship Technical Manual}\par
+\vspace{0.5em}
+Version \BlackshipVersion, \ManualEdition
+
+\vspace{2em}
+Copyright \textcopyright\ 2026 The Blackship contributors.
+
+This manual and the Blackship source code are distributed under the BSD
+3-Clause License. The authoritative license text is in the project repository.
+
+The cover uses original vector artwork. Blackship takes its name and atmosphere
+from the broad science-fiction idea of ominous ``black ships''; this project and
+manual are not affiliated with or endorsed by Games Workshop, and contain no
+Warhammer artwork, logos, characters, or setting text.
+
+\vspace{2em}
+\begin{shipnote}[Manual scope]
+This edition documents Blackship \BlackshipVersion. The command line remains the
+authoritative interface: run \command{blackship --help}, a subcommand's help,
+or \command{blackship mcp}'s generated manual when using a newer release.
+\end{shipnote}
+
+\vspace*{\fill}
+\clearpage
+
+\chapter*{How to read this manual}
+\addcontentsline{toc}{chapter}{How to read this manual}
+
+Chapters 1--4 orient a new operator and lead to a running jail. Chapters 5--9
+form the day-to-day reference for configuration, images, networking, storage,
+operations, and commands. Chapters 10--11 cover integration and the security
+model. Chapter 12 is organized by symptoms for incident response.
+
+Shell sessions use a dollar sign for an unprivileged prompt and a hash sign for
+root. Do not type the prompt character. Examples assume FreeBSD 15.1 unless the
+text says otherwise. Replace pool names, interfaces, releases, addresses, and
+paths with values appropriate to the host.
+
+Destructive commands are called out explicitly. A dry run is recommended before
+any dependency-wide lifecycle or reclamation operation.
+\clearpage

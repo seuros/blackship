@@ -1,0 +1,149 @@
+\chapter{Requirements and Installation}
+\label{ch:requirements}
+
+\section{Supported platform}
+
+Blackship builds and runs on FreeBSD 15.0 or newer. It uses FreeBSD-specific
+headers, system calls, ioctls, jail parameters, and network facilities; other
+operating systems are not supported build targets.
+
+The minimum host provides:
+
+\begin{itemize}
+  \item a FreeBSD 15.0+ kernel with jail support;
+  \item the base userland tools, including \command{jail}, \command{jls},
+    \command{jexec}, \command{mount}, and \command{ifconfig};
+  \item root authority for operations that create or alter host resources; and
+  \item network access to a FreeBSD mirror when bootstrapping a release.
+\end{itemize}
+
+\subsection{Optional host facilities}
+
+\begin{longtable}{L{0.18\textwidth}L{0.72\textwidth}}
+\toprule
+Facility & Purpose \\
+\midrule
+ZFS & Clone provisioning, build-layer cache, snapshots, commit, efficient export,
+and migration. \\
+PF & Port forwarding, NAT integration, and connection draining. \\
+RACCT/RCTL & Memory, CPU, process, file, and custom resource limits; usage sampling. \\
+VNET modules & Per-jail network stacks through epair/\command{if\_bridge} or
+netgraph. \\
+cpuset & Explicit CPU pinning or least-loaded core allocation. \\
+\bottomrule
+\end{longtable}
+
+RCTL requires the kernel accounting facility at boot. Add the following to
+\file{/boot/loader.conf} and reboot before relying on resource policy:
+
+\begin{lstlisting}
+kern.racct.enable="1"
+\end{lstlisting}
+
+\section{Installing a release binary}
+
+Download the asset appropriate to the host architecture from the project's
+release page, extract it, and install the executable on the system path:
+
+\begin{lstlisting}[language=bash]
+fetch https://github.com/seuros/blackship/releases/latest/download/blackship-freebsd-amd64.tar.gz
+tar xzf blackship-freebsd-amd64.tar.gz
+sudo install -m 0555 blackship /usr/local/bin/blackship
+blackship --version
+\end{lstlisting}
+
+The FreeBSD port under \file{ports/sysutils/blackship} provides the expected
+packaging metadata and rc integration for a ports-based deployment.
+
+\section{Installing with Cargo}
+
+Building from source requires a Rust toolchain that satisfies the
+\file{Cargo.toml} \command{rust-version}, a C compiler, and the base system
+headers. Blackship compiles a small C helper at build time to obtain ioctl and
+netgraph constants from the host headers instead of hard-coding ABI values.
+
+\begin{lstlisting}[language=bash]
+pkg install rust
+cargo install blackship
+\end{lstlisting}
+
+For repository development:
+
+\begin{lstlisting}[language=bash]
+git clone https://github.com/seuros/blackship.git
+cd blackship
+cargo build --release
+sudo install -m 0555 target/release/blackship /usr/local/bin/blackship
+\end{lstlisting}
+
+The default build includes the CLI, telemetry support, and MCP server. Library
+consumers can omit them with \command{default-features = false}; Chapter
+\ref{ch:automation} covers feature selection.
+
+\section{Checking host capabilities}
+
+The capability report needs neither a manifest nor root:
+
+\begin{lstlisting}[language=bash]
+blackship capabilities
+blackship --format json capabilities
+\end{lstlisting}
+
+It reports the Blackship version, JSON schema version, target OS and
+architecture, kernel-derived features, compiled Cargo features, canonical host
+tools, and installed privilege escalators. Use it as the first handshake for a
+management application.
+
+\section{Data and cache directories}
+
+Defaults follow the XDG base directory conventions:
+
+\begin{longtable}{L{0.28\textwidth}L{0.42\textwidth}L{0.22\textwidth}}
+\toprule
+Purpose & Default & Override \\
+\midrule
+Persistent data & \path{~/.local/share/blackship} & \command{XDG\_DATA\_HOME} \\
+Bootstrapped releases & \path{<data_dir>/releases} & manifest \\
+Download/build cache & \path{~/.cache/blackship} & \command{XDG\_CACHE\_HOME} \\
+Manifest & \path{./blackship.toml} & \command{--config} \\
+\bottomrule
+\end{longtable}
+
+A system-wide installation commonly sets \setting{data\_dir} to
+\file{/var/blackship}. Whatever path is chosen must remain consistent across
+interactive commands and the supervisor.
+
+\section{Privilege escalation}
+
+Library calls never elevate themselves. The CLI can re-execute privileged
+commands through, in order, FreeBSD \command{mdo}, \command{doas}, or
+\command{sudo}. The helper path is canonical rather than resolved from an
+untrusted \command{PATH}.
+
+\begin{lstlisting}[language=bash]
+# Refuse automatic elevation.
+blackship --no-escalate up --all
+
+# Elevation may occur, but doas/sudo must not prompt.
+blackship --non-interactive up --all
+\end{lstlisting}
+
+\command{mdo} authorization is supplied by \command{mac\_do} policy and is
+already non-interactive. The CLI resets root identity and XDG environment
+variables when it re-executes, preventing privileged state from being written
+under the invoking user's home by accident.
+
+\begin{shipwarning}[Bootstrap still needs root]
+Even when the destination directory is user-writable, extracting a FreeBSD base
+archive needs root to preserve ownership and special permission bits. Do not
+work around this by stripping archive metadata; the resulting userland is not a
+faithful release.
+\end{shipwarning}
+
+\section{Shell completion}
+
+\begin{lstlisting}[language=bash]
+blackship completion bash > /usr/local/etc/bash_completion.d/blackship
+blackship completion zsh > /usr/local/share/zsh/site-functions/_blackship
+blackship completion fish > ~/.config/fish/completions/blackship.fish
+\end{lstlisting}
