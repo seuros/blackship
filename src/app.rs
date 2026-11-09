@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::Command as ProcessCommand;
+use std::process::{Command as ProcessCommand, Stdio};
 
 /// Run the Blackship CLI application.
 ///
@@ -413,7 +413,7 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
 
     let escalator = find_escalator().ok_or_else(|| {
         Error::User(
-            "This command requires root privileges. Blackship could not find 'sudo' or 'doas' in PATH. Install one of them, or run this command as root.".into(),
+            "This command requires root privileges. Blackship could not find 'mdo', 'doas', or 'sudo'. Configure one of them, or run this command as root.".into(),
         )
     })?;
 
@@ -432,14 +432,42 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
 }
 
 fn find_escalator() -> Option<&'static str> {
-    // Absolute paths: an earlier PATH entry could supply a fake sudo/doas to steal creds.
-    [
+    find_escalator_with(|path| {
+        if !std::fs::metadata(path)
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        {
+            return false;
+        }
+
+        path != "/usr/bin/mdo" || mdo_can_elevate(path)
+    })
+}
+
+fn mdo_can_elevate(path: &str) -> bool {
+    // mdo ships in the base system even when the caller has no applicable
+    // mac_do rule. Probe its non-interactive authorization so an unusable mdo
+    // does not take precedence over a configured doas or sudo.
+    ProcessCommand::new(path)
+        .arg("/usr/bin/true")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn find_escalator_with(mut is_usable: impl FnMut(&str) -> bool) -> Option<&'static str> {
+    // Absolute paths: an earlier PATH entry could supply a fake escalator to steal creds.
+    // mdo is part of the FreeBSD base system and mac_do recognizes this canonical path.
+    const ESCALATORS: [&str; 4] = [
+        "/usr/bin/mdo",
         "/usr/local/bin/doas",
         "/usr/local/bin/sudo",
         "/usr/bin/sudo",
-    ]
-    .into_iter()
-    .find(|path| {
-        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    })
+    ];
+
+    ESCALATORS.into_iter().find(|path| is_usable(path))
 }
+
+#[cfg(test)]
+mod tests;
