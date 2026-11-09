@@ -19,7 +19,7 @@ The minimum host provides:
 
 \subsection{Optional host facilities}
 
-\begin{longtable}{L{0.18\textwidth}L{0.72\textwidth}}
+\begin{shiptable}{L{0.18\textwidth}L{0.72\textwidth}}
 \toprule
 Facility & Purpose \\
 \midrule
@@ -31,7 +31,7 @@ VNET modules & Per-jail network stacks through epair/\command{if\_bridge} or
 netgraph. \\
 cpuset & Explicit CPU pinning or least-loaded core allocation. \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 RCTL requires the kernel accounting facility at boot. Add the following to
 \file{/boot/loader.conf} and reboot before relying on resource policy:
@@ -100,7 +100,7 @@ management application.
 
 Defaults follow the XDG base directory conventions:
 
-\begin{longtable}{L{0.28\textwidth}L{0.42\textwidth}L{0.22\textwidth}}
+\begin{shiptable}{L{0.28\textwidth}L{0.42\textwidth}L{0.22\textwidth}}
 \toprule
 Purpose & Default & Override \\
 \midrule
@@ -109,7 +109,7 @@ Bootstrapped releases & \path{<data_dir>/releases} & manifest \\
 Download/build cache & \path{~/.cache/blackship} & \command{XDG\_CACHE\_HOME} \\
 Manifest & \path{./blackship.toml} & \command{--config} \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 A system-wide installation commonly sets \setting{data\_dir} to
 \file{/var/blackship}. Whatever path is chosen must remain consistent across

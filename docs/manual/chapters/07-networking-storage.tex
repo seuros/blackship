@@ -6,7 +6,7 @@
 A VNET jail owns its network stack. Blackship can attach that stack through two
 native FreeBSD dataplanes:
 
-\begin{longtable}{L{0.25\textwidth}L{0.30\textwidth}L{0.30\textwidth}}
+\begin{shiptable}{L{0.25\textwidth}L{0.30\textwidth}L{0.30\textwidth}}
 \toprule
 Property & epair backend & netgraph backend \\
 \midrule
@@ -16,7 +16,7 @@ Gateway location & bridge interface & host-side \command{ng\_eiface} \\
 VLAN filtering & supported on capable kernels & not supported \\
 Default & yes & no \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 Create a persisted named network rather than manually creating only a bridge:
 
@@ -36,7 +36,7 @@ setup} realizes missing bridges and gateway interfaces from the record.
 For a netgraph network, one host-side eiface carries the gateway and each jail
 receives another eiface on a free \command{linkN} hook:
 
-\begin{center}
+\begin{shipfigure}
 \begin{tikzpicture}[
   n/.style={draw=steel,fill=codeback,rounded corners,align=center,font=\small},
   a/.style={-{Latex[length=2mm]},thick,color=signalred},node distance=0.8cm]
@@ -48,7 +48,7 @@ receives another eiface on a free \command{linkN} hook:
   \draw[a,<->] (bridge) -- node[above,font=\scriptsize]{link1} (web);
   \draw[a,<->] (bridge) -- node[below,font=\scriptsize]{link2} (db);
 \end{tikzpicture}
-\end{center}
+\end{shipfigure}
 
 Outbound traffic requires host forwarding and usually PF NAT. Blackship enables
 forwarding while realizing a gateway, but site-specific egress belongs in the
