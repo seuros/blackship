@@ -6,6 +6,9 @@
 //!     BLACKSHIP_E2E_RELEASE=16.0-CURRENT \
 //!     cargo test --test containers_as_root -- --ignored --test-threads=1
 //! ```
+//!
+//! `BLACKSHIP_E2E_NETWORK` names a Blackship network (`blackship network
+//! create`) under the same data dir for the VNET checks; they skip without it.
 
 use blackship::{
     Build, ContainerSpec, Error, Exec, Exit, Host, Limits, Mount, Network, Selector, Stream,
@@ -415,6 +418,62 @@ fn handed_over_containers_belong_to_the_new_owner() {
         std::slice::from_ref(&n)
     );
     assert!(!s.host.containers().unwrap().iter().any(|i| i.name == n));
+}
+
+/// The container's resolver, `None` when it has no `/etc/resolv.conf`.
+fn resolver(c: &blackship::Container) -> Option<String> {
+    let out = c.exec(Exec::argv(["cat", "/etc/resolv.conf"])).unwrap();
+    out.exit
+        .success()
+        .then(|| String::from_utf8(out.stdout).unwrap())
+}
+
+#[test]
+#[ignore = "needs root and a bootstrapped release"]
+fn networked_containers_get_a_resolver() {
+    let Some(s) = setup() else { return };
+    let host_resolver = std::fs::read_to_string("/etc/resolv.conf").ok();
+
+    let inherit = s
+        .host
+        .create(&ContainerSpec::new(name("dns-inherit"), &s.release).network(Network::Inherit))
+        .unwrap();
+    assert_eq!(resolver(&inherit), host_resolver);
+    inherit.destroy().unwrap();
+
+    let pinned = s
+        .host
+        .create(
+            &ContainerSpec::new(name("dns-pinned"), &s.release)
+                .network(Network::Inherit)
+                .nameserver([192, 0, 2, 53]),
+        )
+        .unwrap();
+    assert_eq!(
+        resolver(&pinned).as_deref(),
+        Some("# Written by blackship\nnameserver 192.0.2.53\n")
+    );
+    pinned.destroy().unwrap();
+
+    let Ok(network) = std::env::var("BLACKSHIP_E2E_NETWORK") else {
+        eprintln!("skipping the VNET half: BLACKSHIP_E2E_NETWORK is not set");
+        return;
+    };
+    // The case that broke `run --network`: a release with no resolv.conf.
+    let release = s.host.release(&s.release).unwrap().unwrap();
+    let shipped = release.path.join("etc/resolv.conf").exists();
+    let vnet = s
+        .host
+        .create(&ContainerSpec::new(name("dns-vnet"), &s.release).network(Network::vnet(&network)))
+        .unwrap();
+    let got = resolver(&vnet);
+    vnet.destroy().unwrap();
+    match host_resolver {
+        Some(host) if host.lines().any(|l| l.starts_with("nameserver")) => {
+            assert_eq!(got, Some(host), "release shipped resolv.conf: {shipped}");
+        }
+        _ => {}
+    }
 }
 
 #[test]

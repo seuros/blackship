@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::host::Layout;
 use crate::manifest::validate_name;
 use crate::network;
+use std::net::IpAddr;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -127,13 +128,7 @@ fn build(
         _ => copy_release(layout, release_path, root)?,
     }
 
-    if spec.network == Network::Inherit {
-        // Sharing the host's addresses is only useful with its resolver.
-        let resolv = Path::new("/etc/resolv.conf");
-        if resolv.exists() {
-            std::fs::copy(resolv, root.join("etc/resolv.conf"))?;
-        }
-    }
+    install_resolver(spec, root)?;
 
     for mount in &spec.mounts {
         mount_nullfs(root, mount)?;
@@ -241,6 +236,102 @@ fn mount_nullfs(root: &Path, mount: &Mount) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Write the container's `/etc/resolv.conf` (see [`resolv_conf`]). The
+/// release may ship none (pkgbase does not) or one from another network.
+fn install_resolver(spec: &ContainerSpec, root: &Path) -> Result<()> {
+    let host = match std::fs::read_to_string(HOST_RESOLV_CONF) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(Error::Network(format!(
+                "cannot read {HOST_RESOLV_CONF}: {e}"
+            )));
+        }
+    };
+    let Some(content) = resolv_conf(spec, host.as_deref())? else {
+        return Ok(());
+    };
+    // etc/ must be the container's own; the file itself is replaced, never followed.
+    let etc = root.join("etc");
+    crate::blueprint::context::reject_symlink_ancestors(root, &etc)?;
+    crate::sys::write_nofollow(&etc.join("resolv.conf"), content.as_bytes())
+}
+
+const HOST_RESOLV_CONF: &str = "/etc/resolv.conf";
+
+/// The resolver for `spec`, given the host's `resolv.conf`; `None` leaves
+/// the release's alone.
+///
+/// Explicit nameservers win. [`Network::Inherit`] shares the host's stack,
+/// so the host's file works verbatim. A VNET stack cannot reach the host's
+/// loopback or a link-local address scoped to a host interface, so those
+/// nameservers are dropped; when nothing is left the container would
+/// resolve nothing, and that is an error rather than a surprise later.
+fn resolv_conf(spec: &ContainerSpec, host: Option<&str>) -> Result<Option<String>> {
+    if !spec.nameservers.is_empty() {
+        let mut content = String::from("# Written by blackship\n");
+        for server in &spec.nameservers {
+            content.push_str("nameserver ");
+            content.push_str(&server.to_string());
+            content.push('\n');
+        }
+        return Ok(Some(content));
+    }
+    let Some(host) = host else {
+        return Ok(None);
+    };
+    match spec.network {
+        Network::None => Ok(None),
+        Network::Inherit => Ok(Some(host.to_string())),
+        Network::Vnet(_) => {
+            let mut content = String::with_capacity(host.len());
+            let mut dropped = Vec::new();
+            let mut kept = 0;
+            for line in host.lines() {
+                match nameserver_of(line) {
+                    Some(server) if !reachable_from_vnet(server) => {
+                        dropped.push(server);
+                        continue;
+                    }
+                    Some(_) => kept += 1,
+                    None => {}
+                }
+                content.push_str(line);
+                content.push('\n');
+            }
+            if kept == 0 && !dropped.is_empty() {
+                return Err(Error::Network(format!(
+                    "the host resolves through {}, which container '{}' cannot reach from its \
+                     own network stack; give it a nameserver (ContainerSpec::nameserver, \
+                     or --dns on the CLI)",
+                    dropped.join(", "),
+                    spec.name()
+                )));
+            }
+            Ok(Some(content))
+        }
+    }
+}
+
+/// The address of a `nameserver` line.
+fn nameserver_of(line: &str) -> Option<&str> {
+    let mut words = line.split_whitespace();
+    (words.next() == Some("nameserver"))
+        .then(|| words.next())
+        .flatten()
+}
+
+/// Whether a nameserver is somewhere other than the host's own stack.
+fn reachable_from_vnet(server: &str) -> bool {
+    // fe80::1%em0 names a host interface the container does not have.
+    if server.contains('%') {
+        return false;
+    }
+    server
+        .parse::<IpAddr>()
+        .map_or(true, |ip| !ip.is_loopback())
 }
 
 /// Lease an address on `network_name` and build the VNET interface pair.

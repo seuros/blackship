@@ -193,6 +193,10 @@ pub enum Commands {
         #[usage(long)]
         network: Option<String>,
 
+        /// Nameserver for the jail's resolv.conf instead of the host's (can be repeated)
+        #[usage(long = "dns", var)]
+        dns: Vec<String>,
+
         /// Command to execute (use -- to separate from options)
         #[usage(value_name = "COMMAND", double_dash = "required")]
         command: Vec<String>,

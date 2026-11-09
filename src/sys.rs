@@ -412,6 +412,29 @@ pub fn apply_devfs_ruleset(dev_path: &std::path::Path, ruleset: u32) -> Result<(
     Ok(())
 }
 
+/// Write a path without following symlinks: unlink first, then `O_CREAT|O_EXCL` (TOCTOU).
+pub fn write_nofollow(path: &std::path::Path, data: &[u8]) -> Result<()> {
+    use std::io::Write;
+    // Usually NotFound; anything worse makes the O_EXCL open below fail loudly.
+    let _ = std::fs::remove_file(path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            Error::JailOperation(format!(
+                "Failed to create directory {}: {}",
+                parent.display(),
+                e
+            ))
+        })?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| Error::JailOperation(format!("Failed to create {}: {}", path.display(), e)))?;
+    f.write_all(data)
+        .map_err(|e| Error::JailOperation(format!("Failed to write {}: {}", path.display(), e)))
+}
+
 /// Remove a directory tree that may contain schg/uchg-flagged files
 /// (FreeBSD userlands protect init, libc, and friends with system flags).
 pub fn remove_tree_with_flags(path: &std::path::Path) -> std::io::Result<()> {

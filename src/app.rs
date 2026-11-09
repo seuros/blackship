@@ -122,6 +122,7 @@ impl AppContext {
                 release,
                 detach,
                 network,
+                dns,
                 command,
             } => {
                 let config = self.load_config_if_present()?;
@@ -130,6 +131,7 @@ impl AppContext {
                     &release,
                     detach,
                     network.as_deref(),
+                    &dns,
                     &command,
                     config,
                 )

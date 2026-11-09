@@ -39,6 +39,7 @@ use crate::host::{Host, Layout};
 use crate::manifest::validate_name;
 use crate::rctl::ResourceConfig;
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -50,7 +51,9 @@ pub enum Network {
     None,
     /// Share the host's addresses and its `/etc/resolv.conf`.
     Inherit,
-    /// A private VNET stack on a named Blackship network, with a leased address.
+    /// A private VNET stack on a named Blackship network, with a leased
+    /// address and the host's `/etc/resolv.conf` minus the nameservers only
+    /// the host can reach (loopback, link-local with a zone).
     Vnet(String),
 }
 
@@ -279,6 +282,7 @@ pub struct ContainerSpec {
     boot: bool,
     raw_sockets: bool,
     chflags: bool,
+    nameservers: Vec<IpAddr>,
     params: Vec<String>,
 }
 
@@ -297,6 +301,7 @@ impl ContainerSpec {
             boot: false,
             raw_sockets: false,
             chflags: false,
+            nameservers: Vec::new(),
             params: Vec::new(),
         }
     }
@@ -312,6 +317,16 @@ impl ContainerSpec {
     #[must_use]
     pub fn network(mut self, network: Network) -> Self {
         self.network = network;
+        self
+    }
+
+    /// Resolve names through `server`; repeat for more. Replaces the
+    /// `/etc/resolv.conf` the container would otherwise get from the host,
+    /// and is the way out when the host resolves through a local cache
+    /// (`local_unbound` on 127.0.0.1) that a VNET container cannot reach.
+    #[must_use]
+    pub fn nameserver(mut self, server: impl Into<IpAddr>) -> Self {
+        self.nameservers.push(server.into());
         self
     }
 

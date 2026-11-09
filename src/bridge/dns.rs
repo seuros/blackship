@@ -5,29 +5,6 @@ use std::path::Path;
 use crate::error::{Error, Result};
 use crate::manifest::DnsConfig;
 
-/// Write a path without following symlinks: unlink first, then `O_CREAT|O_EXCL` (TOCTOU).
-fn write_nofollow(path: &Path, data: &[u8]) -> Result<()> {
-    use std::io::Write;
-    // Usually NotFound; anything worse makes the O_EXCL open below fail loudly.
-    let _ = std::fs::remove_file(path);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::JailOperation(format!(
-                "Failed to create directory {}: {}",
-                parent.display(),
-                e
-            ))
-        })?;
-    }
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|e| Error::JailOperation(format!("Failed to create {}: {}", path.display(), e)))?;
-    f.write_all(data)
-        .map_err(|e| Error::JailOperation(format!("Failed to write {}: {}", path.display(), e)))
-}
-
 /// Configure DNS in a jail
 pub(super) fn configure_dns(jail_path: &Path, dns_config: &DnsConfig) -> Result<()> {
     let resolv_path = jail_path.join("etc/resolv.conf");
@@ -54,9 +31,9 @@ pub(super) fn configure_dns(jail_path: &Path, dns_config: &DnsConfig) -> Result<
     if dns_config.is_inherit() {
         let content = std::fs::read("/etc/resolv.conf")
             .map_err(|e| Error::JailOperation(format!("Failed to read /etc/resolv.conf: {e}")))?;
-        write_nofollow(&resolv_path, &content)?;
+        crate::sys::write_nofollow(&resolv_path, &content)?;
     } else if let Some(content) = dns_config.to_resolv_conf() {
-        write_nofollow(&resolv_path, content.as_bytes())?;
+        crate::sys::write_nofollow(&resolv_path, content.as_bytes())?;
     }
 
     Ok(())

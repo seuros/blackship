@@ -163,7 +163,10 @@ the blackship anchors, sets `pf_enable=YES`, and starts it.
 
 Named networks created this way can be referenced from `blackship.toml` with
 `[jails.network] networks = ["default"]`, and the same network can be used by
-ephemeral jails with `blackship run --network default`.
+ephemeral jails with `blackship run --network default`. Those get the
+host's `/etc/resolv.conf`, minus nameservers on the host's loopback that a
+VNET stack cannot reach; when that leaves nothing (a host on
+`local_unbound`), `run` refuses and asks for `--dns <ip>`.
 
 ### 5. Start Jails
 
@@ -248,6 +251,10 @@ The rules of the road:
   `hand_over(pid)` to give it to another process (a root helper creating
   containers for a daemon), and `destroy()` when you want to see the errors
   a drop would swallow.
+- **Networking:** `Network::None` (the default), `Inherit` (the host's
+  stack and resolver) or `Vnet(name)` (a leased address on a Blackship
+  network and the host's resolver, minus loopback nameservers it cannot
+  reach). `nameserver(ip)` overrides the resolver either way.
 - **Mounts** are nullfs. `read_write` mounts are `nosuid` unless you call
   `allow_setuid()`; `noexec()` and `nosuid()` apply to either kind. These
   flags cover the jail-side mount only: the host path is as setuid-capable
@@ -492,7 +499,7 @@ skipped. `--dry-run` prints the diff without touching anything.
 |---------|-------------|
 | `blackship console <jail> [-u user]` | Open interactive shell |
 | `blackship exec <jail> [-u user] [-w dir] [-e K=V] [--clear-env] -- <cmd>` | Execute command in jail (`--clear-env` starts from an empty environment, keeping only `-e` values) |
-| `blackship run --name <n> --release <r> [--network <net>] [-d] -- <cmd>` | Run ephemeral jail (auto-cleanup unless -d) |
+| `blackship run --name <n> --release <r> [--network <net>] [--dns <ip>] [-d] -- <cmd>` | Run ephemeral jail (auto-cleanup unless -d) |
 
 ### File Operations
 

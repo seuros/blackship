@@ -5,6 +5,7 @@ use crate::error::Result;
 use crate::host::Host;
 use crate::manifest::validate_name;
 use crate::{ContainerSpec, Exec, Exit, Network, error, manifest};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 /// Run a command in an ephemeral jail
@@ -16,6 +17,7 @@ pub fn run_ephemeral_jail(
     release: &str,
     detach: bool,
     network: Option<&str>,
+    dns: &[String],
     command: &[String],
     config: Option<manifest::BlackshipConfig>,
 ) -> Result<()> {
@@ -27,6 +29,15 @@ pub fn run_ephemeral_jail(
         ));
     }
 
+    let nameservers = dns
+        .iter()
+        .map(|server| {
+            server.parse::<IpAddr>().map_err(|_| {
+                error::Error::InvalidArgument(format!("--dns '{server}' is not an IP address"))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let host = Host::from_config(config);
     if host.release(release)?.is_some_and(|r| !r.cloneable) {
         println!("ZFS clone not available, copying release (this may take a while)...");
@@ -36,7 +47,11 @@ pub fn run_ephemeral_jail(
         Some(name) => Network::vnet(name),
         None => Network::Inherit,
     };
-    let spec = ContainerSpec::new(name, release).network(network).boot();
+    // The library hands the jail a resolver that fits its network.
+    let spec = nameservers.into_iter().fold(
+        ContainerSpec::new(name, release).network(network).boot(),
+        ContainerSpec::nameserver,
+    );
     let mut container = host.create(&spec)?;
     println!("Jail '{name}' started from release '{release}'");
 
