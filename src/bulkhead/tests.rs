@@ -39,7 +39,7 @@ fn test_drain_anchor_path_is_sanitized_and_namespaced() {
 
 #[test]
 fn test_load_drain_anchor_rejects_empty_address_list() {
-    assert!(load_drain_anchor("web", &[]).is_err());
+    assert!(load_drain_anchor(Path::new("/nonexistent"), "web", &[]).is_err());
 }
 
 #[test]
@@ -135,4 +135,25 @@ fn test_bulkhead_state_round_trip() {
         manager.list_forwards()[0].jail_ip,
         "10.0.1.10".parse::<IpAddr>().unwrap()
     );
+}
+
+#[test]
+fn test_anchor_ruleset_reaches_drain_sub_anchors() {
+    // pf.conf's `blackship/*` is one level deep; without this reference
+    // `blackship/drain/<jail>` is never evaluated and isolate/drain fence nothing.
+    let empty = BulkheadManager::new();
+    assert_eq!(empty.anchor_ruleset().unwrap(), "anchor \"drain/*\"\n");
+
+    let mut manager = BulkheadManager::new();
+    manager.forwards.push(PortForward::new(
+        8080,
+        80,
+        "tcp",
+        "10.0.1.10".parse().unwrap(),
+        "web",
+    ));
+    let rules = manager.anchor_ruleset().unwrap();
+    let rdr = rules.find("rdr ").unwrap();
+    let drain = rules.find("anchor \"drain/*\"").unwrap();
+    assert!(rdr < drain, "translation rules must precede filter rules");
 }

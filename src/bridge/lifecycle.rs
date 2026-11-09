@@ -450,7 +450,7 @@ impl Bridge {
             return;
         };
         let ips = self.drainable_ips(&full_name, jail_def);
-        match crate::bulkhead::load_drain_anchor(&full_name, &ips) {
+        match crate::bulkhead::load_drain_anchor(&self.config.config.data_dir, &full_name, &ips) {
             Ok(anchor) => {
                 println!("Isolated jail '{full_name}': new connections blocked via {anchor}");
                 if let Ok(Some(mut scope)) = self.scope_store.get(&full_name) {
@@ -1150,7 +1150,11 @@ impl Bridge {
             return None;
         }
 
-        let anchor = match crate::bulkhead::load_drain_anchor(full_name, &ips) {
+        let anchor = match crate::bulkhead::load_drain_anchor(
+            &self.config.config.data_dir,
+            full_name,
+            &ips,
+        ) {
             Ok(anchor) => anchor,
             Err(e) => {
                 eprintln!(
