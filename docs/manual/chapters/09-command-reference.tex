@@ -59,9 +59,12 @@ Command & Purpose \\
 \command{console <jail> [--user user]} & Open an interactive jail shell. \\
 \command{exec <jail> [options] -- <argv>} & Execute a command with optional user,
 working directory, and environment. \\
-\command{run --name N --release R [--network NET] [--dns IP] [-d] -- <argv>} &
-Create an ephemeral jail, optionally override its repeatable nameserver list,
-and clean up unless detached. \\
+\command{run --name N --release R [--network NET] [--dns IP] -- <argv>} &
+Run a command in an ephemeral jail, optionally overriding its repeatable
+nameserver list; the jail is removed when the command exits. \\
+\command{run --name N --release R [--network NET] [--dns IP] -d} &
+Start an ephemeral jail and leave it running; takes no command. Use
+\command{exec}, then \command{rm}. \\
 \command{cp <source> <destination> [--preserve]} & Copy host-to-jail or
 jail-to-host; use \command{jail:path}. \\
 \command{rm <jails...> [--force] [--volumes]} & Remove ephemeral/managed jail

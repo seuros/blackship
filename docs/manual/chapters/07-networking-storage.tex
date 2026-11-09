@@ -50,9 +50,11 @@ receives another eiface on a free \command{linkN} hook:
 \end{tikzpicture}
 \end{shipfigure}
 
-Outbound traffic requires host forwarding and usually PF NAT. Blackship enables
-forwarding while realizing a gateway, but site-specific egress belongs in the
-host PF policy:
+Outbound traffic, on either backend, requires host forwarding and a PF NAT
+rule. Blackship enables forwarding while realizing a gateway but installs no
+NAT: egress belongs in the host PF policy, on the interface carrying the
+default route. Without it, jails reach the gateway and each other, and nothing
+else:
 
 \begin{lstlisting}
 nat on $ext_if inet from 10.20.0.0/24 to any -> ($ext_if)
@@ -110,8 +112,11 @@ blackship unexpose web
 
 Blackship writes dedicated PF anchors instead of rewriting the host ruleset.
 Persisted forward definitions can be reapplied with \command{setup}. Ensure the
-main ruleset contains the required \command{rdr-anchor} and \command{anchor}
-statements before publishing a service.
+main ruleset contains \command{rdr-anchor "blackship"} and
+\command{anchor "blackship"} before publishing a service;
+\command{setup --enable-pf} writes a minimal \file{/etc/pf.conf} with both when
+none exists. The \command{blackship} anchor in turn references every drain
+sub-anchor, so those two lines also cover draining and \setting{isolate}.
 
 Draining uses a per-jail sub-anchor to reject new TCP SYN packets while allowing
 existing states to expire. It is not a substitute for application-level
@@ -153,6 +158,10 @@ Snapshot and commit operations stage configuration under \file{.blackship/}
 inside the dataset so a sent snapshot carries the metadata needed to understand
 its origin.
 
+\command{commit} promotes the new release so it no longer depends on the jail.
+A side effect of \command{zfs promote}: snapshots the jail took before the
+commit move to the release, and the jail can no longer roll back to them.
+
 \section{Export, import, and migration}
 
 \begin{lstlisting}[language=bash]
@@ -175,7 +184,9 @@ blackship migrate web admin@other-host
 Foreign import supports iocage, ezjail, plain rootfs, or automatic detection.
 Review the resulting manifest and networking before first start. Migration
 requires compatible ZFS and SSH authority on the destination and does not make
-an incompatible FreeBSD userland/kernel combination safe.
+an incompatible FreeBSD userland/kernel combination safe. It runs as root, so
+the connection uses root's keys and \file{known\_hosts}, not the invoking
+user's.
 
 \begin{shipwarning}[Know the dataset before forcing]
 Forced rollback destroys newer snapshots. Forced garbage collection or manual

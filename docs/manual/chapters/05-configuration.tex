@@ -224,24 +224,34 @@ and can use health as the trigger for a QoS phase transition.
 
 \begin{lstlisting}[language=TOML]
 [[jails.hooks]]
-phase = "post_start"
-target = "jail"
-command = "service nginx reload"
+phase = "pre_start"
+target = "host"
+command = "/usr/local/bin/fetch-secrets"
+args = ["${jail_name}"]
 on_failure = "abort"
 
 [[jails.hooks]]
 phase = "pre_stop"
 target = "jail"
-command = "service nginx stop"
+command = "/usr/sbin/service"
+args = ["nginx", "stop"]
 on_failure = "continue"
 \end{lstlisting}
+
+A hook executes \setting{command} directly with \setting{args} as its argument
+vector; there is no shell, so \setting{command = "service nginx stop"} names a
+program that does not exist. Use \setting{command = "/bin/sh"} with
+\setting{args = ["-c", "..."]} when shell syntax is needed. Arguments expand
+\setting{\$\{jail\_name\}}, \setting{\$\{jail\_path\}},
+\setting{\$\{jail\_ip\}}, and \setting{\$\{jid\}}.
 
 Supported lifecycle phases include \setting{pre\_create},
 \setting{post\_create}, \setting{pre\_start}, \setting{post\_start},
 \setting{pre\_stop}, \setting{post\_stop}, \setting{pre\_eva}, and
 \setting{post\_eva}. A phase that requires a running jail is rejected when no
-JID is available. Use \setting{continue} only when failure is genuinely safe to
-ignore.
+JID is available. A \setting{post\_start} hook runs after the jail is up, so
+\setting{abort} there only warns: the jail keeps running. Use
+\setting{continue} only when failure is genuinely safe to ignore.
 
 \section{Two-phase QoS}
 

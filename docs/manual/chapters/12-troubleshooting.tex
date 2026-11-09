@@ -139,7 +139,7 @@ contract. Streaming health/watch and log/follow output is not a single JSON
 envelope. On failure read stderr, check \setting{ok = false}, branch on the
 stable error \setting{code}, and log the message for operators.
 
-\section{An ephemeral run cannot ping}
+\section{Raw sockets or chflags inside an ephemeral run}
 
 Ephemeral \command{run} jails are intentionally not granted raw sockets,
 arbitrary socket families, or chflags. Use a managed manifest jail with an
