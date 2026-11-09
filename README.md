@@ -640,13 +640,13 @@ FROM 15.1-RELEASE
 LABEL name=nginx-jail version=1.0
 
 # Build arguments
-ARG NGINX_VERSION=1.24
+ARG NGINX_VERSION=1.30
 
 # Environment variables
 ENV NGINX_VERSION=${NGINX_VERSION}
 
 # Run commands (executed via jexec)
-RUN pkg install -y nginx-${NGINX_VERSION}
+RUN pkg install -y -g "nginx-${NGINX_VERSION}*"
 RUN sysrc nginx_enable=YES
 
 # Copy files from build context
@@ -682,7 +682,7 @@ from = "15.1-RELEASE"
 
 [[args]]
 name = "NGINX_VERSION"
-default = "1.24"
+default = "1.30"
 
 [[instructions]]
 type = "run"
@@ -710,7 +710,7 @@ cmd = "/usr/local/sbin/nginx -s quit"
 blackship build -f Jailfile -n myjail
 
 # With build arguments
-blackship build -f Jailfile -n myjail --build-arg NGINX_VERSION=1.26
+blackship build -f Jailfile -n myjail --build-arg NGINX_VERSION=1.30
 
 # Dry run
 blackship build -f Jailfile --dry-run

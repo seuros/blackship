@@ -28,7 +28,7 @@ FreeBSD semantics:
 \begin{lstlisting}[language=Jailfile]
 FROM 15.1-RELEASE
 LABEL service=web version=1.0
-ARG NGINX_VERSION=1.26
+ARG NGINX_VERSION=1.30
 ENV NGINX_VERSION=${NGINX_VERSION}
 RUN pkg install -y nginx
 RUN sysrc nginx_enable=YES
@@ -74,7 +74,7 @@ from = "15.1-RELEASE"
 
 [[args]]
 name = "NGINX_VERSION"
-default = "1.26"
+default = "1.30"
 
 [[instructions]]
 type = "run"
@@ -105,7 +105,7 @@ blackship template validate Jailfile
 blackship template inspect Jailfile
 blackship build --file Jailfile --name web --dry-run
 blackship build --file Jailfile --name web \
-  --build-arg NGINX_VERSION=1.26
+  --build-arg NGINX_VERSION=1.30
 \end{lstlisting}
 
 Dry run does not bootstrap a missing release or mutate storage. Validation
