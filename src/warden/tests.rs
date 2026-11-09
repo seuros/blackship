@@ -1,19 +1,15 @@
 use super::*;
 
 #[test]
-fn test_restart_state_backoff() {
-    let state = RestartState::new("test_jail");
-    assert!(state.should_retry());
-    let delay = state.next_delay();
-    assert!(delay.is_some());
-}
-
-#[test]
-fn test_restart_state_reset() {
-    let mut state = RestartState::new("test_jail");
-    state.attempts = 5;
-    state.reset();
-    assert_eq!(state.attempts, 0);
+fn a_jail_gets_five_restarts_in_five_minutes() {
+    let mut policy = RestartPolicy::new(Strategy::OneForOne, RESTART_INTENSITY);
+    let failure = |policy: &mut RestartPolicy, at_secs: u64| {
+        policy.stopped(0, Policy::Permanent, Exit::Abnormal, at_secs * NS_PER_SEC)
+    };
+    for minute in 0..5 {
+        assert_ne!(failure(&mut policy, minute * 50), Decision::Escalate);
+    }
+    assert_eq!(failure(&mut policy, 290), Decision::Escalate);
 }
 
 #[test]

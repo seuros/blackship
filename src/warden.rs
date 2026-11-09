@@ -3,17 +3,16 @@
 //! Monitors jails and implements one-for-one restart strategy:
 //! - Watches for kernel jail removal events via kqueue (FreeBSD 16+)
 //! - Falls back to event-driven mpsc channel on older systems
-//! - Auto-restarts failed jails with exponential backoff
-//! - Circuit breaker to stop restart attempts after too many failures
+//! - Auto-restarts failed jails, each restart waiting twice as long as the last
+//! - Gives up on a jail that needs more than five restarts in five minutes
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
-use breaker_machines::{CircuitBreaker, CircuitBuilder};
-use chrono_machines::{BackoffStrategy, ExponentialBackoff};
-use rand::rng;
+use rand::{RngExt, rng};
 use state_machines::runtime::{Clock, Runner};
+use supervisor_machines::{Decision, Exit, Intensity, Policy, Strategy, Supervisor};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::bridge::Bridge;
@@ -122,55 +121,15 @@ struct MonitoredJail {
     jid: i32,
 }
 
-/// Restart state tracking for a single jail
-struct RestartState {
-    /// Number of restart attempts
-    attempts: u8,
-    /// Backoff calculator
-    backoff: ExponentialBackoff,
-    /// Circuit breaker to stop restart attempts
-    breaker: CircuitBreaker,
-}
+/// Restarts tolerated per jail before supervision gives up on it.
+const RESTART_INTENSITY: Intensity = Intensity::new(5, 300 * NS_PER_SEC);
+/// First restart delay, doubled per recent restart up to the ceiling.
+const RESTART_DELAY_BASE_NS: u64 = NS_PER_SEC;
+const RESTART_DELAY_CEILING_NS: u64 = 60 * NS_PER_SEC;
+const NS_PER_SEC: u64 = 1_000_000_000;
 
-impl RestartState {
-    fn new(name: &str) -> Self {
-        Self {
-            attempts: 0,
-            backoff: ExponentialBackoff::new()
-                .base_delay_ms(1000)
-                .max_delay_ms(60000)
-                .multiplier(2.0)
-                .max_attempts(10)
-                .jitter_factor(0.5),
-            breaker: CircuitBuilder::new(format!("warden_{name}"))
-                .failure_threshold(5)
-                .success_threshold(2)
-                .half_open_timeout_secs(300.0)
-                .build(),
-        }
-    }
-
-    fn reset(&mut self) {
-        self.attempts = 0;
-        self.breaker.record_success(0.0);
-    }
-
-    fn record_failure(&mut self) {
-        self.attempts = self.attempts.saturating_add(1);
-        self.breaker.record_failure(0.0);
-    }
-
-    fn next_delay(&self) -> Option<Duration> {
-        let mut rng = rng();
-        self.backoff
-            .delay(self.attempts, &mut rng)
-            .map(Duration::from_millis)
-    }
-
-    fn should_retry(&self) -> bool {
-        self.breaker.is_closed() && self.backoff.should_retry(self.attempts)
-    }
-}
+/// One jail is one child under its own one-for-one supervisor.
+type RestartPolicy = Supervisor<1, 8>;
 
 /// Monotonic millisecond ticks for the supervision runners.
 struct MillisClock {
@@ -185,17 +144,23 @@ impl MillisClock {
     }
 }
 
+impl MillisClock {
+    fn now_ns(&self) -> u64 {
+        u64::try_from(self.origin.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    }
+}
+
 impl Clock for MillisClock {
     fn now(&self) -> u64 {
         u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 }
 
-/// Supervision of a single jail: the runtime machine plus the retry policy
-/// that picks its backoff delays.
+/// Supervision of a single jail: the runtime machine plus the restart policy
+/// that decides whether and when it comes back.
 struct Supervision {
     runner: Runner<DynamicSupervisor>,
-    policy: RestartState,
+    policy: RestartPolicy,
 }
 
 impl Supervision {
@@ -214,7 +179,7 @@ impl Supervision {
 
         Self {
             runner,
-            policy: RestartState::new(name),
+            policy: RestartPolicy::new(Strategy::OneForOne, RESTART_INTENSITY),
         }
     }
 
@@ -228,24 +193,25 @@ impl Supervision {
             return;
         }
 
-        let delay = if self.policy.should_retry() {
-            self.policy.next_delay()
-        } else {
-            None
-        };
-
-        let Some(delay) = delay else {
-            eprintln!(
-                "Warden: Not restarting jail '{name}' (circuit breaker open or max attempts reached)"
-            );
+        let now = clock.now_ns();
+        if self
+            .policy
+            .stopped(0, Policy::Permanent, Exit::Abnormal, now)
+            == Decision::Escalate
+        {
+            eprintln!("Warden: Not restarting jail '{name}' (restart intensity exceeded)");
             self.enqueue(name, SupervisorEvent::Exhausted);
             return;
-        };
+        }
 
-        self.policy.record_failure();
+        let delay_ns =
+            self.policy
+                .restart_delay_ns(RESTART_DELAY_BASE_NS, RESTART_DELAY_CEILING_NS, now);
+        // Up to half off, so jails that failed together do not restart in lockstep.
+        let delay = Duration::from_nanos(delay_ns).mul_f64(rng().random_range(0.5..=1.0));
         println!(
-            "Warden: Restarting jail '{}' in {:?} (attempt {})",
-            name, delay, self.policy.attempts
+            "Warden: Restarting jail '{name}' in {delay:?} (restart {} in window)",
+            self.policy.recent_restarts(now)
         );
 
         let ticks = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
@@ -254,13 +220,6 @@ impl Supervision {
             .schedule_after(clock, ticks, SupervisorEvent::Retry)
         {
             eprintln!("Warden: Failed to schedule restart of jail '{name}': {e:?}");
-        }
-    }
-
-    /// Clear the retry budget once the jail is back in service.
-    fn settle(&mut self) {
-        if self.state() == SupervisorState::Healthy && self.policy.attempts > 0 {
-            self.policy.reset();
         }
     }
 
@@ -495,7 +454,6 @@ impl Warden {
                 eprintln!("Warden: Supervision of jail '{name}' failed: {e:?}");
             }
 
-            supervision.settle();
             supervision.arm_backoff(name, &self.clock);
         }
     }
