@@ -278,6 +278,7 @@ pub struct ContainerSpec {
     labels: BTreeMap<String, String>,
     boot: bool,
     raw_sockets: bool,
+    chflags: bool,
     params: Vec<String>,
 }
 
@@ -295,6 +296,7 @@ impl ContainerSpec {
             labels: BTreeMap::new(),
             boot: false,
             raw_sockets: false,
+            chflags: false,
             params: Vec::new(),
         }
     }
@@ -345,6 +347,19 @@ impl ContainerSpec {
     #[must_use]
     pub const fn allow_raw_sockets(mut self) -> Self {
         self.raw_sockets = true;
+        self
+    }
+
+    /// Let root inside the container set and clear system file flags
+    /// (`schg`, `sunlnk`, ...), as `allow.chflags`.
+    ///
+    /// Installing base packages needs it: pkgbase packages such as
+    /// `FreeBSD-clibs-lib32` flag their files, and pkg refuses to install them
+    /// without it. Bake images with it, not jobs: flags set on a read-write
+    /// mount stay on the host files and block their removal until cleared.
+    #[must_use]
+    pub const fn allow_chflags(mut self) -> Self {
+        self.chflags = true;
         self
     }
 

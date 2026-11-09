@@ -25,6 +25,7 @@ fn spec_knobs_map_to_jail_params() {
         .hostname("ci")
         .network(Network::Inherit)
         .allow_raw_sockets()
+        .allow_chflags()
         .boot()
         .jail_param("allow.mlock");
     let params = jail_params(&spec, Path::new("/c/kim-2"));
@@ -33,6 +34,7 @@ fn spec_knobs_map_to_jail_params() {
         "ip4=inherit",
         "ip6=inherit",
         "allow.raw_sockets",
+        "allow.chflags",
         "exec.start=/bin/sh /etc/rc",
         "allow.mlock",
     ] {

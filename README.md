@@ -271,7 +271,9 @@ The rules of the road:
   `ensure_release()` (FreeBSD 16 goes through fingerprint-verified pkgbase
   automatically). `build()` runs a Jailfile with the layer cache,
   `commit_image()` and `Container::commit()` freeze a root into a new
-  release, and `remove_image()` / `remove_release()` clean up.
+  release, and `remove_image()` / `remove_release()` clean up. Baking an
+  image by installing base packages in a container needs
+  `ContainerSpec::allow_chflags()`: pkgbase sets file flags.
 - **Privilege:** library calls assume they already run as root and return
   `Error::NeedsRoot` otherwise. Only the CLI re-executes through `mdo`, `doas`,
   or `sudo`; callers can disable that with `--no-escalate` or prevent prompts

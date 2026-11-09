@@ -306,6 +306,9 @@ fn jail_params(spec: &ContainerSpec, root: &Path) -> Vec<String> {
     if spec.raw_sockets {
         params.push("allow.raw_sockets".to_string());
     }
+    if spec.chflags {
+        params.push("allow.chflags".to_string());
+    }
     if spec.boot {
         params.push("exec.start=/bin/sh /etc/rc".to_string());
     }

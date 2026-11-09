@@ -419,6 +419,38 @@ fn handed_over_containers_belong_to_the_new_owner() {
 
 #[test]
 #[ignore = "needs root and a bootstrapped release"]
+fn chflags_is_opt_in_and_flagged_files_still_tear_down() {
+    let Some(s) = setup() else { return };
+    let flag = "touch /var/tmp/pinned && chflags schg /var/tmp/pinned";
+
+    let plain = s
+        .host
+        .create(&ContainerSpec::new(name("noflags"), &s.release))
+        .unwrap();
+    let refused = plain.exec(Exec::shell(flag)).unwrap();
+    assert!(
+        !refused.exit.success(),
+        "chflags schg worked without allow.chflags"
+    );
+    plain.destroy().unwrap();
+
+    let baker = s
+        .host
+        .create(&ContainerSpec::new(name("flags"), &s.release).allow_chflags())
+        .unwrap();
+    let allowed = baker.exec(Exec::shell(flag)).unwrap();
+    assert!(
+        allowed.exit.success(),
+        "{}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+    let root = baker.root().to_path_buf();
+    baker.destroy().unwrap();
+    assert!(!root.join("var/tmp/pinned").exists());
+}
+
+#[test]
+#[ignore = "needs root and a bootstrapped release"]
 fn containers_run_concurrently() {
     let Some(s) = setup() else { return };
     // Collecting spawns all four before joining any; lazy would serialize them.
