@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.1](https://github.com/seuros/blackship/compare/blackship-v0.3.0...blackship-v0.3.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **armada:** merge config files at the TOML level ([7f6b948](https://github.com/seuros/blackship/commit/7f6b94896aff3fd4a45dd1550cac0218830a8e1f))
+* **build:** resolve destinations the way the jail sees them ([0b4d762](https://github.com/seuros/blackship/commit/0b4d762d454a644383427a40d1e33648396ae55c))
+* **cli:** escalate for build, armada build, logs and gc ([69dfd07](https://github.com/seuros/blackship/commit/69dfd075366ff2166b6ea119af21c7dbdb03cf6b))
+* **lifecycle:** skip jails already in the target state ([94486c3](https://github.com/seuros/blackship/commit/94486c3a07c2252c722ccb2c5f0bb86b52c83f47))
+* **manifest:** derive the project name from the canonical config dir ([5914486](https://github.com/seuros/blackship/commit/5914486913aabc82541b1aa52b1fd42ea72d56f9))
+* **pf:** evaluate the blackship anchor and its drain sub-anchors ([0960a96](https://github.com/seuros/blackship/commit/0960a96948b1faf9701fe1579d1805752724ea7f))
+* **pf:** match bind-address forwards on the destination ([a723e1f](https://github.com/seuros/blackship/commit/a723e1fcdca43099a92823ccc02da88f3aba8380))
+* **pf:** treat a loaded but disabled PF as off ([d5f4740](https://github.com/seuros/blackship/commit/d5f4740e4672914b47a561c3a00c8e1a524cf6d9))
+* **releases:** delete through the ZFS-aware library call ([9b494fb](https://github.com/seuros/blackship/commit/9b494fbe0ae240b3431d98747ebdddd77d936d7c))
+
 ## [0.3.0](https://github.com/seuros/blackship/compare/blackship-v0.2.1...blackship-v0.3.0) (2026-11-09)
 
 
