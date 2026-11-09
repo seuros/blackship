@@ -72,6 +72,20 @@ cache_dir = "/var/blackship/cache"
 
 > **Note:** While paths are user-writable by default, `bootstrap` extraction requires root privileges because FreeBSD base archives contain root-owned files with special permissions (setuid binaries, etc.). Blackship will re-exec through FreeBSD's `mdo` when the current user has an applicable `mac_do` rule, then fall back to `doas` or `sudo`.
 
+Automatic privilege escalation can be controlled globally:
+
+```sh
+# Fail instead of re-executing through mdo, doas, or sudo
+blackship --no-escalate up --all
+
+# Allow escalation, but never prompt for authentication
+blackship --non-interactive up --all
+```
+
+`--non-interactive` passes `-n` to `doas` and `sudo`. FreeBSD's `mdo` is
+already non-interactive: authorization comes entirely from `mac_do`, without a
+password prompt. `--no-escalate` takes precedence when both options are used.
+
 ## Quick Start
 
 ### 1. Initialize Jailfile
@@ -251,7 +265,9 @@ The rules of the road:
   `commit_image()` and `Container::commit()` freeze a root into a new
   release, and `remove_image()` / `remove_release()` clean up.
 - **Privilege:** library calls assume they already run as root and return
-  `Error::NeedsRoot` otherwise. Only the CLI re-executes through sudo/doas.
+  `Error::NeedsRoot` otherwise. Only the CLI re-executes through `mdo`, `doas`,
+  or `sudo`; callers can disable that with `--no-escalate` or prevent prompts
+  with `--non-interactive`.
 - **Errors** are one typed `blackship::Error` enum. No `anyhow` in sight.
 
 `examples/ephemeral.rs` walks the whole lifecycle:

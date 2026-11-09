@@ -17,6 +17,14 @@ pub struct Cli {
     #[usage(short, long)]
     pub verbose: bool,
 
+    /// Never re-execute through mdo, doas, or sudo
+    #[usage(long)]
+    pub no_escalate: bool,
+
+    /// Never allow a privilege escalator to prompt for authentication
+    #[usage(long)]
+    pub non_interactive: bool,
+
     /// Output format for machine-readable commands
     #[usage(long, default = "text", value_enum)]
     pub format: OutputFormat,
