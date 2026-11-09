@@ -29,3 +29,17 @@ fn handles_can_cross_threads() {
     assert_send_sync::<Container>();
     assert_send_sync::<ContainerSpec>();
 }
+
+#[test]
+fn read_write_mounts_are_nosuid_unless_told_otherwise() {
+    let rw = Mount::read_write("/var/db/kim/jobs/1", "/work");
+    assert!(rw.is_nosuid());
+    assert_eq!(rw.options(), ["rw", "nosuid"]);
+    assert_eq!(rw.clone().allow_setuid().options(), ["rw"]);
+    assert_eq!(rw.noexec().options(), ["rw", "nosuid", "noexec"]);
+
+    let ro = Mount::read_only("/usr/local/share/distfiles", "/distfiles");
+    assert!(!ro.is_nosuid());
+    assert_eq!(ro.options(), ["ro"]);
+    assert_eq!(ro.nosuid().noexec().options(), ["ro", "nosuid", "noexec"]);
+}

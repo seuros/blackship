@@ -189,6 +189,99 @@ fn nullfs_mounts_respect_modes_and_survive_teardown() {
     std::fs::remove_dir_all(&out).unwrap();
 }
 
+/// The options mount(8) lists for the filesystem mounted at `path`:
+/// `nullfs`, `local`, `read-only`, `nosuid`, `noexec`, ...
+fn mount_options(path: &std::path::Path) -> Vec<String> {
+    let path = path.canonicalize().unwrap();
+    let suffix = format!(" on {} (", path.display());
+    let out = Command::new("/sbin/mount").output().unwrap();
+    let table = String::from_utf8(out.stdout).unwrap();
+    let line = table
+        .lines()
+        .find(|l| l.contains(&suffix))
+        .unwrap_or_else(|| panic!("{} is not mounted", path.display()));
+    let (_, options) = line.split_once(&suffix).unwrap();
+    options
+        .trim_end_matches(')')
+        .split(", ")
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+#[ignore = "needs root and a bootstrapped release"]
+fn mounts_carry_nosuid_and_noexec() {
+    let Some(s) = setup() else { return };
+    let pid = std::process::id();
+    let dirs: Vec<PathBuf> = ["plain", "exec", "suid"]
+        .iter()
+        .map(|tag| s.data_dir.join(format!("mount-{tag}-{pid}")))
+        .collect();
+    for dir in &dirs {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+
+    let c = s
+        .host
+        .create(
+            &ContainerSpec::new(name("mountopts"), &s.release)
+                .mount(Mount::read_write(&dirs[0], "/work"))
+                .mount(Mount::read_write(&dirs[1], "/noexec").noexec())
+                .mount(Mount::read_write(&dirs[2], "/suid").allow_setuid())
+                .mount(Mount::read_only(&dirs[0], "/ro").nosuid().noexec()),
+        )
+        .unwrap();
+    let has = |dir: &str, option: &str| {
+        mount_options(&c.root().join(dir))
+            .iter()
+            .any(|o| o == option)
+    };
+    assert!(has("work", "nosuid"), "rw mount is not nosuid");
+    assert!(!has("work", "read-only") && !has("work", "noexec"));
+    assert!(has("noexec", "noexec") && has("noexec", "nosuid"));
+    assert!(!has("suid", "nosuid"));
+    // mount_nullfs(8) drops a comma-joined option list, read-only included.
+    assert!(has("ro", "read-only") && has("ro", "nosuid") && has("ro", "noexec"));
+
+    // noexec is enforced inside the container, not just recorded.
+    let ran = c
+        .exec(Exec::shell(
+            "cp /bin/echo /noexec/echo && /noexec/echo nope; \
+             cp /bin/echo /work/echo && /work/echo yes",
+        ))
+        .unwrap();
+    assert_eq!(ran.stdout, b"yes\n");
+    assert!(
+        String::from_utf8_lossy(&ran.stderr).contains("Permission denied"),
+        "noexec mount ran a binary: {:?}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+
+    // A setuid program written through the nosuid mount does not elevate;
+    // the same program through the opted-out mount does.
+    let euid = |dir: &str| {
+        let out = c
+            .exec(Exec::shell(format!(
+                "cp /usr/bin/id {dir}/id && chmod 4755 {dir}/id && \
+                 su -m nobody -c '{dir}/id -u'"
+            )))
+            .unwrap();
+        assert!(
+            out.exit.success(),
+            "{:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    assert_eq!(euid("/work"), "65534\n");
+    assert_eq!(euid("/suid"), "0\n");
+
+    c.destroy().unwrap();
+    for dir in dirs {
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 #[ignore = "needs root and a bootstrapped release"]
 fn copy_in_and_out_round_trip() {

@@ -246,6 +246,11 @@ The rules of the road:
 - **Containers are ephemeral.** Dropping a `Container` destroys it. Call
   `keep()` to let it outlive the handle (that is what `run --detach` does),
   and `destroy()` when you want to see the errors a drop would swallow.
+- **Mounts** are nullfs. `read_write` mounts are `nosuid` unless you call
+  `allow_setuid()`; `noexec()` and `nosuid()` apply to either kind. These
+  flags cover the jail-side mount only: the host path is as setuid-capable
+  as its own filesystem, so keep host directories that jobs write to on a
+  `setuid=off` dataset when other users can reach them.
 - **`exec`** runs argv or `sh -c` with a clean environment, a working
   directory, and a timeout or deadline. Output is captured, streamed to a
   callback, or inherited. A non-zero exit is data, not an error. On timeout

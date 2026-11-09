@@ -62,11 +62,27 @@ impl Network {
 }
 
 /// A host directory exposed inside the container through nullfs.
+///
+/// Read-write mounts are `nosuid` unless [`allow_setuid`](Self::allow_setuid)
+/// says otherwise: whatever the container writes there must not become a
+/// setuid program inside it. `nosuid` is a property of this mount only; the
+/// same files reached through the host path are not covered, so a host
+/// directory other users can reach still wants a nosuid filesystem.
+///
+/// ```
+/// use blackship::Mount;
+///
+/// let work = Mount::read_write("/var/db/kim/jobs/42", "/work").noexec();
+/// assert!(work.is_nosuid() && work.is_noexec());
+/// assert!(!Mount::read_write("/srv/tools", "/tools").allow_setuid().is_nosuid());
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mount {
     host: PathBuf,
     jail: PathBuf,
     writable: bool,
+    nosuid: bool,
+    noexec: bool,
 }
 
 impl Mount {
@@ -76,15 +92,40 @@ impl Mount {
             host: host.into(),
             jail: jail.into(),
             writable: false,
+            nosuid: false,
+            noexec: false,
         }
     }
 
-    /// Expose `host` at `jail`, writable from inside the container.
+    /// Expose `host` at `jail`, writable from inside the container and `nosuid`.
     pub fn read_write(host: impl Into<PathBuf>, jail: impl Into<PathBuf>) -> Self {
         Self {
             writable: true,
+            nosuid: true,
             ..Self::read_only(host, jail)
         }
+    }
+
+    /// Ignore setuid and setgid bits on files reached through this mount.
+    #[must_use]
+    pub const fn nosuid(mut self) -> Self {
+        self.nosuid = true;
+        self
+    }
+
+    /// Honour setuid and setgid bits, opting a read-write mount out of its
+    /// `nosuid` default.
+    #[must_use]
+    pub const fn allow_setuid(mut self) -> Self {
+        self.nosuid = false;
+        self
+    }
+
+    /// Refuse to execute anything through this mount.
+    #[must_use]
+    pub const fn noexec(mut self) -> Self {
+        self.noexec = true;
+        self
     }
 
     /// The host side of the mount.
@@ -103,6 +144,31 @@ impl Mount {
     #[must_use]
     pub const fn is_writable(&self) -> bool {
         self.writable
+    }
+
+    /// Whether setuid and setgid bits are ignored.
+    #[must_use]
+    pub const fn is_nosuid(&self) -> bool {
+        self.nosuid
+    }
+
+    /// Whether executing through the mount is refused.
+    #[must_use]
+    pub const fn is_noexec(&self) -> bool {
+        self.noexec
+    }
+
+    /// The `mount_nullfs` options, one per `-o`: `mount_nullfs(8)` silently
+    /// ignores a comma-joined list, read-only included.
+    pub(crate) fn options(&self) -> Vec<&'static str> {
+        let mut options = vec![if self.writable { "rw" } else { "ro" }];
+        if self.nosuid {
+            options.push("nosuid");
+        }
+        if self.noexec {
+            options.push("noexec");
+        }
+        options
     }
 }
 

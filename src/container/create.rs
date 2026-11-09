@@ -1,7 +1,7 @@
 //! Building a container: claim, provision, mount, network, jail, limits.
 
 use super::registry::{self, Record};
-use super::{Container, ContainerSpec, Network, teardown, validate_container_name};
+use super::{Container, ContainerSpec, Mount, Network, teardown, validate_container_name};
 use crate::error::{Error, Result};
 use crate::host::Layout;
 use crate::manifest::validate_name;
@@ -136,7 +136,7 @@ fn build(
     }
 
     for mount in &spec.mounts {
-        mount_nullfs(root, &mount.host, &mount.jail, mount.writable)?;
+        mount_nullfs(root, mount)?;
     }
 
     let vnet = match &spec.network {
@@ -213,8 +213,9 @@ fn free_space(path: &Path) -> Option<u64> {
         .map(|blocks| blocks * stat.block_size())
 }
 
-/// nullfs-mount `host` at `jail` inside `root`, creating the target.
-fn mount_nullfs(root: &Path, host: &Path, jail: &Path, writable: bool) -> Result<()> {
+/// nullfs-mount `mount` inside `root`, creating the target.
+fn mount_nullfs(root: &Path, mount: &Mount) -> Result<()> {
+    let (host, jail) = (&mount.host, &mount.jail);
     let target = root.join(jail.strip_prefix("/").unwrap_or(jail));
     crate::blueprint::context::reject_symlink_ancestors(root, &target)?;
     std::fs::create_dir_all(&target)?;
@@ -226,11 +227,11 @@ fn mount_nullfs(root: &Path, host: &Path, jail: &Path, writable: bool) -> Result
             jail.display()
         )));
     }
-    let output = Command::new("/sbin/mount_nullfs")
-        .args(["-o", if writable { "rw" } else { "ro" }])
-        .arg(host)
-        .arg(&canonical_target)
-        .output()?;
+    let mut command = Command::new("/sbin/mount_nullfs");
+    for option in mount.options() {
+        command.args(["-o", option]);
+    }
+    let output = command.arg(host).arg(&canonical_target).output()?;
     if !output.status.success() {
         return Err(Error::JailCreationFailed(format!(
             "mount_nullfs {} {}: {}",
