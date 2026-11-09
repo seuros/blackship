@@ -125,7 +125,7 @@ data_dir = "{}"
 
 [[jails]]
 name = "web"
-release = "15.0-RELEASE"
+release = "15.1-RELEASE"
 
 [jails.network]
 networks = ["missing"]

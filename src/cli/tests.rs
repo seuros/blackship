@@ -163,7 +163,7 @@ fn test_network_list_does_not_require_root() {
 #[test]
 fn test_bootstrap_requires_root() {
     let command = Commands::Bootstrap {
-        release: "15.0-RELEASE".into(),
+        release: "15.1-RELEASE".into(),
         force: false,
         archives: None,
         pkgbase: false,

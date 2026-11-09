@@ -50,7 +50,7 @@ fn test_parse_line_expose() {
 fn test_parse_full_jailfile() {
     let content = r"
 FROM 15.1-RELEASE
-ARG NGINX_VERSION=1.25
+ARG NGINX_VERSION=1.30
 RUN pkg install -y nginx
 COPY nginx.conf /usr/local/etc/nginx/
 EXPOSE 80/tcp
