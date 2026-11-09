@@ -3,9 +3,15 @@ on: [push]
 
 jobs:
   test:
-    runs-on: freebsd
+    runs-on: [kim, freebsd]
     steps:
       - uses: actions/checkout@v7
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo test
         run: cargo test
@@ -27,11 +33,3 @@ jobs:
           tar czf dist/blackship-freebsd-amd64.tar.gz -C target/release blackship
           sha256 -r dist/blackship-freebsd-amd64.tar.gz > dist/checksums.txt
           ls -lh dist/
-
-      # Pinned to v3 on purpose: v4+ speaks the @actions/artifact v2 API,
-      # which this Forgejo does not serve (it answers GHESNotSupportedError).
-      - uses: actions/upload-artifact@v3
-        with:
-          name: blackship-freebsd-amd64
-          path: dist/
-          retention-days: 7
