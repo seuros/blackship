@@ -6,7 +6,10 @@
       "component": "blackship",
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true
+      "bump-patch-for-minor-pre-major": true,
+      "extra-files": [
+        "docs/manual/blackship-manual.tex"
+      ]
     }
   }
 }
