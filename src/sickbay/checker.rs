@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use throttle_machines::gate::Gate;
 use throttle_machines::token_bucket::{TokenBucket, TokenBucketParams, TokenBucketState};
 
@@ -249,10 +249,7 @@ struct CheckState {
 
 impl CheckState {
     fn new(capacity: f64) -> Self {
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
+        let now_secs = jiff::Timestamp::now().as_duration().as_secs_f64();
         Self {
             failures: 0,
             last_result: None,
@@ -412,10 +409,7 @@ impl HealthChecker {
         let mut breaker_updates: Vec<(usize, bool, f64)> = Vec::new();
 
         // Get current time for rate limiting
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
+        let now_secs = jiff::Timestamp::now().as_duration().as_secs_f64();
 
         for (idx, check) in self.config.checks.iter().enumerate() {
             // Check if circuit breaker is open for this check
