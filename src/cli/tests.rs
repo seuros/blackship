@@ -38,6 +38,7 @@ fn test_escalation_controls_parse_globally() {
 #[test]
 fn test_machine_output_support_is_explicit() {
     assert!(Commands::Check.supports_machine_output());
+    assert!(Commands::Capabilities.supports_machine_output());
     assert!(
         Commands::Network {
             action: NetworkAction::List

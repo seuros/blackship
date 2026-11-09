@@ -305,6 +305,7 @@ commands most useful to management UIs:
 ```sh
 blackship --format json ps
 blackship --format json check
+blackship --format json capabilities
 blackship --format json network list
 blackship --format json ports
 blackship --format json ports web
@@ -339,6 +340,11 @@ Commands without a complete JSON contract fail with
 `unsupported_output_format`; they never fall back to mixed human-readable
 output. Existing command-local flags such as `blackship ps --json` retain
 their original, unenveloped output for compatibility.
+
+`blackship capabilities` requires neither a manifest nor root access. Its JSON
+report lets clients discover the Blackship version, output schema, compiled
+features, FreeBSD kernel capabilities, host facilities, and installed privilege
+escalators before enabling UI actions.
 
 ## Configuration Reference
 
@@ -446,6 +452,7 @@ reported as a restart-required warning and skipped. Not-running jails are
 skipped. `--dry-run` prints the diff without touching anything.
 | `blackship ps [--json]` | List jail status |
 | `blackship check` | Validate configuration |
+| `blackship capabilities` | Report binary and host capabilities |
 | `blackship setup [--enable-pf]` | Reapply networks and PF anchors; --enable-pf turns PF on |
 | `blackship cleanup <jail> [--force]` | Clean up failed jail resources |
 | `blackship init [-f file] [--release] [--toml]` | Create a new Jailfile |
