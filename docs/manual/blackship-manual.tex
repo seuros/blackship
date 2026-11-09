@@ -1,0 +1,44 @@
+\documentclass[11pt,openany]{book}
+
+\input{blackship-style}
+
+\newcommand{\BlackshipVersion}{0.2.1}
+\newcommand{\ManualEdition}{First edition}
+
+\begin{document}
+
+\frontmatter
+\input{cover}
+\input{frontmatter}
+\tableofcontents
+\clearpage
+
+\mainmatter
+\include{chapters/01-overview}
+\include{chapters/02-requirements-installation}
+\include{chapters/03-concepts-architecture}
+\include{chapters/04-getting-started}
+\include{chapters/05-configuration}
+\include{chapters/06-building-images}
+\include{chapters/07-networking-storage}
+\include{chapters/08-operations-observability}
+\include{chapters/09-command-reference}
+\include{chapters/10-automation-integration}
+\include{chapters/11-security-reliability}
+\include{chapters/12-troubleshooting}
+
+\appendix
+\include{chapters/a-glossary}
+\include{chapters/b-paths-files}
+
+\backmatter
+\chapter*{Colophon}
+\addcontentsline{toc}{chapter}{Colophon}
+This manual is authored in LaTeX and built from discrete chapter sources in
+\path{docs/manual/chapters}. The cover illustration is original vector artwork
+drawn by the document itself with TikZ; it has no external image dependency.
+
+Blackship is distributed under the BSD 3-Clause License. See the project
+repository for source code, current release notes, and license text.
+
+\end{document}

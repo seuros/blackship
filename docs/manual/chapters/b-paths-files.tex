@@ -1,0 +1,34 @@
+\chapter{Paths and Files}
+
+Exact paths follow \setting{data\_dir}, \setting{releases\_dir},
+\setting{cache\_dir}, and XDG overrides. The table shows conceptual locations;
+inspect the active manifest before recovery work.
+
+\begin{longtable}{L{0.36\textwidth}L{0.54\textwidth}}
+\toprule
+Path or file & Purpose \\
+\midrule
+\file{blackship.toml} & Default project manifest. \\
+\file{Jailfile} / \file{Jailfile.toml} & Application image recipe. \\
+\file{<data\_dir>/releases} & Directory-backed release roots or mountpoints. \\
+\file{<data\_dir>/jails} & Jail roots or ZFS mountpoints. \\
+\file{<data\_dir>/scope} & Per-jail ownership and rollback records. \\
+\file{<data\_dir>/audit} & Durable per-jail JSONL histories. \\
+\file{<data\_dir>/networks} & Named-network records. \\
+\file{<data\_dir>/mcp.log} & MCP diagnostics when the server is used. \\
+\file{<cache\_dir>} & Downloads and build cache material. \\
+\file{<jail-root>/.blackship} & Staged jail definition and Jailfile carried by
+snapshots/exports. \\
+\file{/boot/loader.conf} & Boot-only RACCT enablement. \\
+\file{/etc/pf.conf} & Host PF policy and Blackship anchor load points. \\
+\file{/etc/rc.conf} & Host service enablement, including packaged warden setup. \\
+\bottomrule
+\end{longtable}
+
+\section*{Recovery rule}
+
+Runtime state files are implementation records, not an alternate configuration
+API. Back them up for diagnosis, but do not edit them to force desired state.
+Prefer a validated manifest plus \command{eva}, \command{cleanup},
+\command{setup}, or \command{gc}. If manual host repair is unavoidable, capture
+the original files and audit trail first.

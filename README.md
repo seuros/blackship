@@ -2,6 +2,15 @@
 
 A FreeBSD jail orchestrator with TOML configuration, dependency management, state machine lifecycle control, and ZFS integration.
 
+## Documentation
+
+- [Blackship Technical Manual (PDF)](docs/manual/blackship-manual.pdf)
+- [LaTeX manual sources and build instructions](docs/manual/README.md)
+
+The README is the quick reference. The PDF manual provides the complete
+operator guide, architecture, configuration, command reference, integration,
+security model, and troubleshooting material.
+
 ## Features
 
 - **Declarative Configuration**: Define jails in TOML with dependencies, networking, hooks, and resource limits
@@ -892,8 +901,6 @@ Error: Network error: NgNameNode(.:bridge_tmp, blackship0) failed: Address alrea
 ```
 
 Give the two backends distinct bridge names (`blackship0` and `ngbridge0`).
-
-### Port Forwardingemains the default and is what most setups want.
 
 ### Port Forwarding
 

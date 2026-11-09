@@ -1,0 +1,40 @@
+\chapter{Glossary}
+
+\begin{description}[style=nextline]
+  \item[Armada] Compose-style Blackship interface for merged manifests and
+  multi-jail build/lifecycle operations.
+
+  \item[Audit log] Append-only JSONL lifecycle history retained beyond cleanup.
+
+  \item[Bridge] Both the internal Blackship coordinator and, in networking
+  context, a FreeBSD packet-switching object. Context distinguishes them.
+
+  \item[Cascade policy] Rule deciding whether dependents stop, detach, or are
+  isolated when a dependency stops.
+
+  \item[EVA] Live reconciliation of updatable jail parameters, rctl policy, and
+  CPU placement without a jail restart.
+
+  \item[Full jail name] Project-prefixed name registered with the FreeBSD kernel.
+
+  \item[Jailfile] Reproducible application image recipe in line or TOML form.
+
+  \item[Named network] Persistent Blackship record describing subnet, gateway,
+  bridge, and backend; realized again after reboot.
+
+  \item[Release] Complete FreeBSD userland or committed compatible image used to
+  seed jail roots.
+
+  \item[Scope record] Durable description of resources currently owned by one
+  lifecycle, used as a rollback and reclamation work-list.
+
+  \item[Service name] Short jail name written in the manifest.
+
+  \item[VNET] FreeBSD virtualized network stack assigned to a jail.
+
+  \item[Warden] Blackship supervisor responsible for health, recovery, usage
+  sampling, and QoS transitions.
+
+  \item[ZFS clone] Writable dataset created from a snapshot while sharing
+  unchanged blocks with its origin.
+\end{description}

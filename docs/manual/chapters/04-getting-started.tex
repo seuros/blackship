@@ -1,0 +1,162 @@
+\chapter{Getting Started}
+\label{ch:getting-started}
+
+This chapter builds a small VNET web jail backed by ZFS. The examples assume a
+pool named \command{zroot}, an external interface already configured by the
+host, and a FreeBSD 15.1 host.
+
+\section{Create a project}
+
+Make a working directory and generate a starter manifest:
+
+\begin{lstlisting}[language=bash]
+mkdir -p ~/jails/web-stack
+cd ~/jails/web-stack
+blackship armada init
+\end{lstlisting}
+
+Replace the generated content with a minimal configuration:
+
+\begin{lstlisting}[language=TOML]
+[config]
+data_dir = "/var/blackship"
+zfs_enabled = true
+zpool = "zroot"
+dataset = "blackship"
+
+[[jails]]
+name = "web"
+release = "15.1-RELEASE"
+hostname = "web.internal"
+
+[jails.network]
+vnet = true
+networks = ["default"]
+ip = "10.0.1.10"
+
+[jails.healthcheck]
+enabled = true
+
+[[jails.healthcheck.checks]]
+name = "nginx"
+command = "service nginx status"
+target = "jail"
+interval = 30
+timeout = 10
+retries = 3
+\end{lstlisting}
+
+\section{Bootstrap the userland}
+
+\begin{lstlisting}[language=bash]
+blackship bootstrap 15.1-RELEASE
+blackship releases list
+\end{lstlisting}
+
+On FreeBSD 16 and newer, official distribution sets are no longer the normal
+source and Blackship uses fingerprint-verified pkgbase automatically.
+\command{--pkgbase} opts into that path on supported earlier branches.
+
+\section{Create the named network}
+
+The default epair backend uses an \command{if\_bridge}:
+
+\begin{lstlisting}[language=bash]
+blackship network create default \
+  --subnet 10.0.1.0/24 \
+  --gateway 10.0.1.1 \
+  --bridge blackship0
+\end{lstlisting}
+
+To use netgraph instead, choose a distinct bridge name:
+
+\begin{lstlisting}[language=bash]
+blackship network create default \
+  --subnet 10.0.1.0/24 \
+  --gateway 10.0.1.1 \
+  --backend netgraph \
+  --bridge ngbridge0
+\end{lstlisting}
+
+Do not create both examples under the same network name. Chapter
+\ref{ch:networking-storage} explains the backend tradeoffs and host routing.
+
+\section{Validate and preview}
+
+\begin{lstlisting}[language=bash]
+blackship check
+blackship up web --dry-run
+blackship --format json up web --dry-run
+\end{lstlisting}
+
+The plan should identify the full jail name, root path, address, hook counts,
+current state, and whether a ZFS dataset will be created. Resolve every
+validation error before continuing.
+
+\section{Start and inspect the jail}
+
+\begin{lstlisting}[language=bash]
+blackship up web
+blackship ps
+blackship exec web -- uname -a
+blackship console web
+\end{lstlisting}
+
+Install and enable a service inside the jail:
+
+\begin{lstlisting}[language=bash]
+blackship exec web -- pkg install -y nginx
+blackship exec web -- sysrc nginx_enable=YES
+blackship exec web -- service nginx start
+blackship health web
+\end{lstlisting}
+
+For a reproducible service image, put those installation steps in a Jailfile
+instead of treating the running jail as the build record; see Chapter
+\ref{ch:images}.
+
+\section{Publish a port}
+
+PF anchors isolate Blackship-managed redirects from the rest of the host's PF
+configuration:
+
+\begin{lstlisting}[language=bash]
+blackship expose web --port 8080 --internal 80
+blackship ports web
+\end{lstlisting}
+
+The host PF configuration must load Blackship's anchors. A typical
+\file{/etc/pf.conf} contains:
+
+\begin{lstlisting}
+rdr-anchor "blackship"
+anchor "blackship"
+\end{lstlisting}
+
+Run \command{blackship setup} after a PF restart, or at boot through the
+provided rc integration, to reapply persisted networks and forwards.
+
+\section{Stop and remove resources}
+
+\begin{lstlisting}[language=bash]
+blackship down web --dry-run
+blackship down web
+\end{lstlisting}
+
+\command{down} stops the running jail and releases runtime resources while
+preserving its root for future starts. Use \command{rm --volumes} only when the
+jail and its associated storage should be removed.
+
+\begin{shipwarning}[Destructive cleanup]
+\command{snapshot rollback --force}, \command{rm --volumes}, forced garbage
+collection, release deletion, and recursive ZFS destruction can discard data.
+Take a snapshot or export first, verify the resolved full jail and dataset names,
+and prefer Blackship commands over manual host deletion.
+\end{shipwarning}
+
+\section{Next steps}
+
+Add a database service with \setting{depends\_on = ["database"]}, move package
+installation into a Jailfile, configure a health-driven QoS transition, and run
+\command{blackship supervise}. Those features are developed in the following
+chapters.

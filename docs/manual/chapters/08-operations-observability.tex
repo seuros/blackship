@@ -1,0 +1,146 @@
+\chapter{Operations and Observability}
+\label{ch:operations}
+
+\section{Lifecycle selection and ordering}
+
+\begin{lstlisting}[language=bash]
+blackship up api
+blackship up --all
+blackship down production
+blackship restart api
+\end{lstlisting}
+
+Selectors can be exact service names, full names, unambiguous prefixes, tags,
+or \command{ALL}. Starting a target includes its dependencies; stopping uses the
+configured cascade policy and reverse dependency order.
+
+Preview broad actions before applying them:
+
+\begin{lstlisting}[language=bash]
+blackship restart --all --dry-run
+blackship --format json restart --all --dry-run
+\end{lstlisting}
+
+\section{EVA live reconciliation}
+
+EVA compares desired parameters with live values from \command{jls}, applies
+updatable differences in one \command{jail\_set(JAIL\_UPDATE)} operation,
+replaces managed rctl rules, and re-pins the cpuset. It runs pre/post EVA hooks
+around the change.
+
+\begin{lstlisting}[language=bash]
+blackship eva api --dry-run
+blackship eva api
+\end{lstlisting}
+
+Path, VNET mode, addresses, devfs ruleset, and other immutable identity or
+isolation changes require a restart. EVA reports them but does not pretend to
+apply them. A jail that is not running is skipped.
+
+\section{Interactive and scripted access}
+
+\begin{lstlisting}[language=bash]
+blackship console api --user root
+blackship exec api --user www -- id
+blackship exec api --workdir /srv -e MODE=prod -- ./migrate
+blackship exec api --clear-env -e HOME=/tmp -- env
+blackship cp ./config.toml api:/usr/local/etc/app.toml
+blackship cp api:/var/log/app.log ./app.log
+\end{lstlisting}
+
+Use \command{--} before the in-jail command so its flags are not parsed as
+Blackship flags. Copy operations reject jail-to-jail transfers and path/symlink
+escapes.
+
+\section{Status, health, and statistics}
+
+\begin{lstlisting}[language=bash]
+blackship ps
+blackship stats
+blackship stats api
+blackship health api
+blackship health --watch --interval 5
+blackship logs api --lines 200
+blackship logs api --follow
+\end{lstlisting}
+
+Statistics aggregate per-process CPU and RSS from \command{jls} and
+\command{ps} libxo JSON. Health status reflects configured checks and retry
+state. Watch and follow modes are terminal streams; they are intentionally not
+part of the single-envelope global JSON contract.
+
+\section{Supervisor}
+
+\command{blackship supervise} runs the warden loop. It monitors jail events,
+executes health checks, applies recovery/backoff behavior, samples resource
+usage, performs health-triggered QoS transitions, and can send a dead-man ping.
+For boot operation, use the packaged rc script with the same manifest and data
+directory as interactive administration.
+
+The supervisor distinguishes intentional stops from failures and avoids
+restarting a jail the operator deliberately took down. Restart state uses
+backoff rather than a tight failure loop.
+
+\section{QoS operations}
+
+\begin{lstlisting}[language=bash]
+blackship qos api --show
+blackship qos api --steady
+blackship qos api --startup
+\end{lstlisting}
+
+Only resources named by the target profile are swapped. Custom rules outside
+the profile survive a phase transition. A one-shot \command{up} does not remain
+resident to observe health; use the supervisor or switch manually.
+
+\section{Audit history}
+
+\begin{lstlisting}[language=bash]
+blackship audit api
+blackship --format json audit api
+\end{lstlisting}
+
+Audit JSONL is durable after the kernel jail, scope record, and even a reboot
+are gone. The post-mortem summarizes event counts, lifetime, rollback steps,
+termination reason, and sampled peak resources. Peaks are bounded by the sample
+interval and are not exact continuous maxima.
+
+\section{Orphan detection and garbage collection}
+
+An out-of-band \command{jail -r}, crash, or hard reset can leave mounts,
+interfaces, PF state, leases, rctl rules, or datasets behind. Garbage collection
+compares durable scopes with live host state:
+
+\begin{lstlisting}[language=bash]
+blackship gc --dry-run
+blackship gc
+blackship gc --force
+\end{lstlisting}
+
+The normal mode reclaims only resources Blackship can prove it owns. Datasets
+not created by Blackship and non-ephemeral jails are reported rather than
+destroyed. \command{--force} expands authority and demands careful review.
+
+\section{Telemetry}
+
+When configured, lifecycle events and racct gauges are exported over OTLP/HTTP.
+Telemetry runs out of band: collector failure emits a warning but cannot make a
+jail lifecycle operation fail. This prevents observability from becoming a
+control-plane dependency.
+
+\section{Operational checklist}
+
+Before a change window:
+
+\begin{enumerate}
+  \item run \command{blackship check};
+  \item inspect \command{ps}, \command{health}, and recent \command{audit};
+  \item snapshot stateful ZFS roots or take a portable export;
+  \item generate the relevant dry-run plan;
+  \item verify privilege mode and selected targets; and
+  \item ensure an operator can access the host without depending on the jail
+    being changed.
+\end{enumerate}
+
+After the change, verify health, port forwards, dependency status, and audit
+termination/start records. Run a non-forced GC dry run to catch residual state.

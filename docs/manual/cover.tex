@@ -1,0 +1,60 @@
+\begin{titlepage}
+\thispagestyle{empty}
+\begin{tikzpicture}[remember picture,overlay]
+  \fill[voidblack] (current page.south west) rectangle (current page.north east);
+
+  % A deterministic star field keeps the cover reproducible.
+  \foreach \x/\y/\r in {
+    0.07/0.91/0.5,0.13/0.76/0.8,0.18/0.86/0.4,0.24/0.69/0.5,
+    0.31/0.94/0.7,0.37/0.79/0.4,0.44/0.88/0.8,0.51/0.73/0.5,
+    0.58/0.93/0.4,0.64/0.81/0.7,0.72/0.89/0.5,0.79/0.71/0.8,
+    0.86/0.95/0.5,0.92/0.82/0.4,0.96/0.67/0.7,0.09/0.57/0.4,
+    0.17/0.48/0.6,0.29/0.61/0.4,0.68/0.55/0.5,0.83/0.49/0.7,
+    0.94/0.58/0.4,0.05/0.31/0.7,0.16/0.22/0.4,0.27/0.36/0.5,
+    0.72/0.30/0.4,0.84/0.18/0.6,0.95/0.38/0.4,0.61/0.14/0.5}
+    \fill[ash,opacity=0.75]
+      ([xshift=\x\paperwidth,yshift=\y\paperheight]current page.south west)
+      circle (\r pt);
+
+  % Original cathedral-like voidship silhouette.
+  \begin{scope}[shift={($(current page.center)+(0,-0.5)$)},scale=0.85]
+    \fill[black] (-6.4,-0.35) -- (-4.7,-1.25) -- (-1.8,-1.75) --
+      (3.8,-1.35) -- (6.7,0) -- (3.8,1.35) -- (-1.8,1.75) --
+      (-4.7,1.25) -- cycle;
+    \fill[hull] (-5.8,-0.22) -- (-4.25,-0.95) -- (-1.4,-1.38) --
+      (5.7,0) -- (-1.4,1.38) -- (-4.25,0.95) -- cycle;
+    \fill[steel!35!hull] (-3.7,-0.68) rectangle (2.8,0.68);
+    \fill[voidblack] (-2.8,-0.48) rectangle (3.5,0.48);
+    \fill[hull] (-1.8,0.45) -- (-1.1,2.55) -- (-0.45,0.45) -- cycle;
+    \fill[hull] (0.1,0.42) -- (0.7,2.05) -- (1.25,0.42) -- cycle;
+    \fill[hull] (-1.8,-0.45) -- (-1.1,-2.55) -- (-0.45,-0.45) -- cycle;
+    \fill[hull] (0.1,-0.42) -- (0.7,-2.05) -- (1.25,-0.42) -- cycle;
+    \draw[signalred,line width=1.5pt] (-3.5,0) -- (4.65,0);
+    \foreach \x in {-3.2,-2.5,-1.8,-0.2,0.6,1.4,2.2,3.0,3.8}
+      \fill[ember] (\x,0) circle (1.3pt);
+    \fill[plasma!65] (-5.9,-0.45) rectangle (-5.45,0.45);
+    \draw[steel,line width=0.7pt] (-4.2,-0.95) -- (-4.2,0.95);
+    \draw[steel,line width=0.7pt] (-1.4,-1.38) -- (-1.4,1.38);
+    \draw[steel,line width=0.7pt] (2.2,-0.75) -- (4.9,0) -- (2.2,0.75);
+  \end{scope}
+
+  \fill[signalred] (current page.south west) rectangle ($(current page.south east)+(0,0.16)$);
+\end{tikzpicture}
+
+\vspace*{0.75in}
+\begin{center}
+  {\fontsize{42}{46}\selectfont\bfseries\color{ash} BLACKSHIP}\par
+  \vspace{0.2in}
+  {\Large\color{plasma}\MakeUppercase{Technical Manual}}\par
+  \vspace{0.12in}
+  {\large\color{steel!45!white} FreeBSD Jail Orchestration}\par
+\end{center}
+
+\vfill
+\begin{center}
+  {\large\color{ash} Version \BlackshipVersion}\par
+  \vspace{0.12in}
+  {\small\color{steel!35!white} \ManualEdition\quad---\quad November 2026}\par
+\end{center}
+\vspace*{0.45in}
+\end{titlepage}
