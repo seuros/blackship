@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.4.0](https://github.com/seuros/blackship/compare/blackship-v0.3.1...blackship-v0.4.0) (2026-11-09)
+
+
+### Features
+
+* **check:** warn on jail releases not bootstrapped ([d8cf387](https://github.com/seuros/blackship/commit/d8cf3872935883da1c8f030563ca347b6c81d41e))
+* **mcp:** blackship:///host resource replaces host_facts ([bef0857](https://github.com/seuros/blackship/commit/bef0857b6c786318e3e6e9fffac447bcc0517972))
+* **mcp:** serve Streamable HTTP with --listen ([8502a45](https://github.com/seuros/blackship/commit/8502a453a749c4987475d02e1f912d292c47ac3a))
+
+
+### Bug Fixes
+
+* **cp:** accept short jail names ([282a186](https://github.com/seuros/blackship/commit/282a186513648285f7405a79f9bb39a70321b311))
+* **eva:** detect address drift on vnet jails ([009ae94](https://github.com/seuros/blackship/commit/009ae94a6a0a84b28873493bb8f97f8ae6aaeeb3))
+* **eva:** skip rctl rules the kernel already holds ([f6b0351](https://github.com/seuros/blackship/commit/f6b0351a479edce43f4c9d2d2c3b314d874ce95b))
+* **export:** archive with bsdtar ([42de971](https://github.com/seuros/blackship/commit/42de971ac8a238acb0ca2b8f628b238c50028e34))
+* **health:** run checks in one-shot mode ([04ef3a2](https://github.com/seuros/blackship/commit/04ef3a2fb447451d7a8a812f9d84dab16c4a84bb))
+* **jailfile:** reject unknown TOML keys ([2df7061](https://github.com/seuros/blackship/commit/2df70614de17050d33d44e444d9988d6593f8eb0))
+* **network:** treat ip_cidr as the jail's static address ([17f6fda](https://github.com/seuros/blackship/commit/17f6fdae05d7d132fabb32b97df14a67dc18c348))
+* **rm:** fail on jails it did not remove ([d744bda](https://github.com/seuros/blackship/commit/d744bda93b3b00e2095920f3fa9a08da88b4a1de))
+
+
+### Miscellaneous Chores
+
+* release 0.4.0 ([7ca6a8c](https://github.com/seuros/blackship/commit/7ca6a8c899f18c8434fe6694c665fd398dd3a991))
+
 ## [0.3.1](https://github.com/seuros/blackship/compare/blackship-v0.3.0...blackship-v0.3.1) (2026-11-09)
 
 
