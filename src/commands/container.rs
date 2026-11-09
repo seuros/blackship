@@ -118,6 +118,10 @@ fn side_of(arg: &str, config: Option<&manifest::BlackshipConfig>) -> Result<Endp
     let Some(jail) = jail else {
         return Ok(Endpoint::Host(PathBuf::from(path)));
     };
+    // Short names and prefixes resolve through the config, as for exec and rm.
+    let jail = config
+        .and_then(|c| c.resolve_jail_names(&jail))
+        .map_or(jail, |(_, full)| full);
     let root = get_jail_root(&jail, config)?;
     crate::blueprint::context::reject_symlink_ancestors(&data_dir_of(config), &root)?;
     Ok(Endpoint::Jail(JailSide {
