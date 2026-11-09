@@ -33,6 +33,8 @@ pub enum PlanStep {
         restart_required: Vec<String>,
         unreadable_parameters: Vec<String>,
         rctl_rules: Vec<String>,
+        /// Rules held in the kernel that the config no longer asks for.
+        rctl_clear: bool,
         cpu_list: Option<String>,
         no_changes: bool,
     },
@@ -117,6 +119,7 @@ impl PlanStep {
                 restart_required,
                 unreadable_parameters,
                 rctl_rules,
+                rctl_clear,
                 cpu_list,
                 no_changes,
             } => {
@@ -135,6 +138,9 @@ impl PlanStep {
                     for rule in rctl_rules {
                         println!("            {rule}");
                     }
+                }
+                if *rctl_clear {
+                    println!("          rctl: remove all rules");
                 }
                 if let Some(list) = cpu_list {
                     println!("          cpuset: pin to CPUs {list}");

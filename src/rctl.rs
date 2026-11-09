@@ -14,6 +14,7 @@ use std::fmt::Write as _;
 const SYS_RCTL_ADD_RULE: libc::c_int = 528;
 const SYS_RCTL_REMOVE_RULE: libc::c_int = 529;
 const SYS_RCTL_GET_RACCT: libc::c_int = 525;
+const SYS_RCTL_GET_RULES: libc::c_int = 526;
 
 /// Resource limit configuration for a jail
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -361,6 +362,37 @@ pub fn apply_limits(jail_name: &str, config: &ResourceConfig) -> Result<()> {
     Ok(())
 }
 
+/// Whether the kernel holds exactly the rules `config` asks for, compared
+/// after expanding size suffixes (`1g` is stored as `1073741824`). `None`
+/// when the kernel's rules cannot be read (not root, no RACCT).
+pub fn rules_current(jail_name: &str, config: &ResourceConfig) -> Option<bool> {
+    let live = rctl_get_rules(&format!("jail:{jail_name}")).ok()?;
+    let Ok(mut desired) = config
+        .to_rules(jail_name)
+        .iter()
+        .map(|rule| expand_rule(rule).map(|r| canonical_rule(&r)))
+        .collect::<Result<Vec<_>>>()
+    else {
+        return Some(false);
+    };
+    let mut live: Vec<String> = live.iter().map(|r| canonical_rule(r)).collect();
+    desired.sort();
+    live.sort();
+    Some(desired == live)
+}
+
+/// `subject:id:resource:action=amount[/per]` with `per` spelled out: the
+/// kernel reports the default (the subject type) explicitly.
+fn canonical_rule(rule: &str) -> String {
+    match rule.split_once('=') {
+        Some((head, tail)) if !tail.contains('/') => {
+            let subject = head.split(':').next().unwrap_or_default();
+            format!("{head}={tail}/{subject}")
+        }
+        _ => rule.to_string(),
+    }
+}
+
 /// Remove all resource limits for a jail
 pub fn remove_limits(jail_name: &str) {
     // Remove all rules matching this jail
@@ -455,6 +487,44 @@ fn rctl_remove_rule(filter: &str) -> Result<()> {
     rctl_string_syscall(SYS_RCTL_REMOVE_RULE, filter, |e| {
         format!("Failed to remove rules for '{filter}': {e}")
     })
+}
+
+/// The rules the kernel holds for a filter, comma-separated in its reply.
+fn rctl_get_rules(filter: &str) -> Result<Vec<String>> {
+    let filter_c = std::ffi::CString::new(filter)?;
+    let filter_bytes = filter_c.as_bytes_with_nul();
+    let mut outbuf = vec![0u8; 4096];
+
+    loop {
+        // SAFETY: live buffers, each passed with its own length.
+        let ret = unsafe {
+            libc::syscall(
+                SYS_RCTL_GET_RULES,
+                filter_bytes.as_ptr().cast::<libc::c_void>(),
+                filter_bytes.len(),
+                outbuf.as_mut_ptr().cast::<libc::c_void>(),
+                outbuf.len(),
+            )
+        };
+        if ret == 0 {
+            break;
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ERANGE) && outbuf.len() < 1 << 20 {
+            outbuf.resize(outbuf.len() * 4, 0);
+            continue;
+        }
+        return Err(Error::Rctl(format!(
+            "Failed to get rules for '{filter}': {err}"
+        )));
+    }
+
+    let end = outbuf.iter().position(|&b| b == 0).unwrap_or(outbuf.len());
+    Ok(String::from_utf8_lossy(&outbuf[..end])
+        .split(',')
+        .filter(|rule| !rule.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// Get resource accounting data for a subject

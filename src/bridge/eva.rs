@@ -213,12 +213,14 @@ struct EvaPlan<'a> {
     unreadable: Vec<String>,
     resources: &'a ResourceConfig,
     rctl_rules: Vec<String>,
+    /// The kernel already holds exactly these rules; `None` when unreadable.
+    rctl_current: Option<bool>,
     cpu_list: Option<String>,
 }
 
 impl EvaPlan<'_> {
     fn is_noop(&self) -> bool {
-        self.diff.changes.is_empty() && !self.resources.has_rctl_rules() && self.cpu_list.is_none()
+        self.diff.changes.is_empty() && self.rctl_current == Some(true) && self.cpu_list.is_none()
     }
 
     fn step(&self) -> PlanStep {
@@ -227,12 +229,19 @@ impl EvaPlan<'_> {
             jid: self.jid,
             parameter_changes: self.diff.display.clone(),
             restart_required: self.diff.immutable_diffs.clone(),
-            unreadable_parameters: self.unreadable.clone(),
-            rctl_rules: if self.resources.has_rctl_rules() {
+            unreadable_parameters: {
+                let mut unreadable = self.unreadable.clone();
+                if self.rctl_current.is_none() {
+                    unreadable.push("rctl".to_string());
+                }
+                unreadable
+            },
+            rctl_rules: if self.rctl_current == Some(false) {
                 self.rctl_rules.clone()
             } else {
                 Vec::new()
             },
+            rctl_clear: self.rctl_current == Some(false) && self.rctl_rules.is_empty(),
             cpu_list: self.cpu_list.clone(),
             no_changes: self.is_noop(),
         }
@@ -282,6 +291,7 @@ impl Bridge {
         Ok(EvaTarget::Ready(Box::new(EvaPlan {
             jail_def,
             rctl_rules: resources.to_rules(&full_name),
+            rctl_current: crate::rctl::rules_current(&full_name, resources),
             full_name,
             jid,
             path,
@@ -415,8 +425,12 @@ impl Bridge {
             }
         }
 
-        crate::rctl::remove_limits(full_name);
-        if resources.has_rctl_rules()
+        let rctl_stale = plan.rctl_current != Some(true);
+        if rctl_stale {
+            crate::rctl::remove_limits(full_name);
+        }
+        if rctl_stale
+            && resources.has_rctl_rules()
             && let Err(e) = crate::rctl::apply_limits(full_name, resources)
         {
             eprintln!(

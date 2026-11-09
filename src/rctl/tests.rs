@@ -173,3 +173,16 @@ fn expand_number_matches_libutil() {
     assert_eq!(expand_number(""), None);
     assert_eq!(expand_number("1x"), None);
 }
+
+#[test]
+fn test_canonical_rule_matches_the_kernels_spelling() {
+    let configured = expand_rule("jail:web:memoryuse:deny=1g").unwrap();
+    assert_eq!(
+        canonical_rule(&configured),
+        canonical_rule("jail:web:memoryuse:deny=1073741824/jail")
+    );
+    assert_ne!(
+        canonical_rule(&expand_rule("jail:web:pcpu:deny=50").unwrap()),
+        canonical_rule("jail:web:pcpu:deny=200/jail")
+    );
+}
