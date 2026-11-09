@@ -7,7 +7,10 @@ fn test_json_output_format_parses_globally() {
     let cli = Cli::parse_from(&argv).unwrap();
 
     assert_eq!(cli.format, OutputFormat::Json);
-    assert!(matches!(cli.command, Commands::Ps { json: false }));
+    let Commands::Ps { json } = cli.command else {
+        panic!("expected ps");
+    };
+    assert!(!json);
 }
 
 #[test]
