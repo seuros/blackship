@@ -1,19 +1,19 @@
 # Blackship Technical Manual
 
-The manual is a LaTeX book assembled from independent chapter files under
-`chapters/`. Its cover is original vector artwork rendered by TikZ; no external
-image assets are required.
+LaTeX sources for the manual: one file per chapter under `chapters/`, with
+cover artwork in `assets/`. The PDF is not committed — the release workflow
+builds it and attaches `blackship-manual.pdf` to every GitHub release.
 
-On FreeBSD, install a complete TeX Live distribution and build with:
+To build locally you need TeX Live with `latexmk`:
 
 ```sh
-pkg install texlive-full
 cd docs/manual
-make
+make            # produces blackship-manual.pdf
+make clean      # drops intermediates
+make distclean  # drops the PDF too
 ```
 
-The result is `blackship-manual.pdf`. Run `make clean` to remove intermediate
-files or `make distclean` to remove the PDF as well.
-
-When behavior changes, update both the relevant chapter and the README. The CLI
-and generated MCP manual remain authoritative for exact argument parsing.
+release-please bumps `\BlackshipVersion` in `blackship-manual.tex`, so don't
+edit it by hand. When behavior changes, update the relevant chapter along with
+the README. The CLI and the generated MCP manual remain authoritative for exact
+argument parsing.

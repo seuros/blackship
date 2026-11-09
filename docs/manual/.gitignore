@@ -11,3 +11,6 @@
 *.run.xml
 *.toc
 *.xdv
+
+# Built and attached to GitHub releases by .github/workflows/release.yml
+*.pdf

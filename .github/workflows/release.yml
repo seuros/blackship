@@ -62,9 +62,34 @@ jobs:
           path: dist/blackship-freebsd-amd64.tar.gz
           retention-days: 1
 
+  build-manual:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created || inputs.force_build }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Install TeX Live
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            latexmk texlive-latex-recommended texlive-latex-extra \
+            texlive-fonts-recommended texlive-pictures
+
+      - name: Build manual
+        run: make -C docs/manual
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: blackship-manual
+          path: docs/manual/blackship-manual.pdf
+          retention-days: 1
+
   upload-assets:
-    needs: [release-please, build-freebsd]
-    if: ${{ always() && (needs.release-please.outputs.release_created || inputs.force_build) && needs.build-freebsd.result == 'success' }}
+    needs: [release-please, build-freebsd, build-manual]
+    if: ${{ always() && (needs.release-please.outputs.release_created || inputs.force_build) && needs.build-freebsd.result == 'success' && needs.build-manual.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -76,7 +101,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum *.tar.gz > checksums.txt
+          sha256sum *.tar.gz *.pdf > checksums.txt
 
       - uses: softprops/action-gh-release@v3
         with:
