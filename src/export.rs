@@ -12,7 +12,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use tar::{Archive, Builder};
+use tar::Archive;
 
 /// Metadata stored in the archive
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,6 +38,9 @@ fn entry_path<R: std::io::Read>(entry: &tar::Entry<R>) -> Result<std::path::Path
         .map_err(|e| Error::JailOperation(format!("Failed to read entry path: {e}")))
         .map(|p| p.to_path_buf())
 }
+
+/// Archive member holding the export metadata.
+const METADATA_ENTRY: &str = ".blackship-metadata.json";
 
 /// Maximum size for metadata entries read from tar archives (10 MB).
 const MAX_TAR_METADATA_SIZE: u64 = 10 * 1024 * 1024;
@@ -125,7 +128,7 @@ pub fn read_metadata(archive_path: &Path) -> Result<ExportMetadata> {
             .map_err(|e| Error::JailOperation(format!("Failed to read archive entry: {e}")))?;
         let path = entry_path(&entry)?;
 
-        if path.to_string_lossy() == ".blackship-metadata.json" {
+        if path.to_string_lossy() == METADATA_ENTRY {
             let mut content = String::new();
             entry_read_to_string(&mut entry, &mut content)?;
             return serde_json::from_str(&content)
@@ -137,6 +140,12 @@ pub fn read_metadata(archive_path: &Path) -> Result<ExportMetadata> {
 }
 
 /// Export a jail to a tar.zst archive
+///
+/// bsdtar does the archiving: it keeps hardlinks as links (`/rescue` is one
+/// binary under ~150 names), file flags, and skips sockets with a warning
+/// instead of failing. `--one-file-system` leaves out devfs and anything else
+/// mounted into the root. The archive is written next to `output_path` and
+/// renamed into place only when complete.
 pub fn export_jail(
     name: &str,
     jail_path: &Path,
@@ -146,19 +155,6 @@ pub fn export_jail(
 ) -> Result<()> {
     println!("Exporting jail '{}' to {}", name, output_path.display());
 
-    // Create output file
-    let file = create_output_file(output_path)?;
-
-    // Wrap in zstd compressor
-    let encoder = zstd::stream::Encoder::new(file, 3)
-        .map_err(|e| Error::JailOperation(format!("Failed to create compressor: {e}")))?;
-
-    // Create tar builder
-    let mut builder = Builder::new(encoder);
-    // Archive symlinks as symlinks: following them would leak host files.
-    builder.follow_symlinks(false);
-
-    // Create and add metadata
     let metadata = ExportMetadata {
         name: name.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -167,38 +163,58 @@ pub fn export_jail(
         ip: ip.map(String::from),
         hostname: hostname.map(String::from),
     };
-
     let metadata_json = serde_json::to_string_pretty(&metadata)
         .map_err(|e| Error::JailOperation(format!("Failed to serialize metadata: {e}")))?;
 
-    // Add metadata as first file
-    let metadata_bytes = metadata_json.as_bytes();
-    let mut header = tar::Header::new_gnu();
-    header.set_size(metadata_bytes.len() as u64);
-    header.set_mode(0o644);
-    header.set_cksum();
-
-    builder
-        .append_data(&mut header, ".blackship-metadata.json", metadata_bytes)
-        .map_err(|e| Error::JailOperation(format!("Failed to add metadata: {e}")))?;
-
-    // Add jail root filesystem
-    println!("  Adding jail filesystem...");
-    builder
-        .append_dir_all("rootfs", jail_path)
-        .map_err(|e| Error::JailOperation(format!("Failed to add jail files: {e}")))?;
-
-    // Finish archive
-    let encoder = builder
-        .into_inner()
-        .map_err(|e| Error::JailOperation(format!("Failed to finalize archive: {e}")))?;
-
-    encoder
-        .finish()
-        .map_err(|e| Error::JailOperation(format!("Failed to finish compression: {e}")))?;
+    let scratch = sibling(output_path, "export")?;
+    let partial = scratch.join("archive.tar.zst");
+    let result = write_archive(&scratch, &partial, jail_path, &metadata_json).and_then(|()| {
+        std::fs::rename(&partial, output_path)
+            .map_err(|e| Error::JailOperation(format!("Failed to move archive into place: {e}")))
+    });
+    let _ = std::fs::remove_dir_all(&scratch); // best-effort; `result` is reported
+    result?;
 
     println!("Export complete: {}", output_path.display());
     Ok(())
+}
+
+fn write_archive(scratch: &Path, partial: &Path, jail_path: &Path, metadata: &str) -> Result<()> {
+    std::fs::write(scratch.join(METADATA_ENTRY), metadata)
+        .map_err(|e| Error::JailOperation(format!("Failed to write metadata: {e}")))?;
+
+    println!("  Adding jail filesystem...");
+    let status = Command::new("/usr/bin/bsdtar")
+        .args(["--zstd", "--fflags", "--one-file-system"])
+        // The root goes in as `rootfs/`; the metadata name matches neither.
+        .args(["-s", ",^\\./,rootfs/,", "-s", ",^\\.$,rootfs,", "-cf"])
+        .arg(partial)
+        .arg("-C")
+        .arg(scratch)
+        .arg(METADATA_ENTRY)
+        .arg("-C")
+        .arg(jail_path)
+        .arg(".")
+        .status()
+        .map_err(|e| Error::JailOperation(format!("Failed to run bsdtar: {e}")))?;
+    if !status.success() {
+        return Err(Error::JailOperation(format!("bsdtar failed: {status}")));
+    }
+    Ok(())
+}
+
+/// A fresh scratch directory beside `path`, on the same filesystem so the
+/// final rename is atomic.
+fn sibling(path: &Path, what: &str) -> Result<std::path::PathBuf> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let dir = parent.join(format!(".blackship-{what}-{:016x}", rand::random::<u64>()));
+    // create_dir, not create_dir_all: an existing (possibly planted) path fails.
+    std::fs::create_dir(&dir)
+        .map_err(|e| Error::JailOperation(format!("Failed to create {}: {e}", dir.display())))?;
+    Ok(dir)
 }
 
 /// Export using ZFS send (faster for large jails)
@@ -337,37 +353,13 @@ pub fn import_jail(
         }
     }
 
-    // Reopen file for tar/zstd
-    let file = open_archive(archive_path)?;
+    let metadata = read_metadata(archive_path)?;
 
-    // Decompress
-    let decoder = open_decoder(file)?;
-
-    // Open tar archive
-    let mut archive = Archive::new(decoder);
-
-    let temp_dir = target_path.parent().unwrap_or_else(|| Path::new("/tmp"));
-    let temp_extract = temp_dir.join(format!(".import-{:016x}", rand::random::<u64>()));
-
-    // A pre-existing temp path may be a planted symlink.
-    if let Ok(meta) = std::fs::symlink_metadata(&temp_extract) {
-        let _ = meta; // path exists -- refuse to use it
-        return Err(Error::JailOperation(format!(
-            "Temp directory {} already exists, refusing to proceed",
-            temp_extract.display()
-        )));
+    let temp_extract = sibling(target_path, "import")?;
+    if let Err(e) = extract_rootfs(archive_path, &temp_extract) {
+        let _ = crate::sys::remove_tree_with_flags(&temp_extract); // best-effort; `e` is reported
+        return Err(e);
     }
-
-    std::fs::create_dir_all(&temp_extract)
-        .map_err(|e| Error::JailOperation(format!("Failed to create temp dir: {e}")))?;
-
-    let metadata = match unpack_entries(&mut archive, &temp_extract) {
-        Ok(m) => m,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&temp_extract); // best-effort; `e` is reported
-            return Err(e);
-        }
-    };
 
     let jail_name = new_name.unwrap_or(&metadata.name);
 
@@ -376,7 +368,7 @@ pub fn import_jail(
 
     if !rootfs_src.exists() {
         // Cleanup; keep the original error.
-        let _ = std::fs::remove_dir_all(&temp_extract);
+        let _ = crate::sys::remove_tree_with_flags(&temp_extract);
         return Err(Error::JailOperation(
             "Archive does not contain a rootfs directory".into(),
         ));
@@ -387,14 +379,14 @@ pub fn import_jail(
         .map_err(|e| Error::JailOperation(format!("Failed to stat rootfs: {e}")))?;
     if rootfs_meta.file_type().is_symlink() {
         // Cleanup; keep the original error.
-        let _ = std::fs::remove_dir_all(&temp_extract);
+        let _ = crate::sys::remove_tree_with_flags(&temp_extract);
         return Err(Error::JailOperation(
             "Extracted rootfs is a symlink, refusing to proceed".into(),
         ));
     }
     if !rootfs_meta.is_dir() {
         // Cleanup; keep the original error.
-        let _ = std::fs::remove_dir_all(&temp_extract);
+        let _ = crate::sys::remove_tree_with_flags(&temp_extract);
         return Err(Error::JailOperation(
             "Extracted rootfs is not a directory".into(),
         ));
@@ -406,8 +398,7 @@ pub fn import_jail(
     }
 
     if target_path.exists() {
-        std::fs::remove_dir_all(target_path)
-            .map_err(|e| Error::JailOperation(format!("Failed to remove existing: {e}")))?;
+        crate::sys::remove_tree_with_flags(target_path)?;
     }
     std::fs::rename(&rootfs_src, target_path)
         .map_err(|e| Error::JailOperation(format!("Failed to move rootfs: {e}")))?;
@@ -419,14 +410,14 @@ pub fn import_jail(
         .map_err(|e| Error::JailOperation(format!("Failed to canonicalize parent: {e}")))?;
     if !canonical.starts_with(&canonical_parent) {
         // Cleanup; keep the original error.
-        let _ = std::fs::remove_dir_all(target_path);
+        let _ = crate::sys::remove_tree_with_flags(target_path);
         return Err(Error::JailOperation(
             "Imported rootfs resolved outside target directory".into(),
         ));
     }
 
     // Clean up temp
-    let _ = std::fs::remove_dir_all(&temp_extract);
+    let _ = crate::sys::remove_tree_with_flags(&temp_extract);
 
     println!("Imported jail '{}' to {}", jail_name, target_path.display());
     println!("  Original: {}", metadata.name);
@@ -437,33 +428,22 @@ pub fn import_jail(
     Ok(jail_name.to_string())
 }
 
-/// Unpack `archive` under `dest`, returning the parsed metadata file instead of writing it.
-fn unpack_entries<R: Read>(archive: &mut Archive<R>, dest: &Path) -> Result<ExportMetadata> {
-    let mut metadata: Option<ExportMetadata> = None;
-    for entry in archive
-        .entries()
-        .map_err(|e| Error::JailOperation(format!("Failed to read archive entries: {e}")))?
-    {
-        let mut entry = entry
-            .map_err(|e| Error::JailOperation(format!("Failed to read archive entry: {e}")))?;
-
-        let path = entry_path(&entry)?;
-
-        if path.to_string_lossy() == ".blackship-metadata.json" {
-            let mut content = String::new();
-            entry_read_to_string(&mut entry, &mut content)?;
-            metadata = Some(
-                serde_json::from_str(&content)
-                    .map_err(|e| Error::JailOperation(format!("Failed to parse metadata: {e}")))?,
-            );
-        } else {
-            entry.unpack_in(dest).map_err(|e| {
-                Error::JailOperation(format!("Failed to extract {}: {}", path.display(), e))
-            })?;
-        }
+/// Extract the archive's `rootfs/` under `dest` with bsdtar, restoring
+/// hardlinks and file flags. bsdtar's defaults refuse absolute paths, `..`,
+/// and extraction through symlinks, which is what a hostile archive needs.
+fn extract_rootfs(archive_path: &Path, dest: &Path) -> Result<()> {
+    let status = Command::new("/usr/bin/bsdtar")
+        .args(["-x", "--fflags", "--numeric-owner", "-p", "-f"])
+        .arg(archive_path)
+        .arg("-C")
+        .arg(dest)
+        .arg("rootfs")
+        .status()
+        .map_err(|e| Error::JailOperation(format!("Failed to run bsdtar: {e}")))?;
+    if !status.success() {
+        return Err(Error::JailOperation(format!("bsdtar failed: {status}")));
     }
-
-    metadata.ok_or_else(|| Error::JailOperation("Archive missing metadata".into()))
+    Ok(())
 }
 
 /// Import from ZFS stream
