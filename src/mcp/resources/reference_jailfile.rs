@@ -28,7 +28,11 @@ const UNSUPPORTED: &[(&str, &str)] = &[
          shell command string, brackets and all",
     ),
     ("--from=", "COPY takes exactly <src> <dest>; there are no build stages"),
-    ("--chown=", "COPY flags are not parsed; set ownership in a RUN step"),
+    (
+        "--chown=",
+        "COPY flags are not parsed; in the line format set ownership in a later RUN step, \
+         in the TOML format with the copy entry's `owner` (and `mode`)",
+    ),
     (
         "backslash line continuation",
         "a trailing `\\` is recognised and then ignored, so the next line is parsed as a \
@@ -55,6 +59,19 @@ impl McpState {
         )])
     }
 }
+
+/// The TOML format has no instruction order of its own: `parse_toml_format`
+/// emits its tables in one fixed sequence.
+const TOML_ORDER: &str = "\n## Step order in the TOML format\n\n\
+     The TOML format runs its steps in a fixed order, whatever order the tables \
+     appear in: `from`, `workdir`, every `args` entry, every `env` entry, every \
+     `run` command, every `copy` entry, then `expose`. Two consequences:\n\n\
+     - `workdir` applies before any step, so a relative `copy` destination always \
+     resolves against it. Use absolute destinations when that is not what you mean.\n\
+     - Every `run` happens before every `copy`, so no command can act on a copied \
+     file. Set ownership and permissions with the copy entry's `owner` and `mode`; \
+     when a command must run after a copy, use the line format, which keeps the \
+     order as written.\n";
 
 /// Build the reference page.
 fn render() -> String {
@@ -86,6 +103,7 @@ fn render() -> String {
         let _ = writeln!(page, "- `{name}` — {why}"); // fmt::Write into a String is infallible
     }
 
+    page.push_str(TOML_ORDER);
     page
 }
 
