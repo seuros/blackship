@@ -5,12 +5,13 @@
 \geometry{paper=letterpaper,inner=1.05in,outer=0.85in,top=0.85in,bottom=0.9in}
 \usepackage{microtype}
 \DisableLigatures{encoding = *, family = tt*}
+\usepackage{etoolbox}
+\usepackage{needspace}
 \usepackage{xcolor}
 \usepackage{graphicx}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,calc,positioning,shapes.geometric}
 \usepackage{booktabs}
-\usepackage{longtable}
 \usepackage{tabularx}
 \usepackage{array}
 \usepackage{enumitem}
@@ -47,8 +48,11 @@
   {\filleft\Large\color{signalred}\MakeUppercase{\chaptertitlename}\ \thechapter}
   {1ex}
   {\titlerule\vspace{1.2ex}\Huge}
+\titlespacing*{\chapter}{0pt}{10pt}{40pt}
 \titleformat{\section}{\Large\bfseries\color{voidblack}}{\thesection}{0.7em}{}
 \titleformat{\subsection}{\large\bfseries\color{signalred}}{\thesubsection}{0.7em}{}
+\pretocmd{\section}{\Needspace{7\baselineskip}}{}{}
+\pretocmd{\subsection}{\Needspace{5\baselineskip}}{}{}
 
 \pagestyle{fancy}
 \fancyhf{}
@@ -58,6 +62,7 @@
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\footrulewidth}{0pt}
 \setlength{\headheight}{14pt}
+\raggedbottom
 
 \setlist{nosep,leftmargin=1.5em}
 \setlength{\parindent}{0pt}
@@ -139,5 +144,27 @@
 \newcommand{\file}[1]{\path{#1}}
 \newcommand{\setting}[1]{\texttt{#1}}
 \newcommand{\Blackship}{\textsc{Blackship}}
+
+% Tables and figures are deliberately indivisible. If one does not fit in the
+% remaining space, TeX moves the complete block to the following page.
+\newenvironment{shiptable}[1]{%
+  \par\addvspace{0.65em}%
+  \noindent\begin{minipage}{\textwidth}%
+  \centering
+  \begin{tabular}{#1}%
+}{%
+  \end{tabular}%
+  \end{minipage}%
+  \par\addvspace{0.65em}%
+}
+
+\newenvironment{shipfigure}{%
+  \par\addvspace{0.65em}%
+  \noindent\begin{minipage}{\textwidth}%
+  \centering
+}{%
+  \end{minipage}%
+  \par\addvspace{0.65em}%
+}
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
 \newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}

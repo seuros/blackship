@@ -40,7 +40,7 @@ CMD /usr/local/sbin/nginx -g 'daemon off;'
 STOP /usr/local/sbin/nginx -s quit
 \end{lstlisting}
 
-\begin{longtable}{L{0.17\textwidth}L{0.73\textwidth}}
+\begin{shiptable}{L{0.17\textwidth}L{0.73\textwidth}}
 \toprule
 Instruction & Meaning \\
 \midrule
@@ -55,7 +55,7 @@ Instruction & Meaning \\
 \command{CMD} & Default image command metadata. \\
 \command{STOP} & Command run before rc shutdown; manifest \setting{stop} wins. \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 Source resolution refuses absolute paths and parent traversal. Destination
 writes refuse symlink escapes from the jail root. Ownership is resolved against

@@ -10,10 +10,18 @@
 \frontmatter
 \input{cover}
 \input{frontmatter}
-{\hypersetup{linkcolor=black}\tableofcontents}
-\clearpage
+\begingroup
+\setlength{\parskip}{0.5em}
+\hypersetup{linkcolor=black}
+\tableofcontents
+\endgroup
 
+% The manual is distributed primarily as a PDF, so do not insert a blank verso
+% merely to make the main matter begin on a recto page.
+\let\standardcleardoublepage\cleardoublepage
+\let\cleardoublepage\clearpage
 \mainmatter
+\let\cleardoublepage\standardcleardoublepage
 \include{chapters/01-overview}
 \include{chapters/02-requirements-installation}
 \include{chapters/03-concepts-architecture}

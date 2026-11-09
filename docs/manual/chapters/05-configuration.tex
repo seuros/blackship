@@ -22,7 +22,7 @@ usage_sample_secs = 30
 monitor_ping_url = "https://monitor.example/ping/token"
 \end{lstlisting}
 
-\begin{longtable}{L{0.23\textwidth}L{0.18\textwidth}L{0.49\textwidth}}
+\begin{shiptable}{L{0.23\textwidth}L{0.18\textwidth}L{0.49\textwidth}}
 \toprule
 Key & Typical value & Meaning \\
 \midrule
@@ -43,7 +43,7 @@ default is \setting{["base"]}. \\
 period; zero disables sampling. \\
 \setting{monitor\_ping\_url} & URL & Optional dead-man ping used by the supervisor. \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 When ZFS is enabled, the jails dataset is mounted at the configured data
 directory's \file{jails} path. This keeps effective root paths consistent

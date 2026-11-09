@@ -7,7 +7,7 @@ option differs from this edition.
 
 \section{Global options}
 
-\begin{longtable}{L{0.30\textwidth}L{0.60\textwidth}}
+\begin{shiptable}{L{0.30\textwidth}L{0.60\textwidth}}
 \toprule
 Option & Effect \\
 \midrule
@@ -21,14 +21,14 @@ inherently policy-based and non-interactive. \\
 \command{--format text|json} & Select human text or the versioned machine
 contract for supported commands. \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 Global options precede the subcommand. Use \command{--} to terminate option
 parsing before an in-jail argv.
 
 \section{Lifecycle and host commands}
 
-\begin{longtable}{L{0.39\textwidth}L{0.51\textwidth}}
+\begin{shiptable}{L{0.39\textwidth}L{0.51\textwidth}}
 \toprule
 Command & Purpose \\
 \midrule
@@ -48,11 +48,11 @@ optionally configure and start PF. \\
 \command{gc [jail] [--dry-run] [--force] [--prune-unreferenced]} & Find and
 reclaim orphaned resources; pruning broadens ownership beyond tracked state. \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 \section{Execution and files}
 
-\begin{longtable}{L{0.39\textwidth}L{0.51\textwidth}}
+\begin{shiptable}{L{0.39\textwidth}L{0.51\textwidth}}
 \toprule
 Command & Purpose \\
 \midrule
@@ -68,11 +68,11 @@ jail-to-host; use \command{jail:path}. \\
 artifacts and optionally datasets. \\
 \command{logs <jail> [--follow] [--lines N]} & Read the jail log. \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 \section{Releases and builds}
 
-\begin{longtable}{L{0.39\textwidth}L{0.51\textwidth}}
+\begin{shiptable}{L{0.39\textwidth}L{0.51\textwidth}}
 \toprule
 Command & Purpose \\
 \midrule
@@ -86,11 +86,11 @@ Jailfile. \\
 \command{template list|inspect|validate} & Work with Jailfiles and templates. \\
 \command{commit <jail> <release>} & Freeze a jail into a reusable release. \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 \section{Networking and storage}
 
-\begin{longtable}{L{0.39\textwidth}L{0.51\textwidth}}
+\begin{shiptable}{L{0.39\textwidth}L{0.51\textwidth}}
 \toprule
 Command & Purpose \\
 \midrule
@@ -110,11 +110,11 @@ or foreign jail data. \\
 \command{migrate <jail> <user@host> [--remote-dataset D] [--keep]} & Send a
 stopped ZFS-backed jail over SSH. \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 \section{Health and orchestration}
 
-\begin{longtable}{L{0.39\textwidth}L{0.51\textwidth}}
+\begin{shiptable}{L{0.39\textwidth}L{0.51\textwidth}}
 \toprule
 Command & Purpose \\
 \midrule
@@ -129,7 +129,7 @@ merged manifests. \\
 \command{completion bash|elvish|fish|nu|zsh} & Generate shell completion. \\
 \command{mcp} & Serve the optional MCP stdio protocol. \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 \section{Machine-readable contract}
 

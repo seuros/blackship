@@ -7,7 +7,7 @@ mutations in order, and rolls them back in reverse order if a later step fails.
 
 \section{Control flow}
 
-\begin{center}
+\begin{shipfigure}
 \begin{tikzpicture}[
   node distance=0.75cm and 0.55cm,
   box/.style={draw=steel,rounded corners=2pt,fill=codeback,minimum height=0.75cm,
@@ -27,7 +27,7 @@ mutations in order, and rolls them back in reverse order if a later step fails.
   \draw[arrow,<->] (bridge) -- (state);
   \draw[arrow] (state) -- (host);
 \end{tikzpicture}
-\end{center}
+\end{shipfigure}
 
 The CLI is intentionally thin. The same core abstractions back ephemeral
 library containers and long-lived manifest jails. Errors retain typed causes at
@@ -81,7 +81,7 @@ The main lifecycle operations are:
 
 Files beneath the configured data directory serve different purposes:
 
-\begin{longtable}{L{0.22\textwidth}L{0.68\textwidth}}
+\begin{shiptable}{L{0.22\textwidth}L{0.68\textwidth}}
 \toprule
 Store & Role \\
 \midrule
@@ -93,7 +93,7 @@ Port forwards & PF mappings that can be reloaded after PF restart. \\
 Container registry & Process ownership records for ephemeral library/CLI
 containers, including explicit ownership handoff. \\
 \bottomrule
-\end{longtable}
+\end{shiptable}
 
 Mutable TOML state is staged in a uniquely named temporary file beside its
 target and then atomically renamed into place. Keeping the temporary and target
