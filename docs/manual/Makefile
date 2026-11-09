@@ -7,7 +7,7 @@ CHAPTERS != find chapters -type f -name '*.tex' -print
 
 all: $(PDF)
 
-$(PDF): $(MAIN) blackship-style.tex cover.tex frontmatter.tex assets/blackship-cover.png $(CHAPTERS)
+$(PDF): $(MAIN) blackship-style.tex cover.tex frontmatter.tex assets/blackship-cover.jpg $(CHAPTERS)
 	$(LATEXMK) -pdf -interaction=nonstopmode -halt-on-error $(MAIN)
 
 clean:
