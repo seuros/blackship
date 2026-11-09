@@ -46,11 +46,11 @@ or telemetry runtime:
 
 \begin{lstlisting}[language=TOML]
 [dependencies]
-blackship = { version = "0.2", default-features = false }
+blackship = { version = "0.3", default-features = false }
 \end{lstlisting}
 
 \begin{lstlisting}[language=Rust]
-use blackship::{ContainerSpec, Exec, Host, Limits, Network, Selector};
+use blackship::{ContainerSpec, Exec, Host, Limits, Mount, Network, Selector};
 use std::time::Duration;
 
 let host = Host::new("/var/db/ci/blackship")
@@ -61,7 +61,9 @@ host.ensure_release("15.1-RELEASE")?;
 
 let job = host.create(
     &ContainerSpec::new("job-42", "15.1-RELEASE")
-        .network(Network::Inherit)
+        .network(Network::vnet("ci"))
+        .nameserver([192, 0, 2, 53])
+        .mount(Mount::read_write("/var/db/ci/jobs/42", "/work").noexec())
         .limits(Limits::new().memory("4g").max_processes(512)),
 )?;
 
@@ -79,7 +81,31 @@ job.destroy()?;
 connection. Containers own independent host descriptions and can be used from
 several threads. Dropping a container attempts cleanup; call \command{destroy}
 when errors must be observed or \command{keep} when the instance should outlive
-the handle.
+the handle permanently. A short-lived privileged creator can instead call
+\command{hand\_over(pid)}: the receiving process becomes the recorded owner,
+and orphan reclamation becomes eligible only after that process exits.
+
+\subsection{Container network and mount policy}
+
+\command{Network::None} leaves the container without a configured attachment.
+\command{Network::Inherit} shares the host stack and resolver.
+\command{Network::vnet(name)} leases an address on a named network and derives
+a resolver from the host after dropping host-only loopback and scoped
+link-local nameservers. Repeated \command{nameserver(ip)} calls replace the
+derived list and are required when a VNET container cannot reach the host's
+local resolver.
+
+Container mounts are nullfs attachments. A read-write \command{Mount} is
+\command{nosuid} by default; \command{noexec()} adds execution denial, and
+\command{allow\_setuid()} is an explicit opt-out. These flags protect the
+jail-side mount only. They do not change how the same files behave through the
+host path, so writable job directories should live on a host dataset with
+\command{setuid=off} when other host users can reach them.
+
+\command{ContainerSpec::allow\_chflags()} is intended for controlled image
+baking that installs pkgbase, whose packages set system file flags. Do not add
+it routinely to jobs: flags written through a read-write mount remain on the
+host files and can prevent deletion until cleared.
 
 A non-zero executed command is represented in the execution result, while
 failure to create, enter, supervise, or clean the jail is a typed
@@ -129,9 +155,11 @@ A CI adapter can map one job to one ephemeral jail:
   \item destroy the jail in a finally/defer path.
 \end{enumerate}
 
-Timeout supervision kills the workload from the host side so a process inside
-the jail cannot evade it. Use read-only mounts for shared source or caches when
-the job should not mutate host data.
+Timeout and deadline supervision kills the workload from the host side so a
+process inside the jail cannot evade it. Blackship reaps the timed-out command
+before sweeping the remaining jail processes, preventing its own zombie from
+consuming the cleanup retry budget. Use read-only mounts for shared source or
+caches when the job should not mutate host data.
 
 \section{Versioning expectations}
 

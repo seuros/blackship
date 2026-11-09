@@ -90,9 +90,15 @@ Audit & Append-only JSONL lifecycle history that survives scope deletion. \\
 Networks & Persistent named-network definitions, recreated after reboot. \\
 Leases & Serialized address ownership for concurrent jail creation. \\
 Port forwards & PF mappings that can be reloaded after PF restart. \\
-Container registry & Ownership records for ephemeral library/CLI containers. \\
+Container registry & Process ownership records for ephemeral library/CLI
+containers, including explicit ownership handoff. \\
 \bottomrule
 \end{longtable}
+
+Mutable TOML state is staged in a uniquely named temporary file beside its
+target and then atomically renamed into place. Keeping the temporary and target
+files on one filesystem prevents readers from observing a partially written
+scope, network, lease, forward, or container-ownership record.
 
 \section{Failure model}
 

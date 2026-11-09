@@ -58,12 +58,14 @@ packaging metadata and rc integration for a ports-based deployment.
 \section{Installing with Cargo}
 
 Building from source requires a Rust toolchain that satisfies the
-\file{Cargo.toml} \command{rust-version}, a C compiler, and the base system
-headers. Blackship compiles a small C helper at build time to obtain ioctl and
-netgraph constants from the host headers instead of hard-coding ABI values.
+\file{Cargo.toml} \command{rust-version}, a C compiler, the base system headers,
+the Protocol Buffers compiler, and LLVM/libclang for dependency bindgen. The
+repository pins Rust 1.99.1 through \file{mise.toml}. Blackship compiles a small
+C helper at build time to obtain ioctl and netgraph constants from the host
+headers instead of hard-coding ABI values.
 
 \begin{lstlisting}[language=bash]
-pkg install rust
+pkg install rust protobuf llvm
 cargo install blackship
 \end{lstlisting}
 

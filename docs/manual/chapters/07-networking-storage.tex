@@ -77,6 +77,28 @@ The default MAC uses FreeBSD's OUI plus a stable hash of jail and bridge names.
 It survives restart while differing between clones. Explicitly configure a MAC
 only when an external network policy requires it.
 
+\section{Resolver behavior for ephemeral runs}
+
+An ephemeral \command{run} without \command{--network} inherits the host
+network stack and copies the host's \file{/etc/resolv.conf}. A run attached to
+a named network receives its own VNET stack. Blackship still derives its
+resolver from the host, but removes loopback nameservers and interface-scoped
+link-local nameservers that the VNET stack cannot reach.
+
+If filtering leaves no usable nameserver---commonly when the host uses
+\command{local\_unbound} on \command{127.0.0.1}---creation fails instead of
+starting a jail with predictably broken DNS. Supply one or more reachable
+addresses explicitly:
+
+\begin{lstlisting}[language=bash]
+blackship run --name probe --release 15.1-RELEASE \
+  --network frontend --dns 10.20.0.53 --dns 1.1.1.1 -- fetch https://example.com
+\end{lstlisting}
+
+The repeated \command{--dns} values replace, rather than supplement, the
+host-derived nameserver list. Managed manifest jails continue to use the DNS
+configuration described in Chapter~\ref{ch:configuration}.
+
 \section{PF port forwarding}
 
 \begin{lstlisting}[language=bash]

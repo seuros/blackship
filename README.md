@@ -214,7 +214,7 @@ exporter:
 
 ```toml
 [dependencies]
-blackship = { version = "0.2", default-features = false }
+blackship = { version = "0.3", default-features = false }
 ```
 
 ```rust

@@ -78,8 +78,12 @@ For boot operation, use the packaged rc script with the same manifest and data
 directory as interactive administration.
 
 The supervisor distinguishes intentional stops from failures and avoids
-restarting a jail the operator deliberately took down. Restart state uses
-backoff rather than a tight failure loop.
+restarting a jail the operator deliberately took down. Each jail has an
+independent one-for-one restart policy. Abnormal restarts back off from a
+one-second base toward a 60-second ceiling, with jitter so simultaneous
+failures do not restart in lockstep. The policy gives up when a jail exhausts
+five restarts in a five-minute window rather than entering an endless failure
+loop.
 
 \section{QoS operations}
 
