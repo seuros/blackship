@@ -34,6 +34,14 @@ leases, and forward records. \\
 \setting{releases\_dir} & path & Bootstrapped and committed release roots. \\
 \setting{cache\_dir} & path & Downloads and reusable build material. \\
 \setting{mirror\_url} & URL & Base URL for FreeBSD release acquisition. \\
+\bottomrule
+\end{shiptable}
+
+\begin{shiptable}{L{0.23\textwidth}L{0.18\textwidth}L{0.49\textwidth}}
+\multicolumn{3}{l}{\textit{Global configuration (continued)}} \\[0.35em]
+\toprule
+Key & Typical value & Meaning \\
+\midrule
 \setting{zfs\_enabled} & boolean & Enable dataset-backed provisioning and ZFS features. \\
 \setting{zpool} & string & Pool containing the Blackship dataset tree. \\
 \setting{dataset} & string & Dataset path below the pool. \\
