@@ -17,6 +17,14 @@ pub struct Cli {
     #[usage(short, long)]
     pub verbose: bool,
 
+    /// Never re-execute through mdo, doas, or sudo
+    #[usage(long)]
+    pub no_escalate: bool,
+
+    /// Never allow a privilege escalator to prompt for authentication
+    #[usage(long)]
+    pub non_interactive: bool,
+
     /// Output format for machine-readable commands
     #[usage(long, default = "text", value_enum)]
     pub format: OutputFormat,
@@ -494,6 +502,9 @@ pub enum Commands {
         shell: Shell,
     },
 
+    /// Report binary and host capabilities
+    Capabilities,
+
     /// Start the Warden supervisor to monitor and auto-restart jails
     Supervise,
 
@@ -771,6 +782,7 @@ impl Commands {
         match self {
             Self::Ps { .. }
             | Self::Check
+            | Self::Capabilities
             | Self::Ports { .. }
             | Self::Stats { .. }
             | Self::Audit { .. }
@@ -825,6 +837,7 @@ impl Commands {
             Self::Snapshot { action } => action.requires_root(),
             Self::Ps { .. }
             | Self::Check
+            | Self::Capabilities
             | Self::Init { .. }
             | Self::Health { .. }
             | Self::Build { .. }

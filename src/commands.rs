@@ -6,6 +6,7 @@ pub mod armada;
 pub mod audit;
 pub mod bootstrap;
 pub mod build;
+pub mod capabilities;
 pub mod container;
 pub mod foreign;
 pub mod gc;

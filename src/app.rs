@@ -67,7 +67,7 @@ fn run_cli(cli: Cli) -> Result<()> {
         return Err(Error::UnsupportedOutputFormat);
     }
 
-    maybe_escalate_to_root(&cli.command)?;
+    maybe_escalate_to_root(&cli.command, cli.no_escalate, cli.non_interactive)?;
     let ctx = AppContext::new(cli.config, cli.verbose, cli.format);
     ctx.init_telemetry();
     let result = ctx.dispatch(cli.command);
@@ -159,6 +159,14 @@ impl AppContext {
             Commands::Completion { shell } => {
                 crate::cli::Cli::generate_completion(shell);
                 Ok(())
+            }
+
+            Commands::Capabilities => {
+                if self.format == OutputFormat::Json {
+                    crate::output::print_success(&commands::capabilities::data()?)
+                } else {
+                    commands::capabilities::handle()
+                }
             }
 
             Commands::Init {
@@ -511,8 +519,13 @@ impl AppContext {
     }
 }
 
-fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
-    if !command.requires_root() || nix::unistd::geteuid().is_root() {
+fn maybe_escalate_to_root(
+    command: &Commands,
+    no_escalate: bool,
+    non_interactive: bool,
+) -> Result<()> {
+    let euid = nix::unistd::geteuid();
+    if !should_escalate(command.requires_root(), euid.as_raw(), no_escalate)? {
         return Ok(());
     }
 
@@ -526,11 +539,7 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
         .map_err(|e| Error::User(format!("Failed to locate current executable: {e}")))?;
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
-    let mut cmd = ProcessCommand::new(escalator);
-    cmd.arg(&executable).args(args);
-    if escalator == MDO {
-        as_root_env(&mut cmd);
-    }
+    let mut cmd = escalation_command(escalator, &executable, &args, non_interactive);
     let err = cmd.exec();
 
     Err(Error::User(format!(
@@ -539,6 +548,33 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
 }
 
 const MDO: &str = "/usr/bin/mdo";
+
+fn should_escalate(requires_root: bool, euid: u32, no_escalate: bool) -> Result<bool> {
+    if !requires_root || euid == 0 {
+        Ok(false)
+    } else if no_escalate {
+        Err(Error::EscalationDisabled { euid })
+    } else {
+        Ok(true)
+    }
+}
+
+fn escalation_command(
+    escalator: &str,
+    executable: &std::path::Path,
+    args: &[OsString],
+    non_interactive: bool,
+) -> ProcessCommand {
+    let mut cmd = ProcessCommand::new(escalator);
+    if non_interactive && escalator != MDO {
+        cmd.arg("-n");
+    }
+    cmd.arg(executable).args(args);
+    if escalator == MDO {
+        as_root_env(&mut cmd);
+    }
+    cmd
+}
 
 /// mdo keeps the caller's environment; reset what sudo and doas reset, so
 /// default paths resolve under root's home and not the caller's.
