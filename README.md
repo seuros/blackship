@@ -28,7 +28,7 @@ command reference, integration, security model, and troubleshooting material.
 - **Port Forwarding**: PF-based port exposure with source IP binding
 - **Shell Completion**: Bash, Zsh, and Fish completions
 - **Library API**: `Host`, `Container`, `Exec` and friends drive ephemeral jails from your own program (a CI runner, say); the CLI is built on the same calls
-- **MCP Server**: `blackship mcp` exposes host facts, the real parsers, and operator-approved file creation over MCP, so a model can author a `blackship.toml` or Jailfile against this host instead of guessing
+- **MCP Server**: `blackship mcp` (stdio, or Streamable HTTP with a bearer token) exposes host facts, the real parsers, and operator-approved file creation over MCP, so a model can author a `blackship.toml` or Jailfile against this host instead of guessing
 
 ## Requirements
 
@@ -650,7 +650,7 @@ jailfile = "./custom/Api.jailfile"  # Explicit Jailfile path
 
 | Command | Description |
 |---------|-------------|
-| `blackship mcp` | Serve the MCP protocol on stdin/stdout (see [MCP Server](#mcp-server-1)) |
+| `blackship mcp [--listen addr:port]` | Serve MCP on stdio, or Streamable HTTP with `--listen` (see [MCP Server](#mcp-server-1)) |
 
 ## Jailfile Format
 
@@ -1254,7 +1254,7 @@ When act_runner receives a job with a `jail://` label, the runner could:
 ## MCP Server
 
 `blackship mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io)
-over stdin/stdout, so an MCP-capable assistant can author jail configuration
+over stdin/stdout, or over Streamable HTTP with `--listen`, so an MCP-capable assistant can author jail configuration
 for *this* host. Writing a `blackship.toml` or a Jailfile by hand means knowing
 two schemas and knowing what the host can actually do; the server supplies both,
 plus the real parsers, so a draft is checked before it reaches disk.
@@ -1285,6 +1285,41 @@ Pass `--config <path>` before `mcp` to change the manifest path the tools
 default to. Stdout carries the JSON-RPC frame stream, so diagnostics go to
 `$XDG_DATA_HOME/blackship/mcp.log` (by default
 `~/.local/share/blackship/mcp.log`) instead; set `RUST_LOG` to raise the level.
+
+### Over HTTP
+
+`--listen` serves the same tools, prompts and resources as Streamable HTTP at
+`/mcp`, so an assistant on another machine can author configuration for this
+host:
+
+```sh
+# Loopback: no token needed; Host/Origin checks guard against DNS rebinding
+blackship mcp --listen 127.0.0.1:7340
+
+# Any other address requires a bearer token
+BLACKSHIP_MCP_TOKEN=$(openssl rand -hex 24) blackship mcp --listen 192.168.1.10:7340
+```
+
+```json
+{
+  "mcpServers": {
+    "blackship": {
+      "type": "http",
+      "url": "http://192.168.1.10:7340/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+The token comes from the environment, never from argv, so it does not show up
+in `ps`. Without it, `--listen` on a non-loopback address refuses to start.
+`host_facts` describes the host and the creating tools write files on it, so
+treat the token like a login. The write gate works the same over HTTP: the
+approval prompt reaches the client on the session's stream, and a client that
+does not declare elicitation gets a refusal and no file. The server speaks
+plain HTTP; put TLS in front of it (a reverse proxy, or an ssh tunnel to the
+loopback listener) when the network between you and the host is not trusted.
 
 ### Tools
 

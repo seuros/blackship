@@ -119,7 +119,7 @@ never re-execute through an escalation helper.
 Feature & Default & Adds \\
 \midrule
 \command{cli} & yes & Binary and usage parser; implies telemetry. \\
-\command{mcp} & yes & MCP host, schemas, tracing, and stdio server; implies CLI. \\
+\command{mcp} & yes & MCP host, schemas, tracing, and the stdio and HTTP server; implies CLI. \\
 \command{telemetry} & through CLI & OTLP export through rama. \\
 \command{inspect} & no & State-machine introspection. \\
 \bottomrule
@@ -127,7 +127,8 @@ Feature & Default & Adds \\
 
 \section{MCP server}
 
-\command{blackship mcp} speaks Model Context Protocol over stdin/stdout. It is
+\command{blackship mcp} speaks Model Context Protocol over stdin/stdout, or
+over Streamable HTTP at \file{/mcp} with \command{--listen addr:port}. It is
 an authoring and validation surface, not a privileged lifecycle daemon. Its
 read-only tools expose host facts and the real manifest/Jailfile parsers.
 File-producing tools render and validate a draft, then require operator
@@ -136,6 +137,21 @@ elicitation before an atomic write.
 The gate fails closed: refusal, timeout, an unsupported client, missing
 confirmation, a nonexistent destination directory, or failed validation leaves
 no file behind. Replacing a file requires an additional overwrite decision.
+Over HTTP the approval prompt travels on the session's stream; the gate is the
+same.
+
+A loopback listener needs no credential and keeps Host and Origin checks
+against DNS rebinding. Any other address requires a bearer token in
+\command{BLACKSHIP\_MCP\_TOKEN} (read from the environment, never argv) and
+refuses to start without one. The listener speaks plain HTTP: terminate TLS in
+front of it, or reach a loopback listener through an ssh tunnel, when the path
+is not trusted.
+
+\begin{lstlisting}[language=bash]
+blackship mcp --listen 127.0.0.1:7340
+BLACKSHIP_MCP_TOKEN=$(openssl rand -hex 24) \
+  blackship mcp --listen 192.168.1.10:7340
+\end{lstlisting}
 
 MCP resources include a generated CLI manual, KDL command tree, JSON schemas,
 Jailfile reference, and reserved jail-parameter reference. Because these are
