@@ -494,6 +494,9 @@ pub enum Commands {
         shell: Shell,
     },
 
+    /// Report binary and host capabilities
+    Capabilities,
+
     /// Start the Warden supervisor to monitor and auto-restart jails
     Supervise,
 
@@ -772,6 +775,7 @@ impl Commands {
             self,
             Self::Ps { .. }
                 | Self::Check
+                | Self::Capabilities
                 | Self::Ports { .. }
                 | Self::Network {
                     action: NetworkAction::List
@@ -811,6 +815,7 @@ impl Commands {
             Self::Snapshot { action } => action.requires_root(),
             Self::Ps { .. }
             | Self::Check
+            | Self::Capabilities
             | Self::Init { .. }
             | Self::Health { .. }
             | Self::Build { .. }

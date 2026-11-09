@@ -159,6 +159,14 @@ impl AppContext {
                 Ok(())
             }
 
+            Commands::Capabilities => {
+                if self.format == OutputFormat::Json {
+                    crate::output::print_success(&commands::capabilities::data()?)
+                } else {
+                    commands::capabilities::handle()
+                }
+            }
+
             Commands::Init {
                 file,
                 release,
