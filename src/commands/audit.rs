@@ -85,7 +85,7 @@ pub fn summarize(records: &[AuditRecord]) -> Summary {
     summary
 }
 
-pub fn handle_audit(config_path: &Path, jail: &str, json: bool) -> Result<()> {
+fn report(config_path: &Path, jail: &str) -> Result<(String, Vec<AuditRecord>, Summary)> {
     let config = manifest::load(config_path)?;
     let project = config.config.project_name();
     let log = AuditLog::from_config(Some(&config));
@@ -127,17 +127,11 @@ pub fn handle_audit(config_path: &Path, jail: &str, json: bool) -> Result<()> {
         }
     }
 
-    if json {
-        print_json(&full_name, &records, &summary)?;
-    } else {
-        print_timeline(&full_name, &records, &summary);
-    }
-
-    Ok(())
+    Ok((full_name, records, summary))
 }
 
-fn print_json(full_name: &str, records: &[AuditRecord], summary: &Summary) -> Result<()> {
-    let value = serde_json::json!({
+fn json_value(full_name: &str, records: &[AuditRecord], summary: &Summary) -> serde_json::Value {
+    serde_json::json!({
         "jail": full_name,
         "events": records,
         "summary": {
@@ -150,7 +144,29 @@ fn print_json(full_name: &str, records: &[AuditRecord], summary: &Summary) -> Re
             "termination": summary.termination,
             "rollback_steps": summary.rollback_steps,
         }
-    });
+    })
+}
+
+/// Return a jail's lifecycle history without writing terminal output.
+pub fn data(config_path: &Path, jail: &str) -> Result<serde_json::Value> {
+    let (full_name, records, summary) = report(config_path, jail)?;
+    Ok(json_value(&full_name, &records, &summary))
+}
+
+pub fn handle_audit(config_path: &Path, jail: &str, json: bool) -> Result<()> {
+    let (full_name, records, summary) = report(config_path, jail)?;
+
+    if json {
+        print_json(&full_name, &records, &summary)?;
+    } else {
+        print_timeline(&full_name, &records, &summary);
+    }
+
+    Ok(())
+}
+
+fn print_json(full_name: &str, records: &[AuditRecord], summary: &Summary) -> Result<()> {
+    let value = json_value(full_name, records, summary);
 
     let rendered = serde_json::to_string_pretty(&value)
         .map_err(|e| Error::State(format!("Failed to render audit JSON: {e}")))?;

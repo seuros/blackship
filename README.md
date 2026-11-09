@@ -309,6 +309,14 @@ blackship --format json capabilities
 blackship --format json network list
 blackship --format json ports
 blackship --format json ports web
+blackship --format json releases list
+blackship --format json stats
+blackship --format json stats web
+blackship --format json health
+blackship --format json health web
+blackship --format json audit web
+blackship --format json snapshot list web
+blackship --format json armada ps
 ```
 
 Successful commands write an envelope to standard output:
@@ -338,8 +346,10 @@ intended for program logic; messages remain for people and diagnostics:
 
 Commands without a complete JSON contract fail with
 `unsupported_output_format`; they never fall back to mixed human-readable
-output. Existing command-local flags such as `blackship ps --json` retain
-their original, unenveloped output for compatibility.
+output. Streaming modes such as `health --watch` are intentionally excluded
+from the single-envelope contract. Existing command-local flags such as
+`blackship ps --json` retain their original, unenveloped output for
+compatibility.
 
 `blackship capabilities` requires neither a manifest nor root access. Its JSON
 report lets clients discover the Blackship version, output schema, compiled

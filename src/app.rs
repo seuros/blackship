@@ -1,7 +1,9 @@
 //! Application entry point and CLI dispatch.
 
 use crate::bridge::Bridge;
-use crate::cli::{Cli, Commands, NetworkAction, OutputFormat};
+use crate::cli::{
+    ArmadaAction, Cli, Commands, NetworkAction, OutputFormat, ReleasesAction, SnapshotAction,
+};
 use crate::error::{Error, Result};
 use crate::output::CliError;
 use crate::{commands, console, manifest};
@@ -175,7 +177,12 @@ impl AppContext {
             } => commands::build::handle_init(&file, release, toml, force),
 
             Commands::Armada { files, action } => {
-                commands::armada::handle(&self.config_path, self.verbose, &files, action)
+                if self.format == OutputFormat::Json && matches!(&action, ArmadaAction::Ps { .. }) {
+                    let status = commands::armada::ps_data(&files, self.verbose)?;
+                    crate::output::print_success(&status)
+                } else {
+                    commands::armada::handle(&self.config_path, self.verbose, &files, action)
+                }
             }
 
             Commands::Migrate {
@@ -192,7 +199,12 @@ impl AppContext {
             ),
 
             Commands::Stats { jail, json } => {
-                commands::stats::handle(&self.config_path, jail, json)
+                if self.format == OutputFormat::Json {
+                    let stats = commands::stats::data(&self.config_path, jail)?;
+                    crate::output::print_success(&stats)
+                } else {
+                    commands::stats::handle(&self.config_path, jail, json)
+                }
             }
 
             Commands::Logs {
@@ -220,7 +232,14 @@ impl AppContext {
             ),
 
             Commands::Releases { action, json } => {
-                commands::bootstrap::handle_releases(&self.config_path, action, json)
+                if self.format == OutputFormat::Json
+                    && matches!(&action, None | Some(ReleasesAction::List))
+                {
+                    let releases = commands::bootstrap::releases_data(&self.config_path)?;
+                    crate::output::print_success(&releases)
+                } else {
+                    commands::bootstrap::handle_releases(&self.config_path, action, json)
+                }
             }
 
             Commands::Network { action } => {
@@ -238,7 +257,14 @@ impl AppContext {
                 watch,
                 interval,
                 json,
-            } => commands::health::handle(&self.config_path, jail, watch, interval, json),
+            } => {
+                if self.format == OutputFormat::Json && !watch {
+                    let health = commands::health::data(&self.config_path, jail.as_deref())?;
+                    crate::output::print_success(&health)
+                } else {
+                    commands::health::handle(&self.config_path, jail, watch, interval, json)
+                }
+            }
 
             Commands::Build {
                 file,
@@ -306,7 +332,12 @@ impl AppContext {
                 commands::qos::handle_qos(&self.config_path, self.verbose, &jail, request)
             }
             Commands::Audit { jail, json } => {
-                commands::audit::handle_audit(&self.config_path, &jail, json)
+                if self.format == OutputFormat::Json {
+                    let audit = commands::audit::data(&self.config_path, &jail)?;
+                    crate::output::print_success(&audit)
+                } else {
+                    commands::audit::handle_audit(&self.config_path, &jail, json)
+                }
             }
             Commands::Gc {
                 jail,
@@ -353,7 +384,15 @@ impl AppContext {
             },
 
             Commands::Snapshot { action } => {
-                commands::snapshot::handle_snapshot(&self.config_path, action)
+                if self.format == OutputFormat::Json
+                    && let SnapshotAction::List { jail, .. } = &action
+                {
+                    let snapshots =
+                        commands::snapshot::snapshot_list_data(&self.config_path, jail)?;
+                    crate::output::print_success(&snapshots)
+                } else {
+                    commands::snapshot::handle_snapshot(&self.config_path, action)
+                }
             }
 
             Commands::Commit { jail, release } => {

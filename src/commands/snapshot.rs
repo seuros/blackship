@@ -173,6 +173,25 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
     Ok(())
 }
 
+/// Return a jail's snapshots without writing terminal output.
+pub fn snapshot_list_data(config_path: &Path, jail: &str) -> Result<Vec<serde_json::Value>> {
+    let config = manifest::load(config_path)?;
+    let zfs = require_zfs(&config)?;
+    let (_service_name, full_name) = resolve_jail(&config, jail)?;
+    Ok(zfs
+        .list_snapshots(&full_name)?
+        .iter()
+        .map(|snapshot| {
+            serde_json::json!({
+                "name": snapshot.name,
+                "creation": snapshot.creation,
+                "used": snapshot.used,
+                "refer": snapshot.refer
+            })
+        })
+        .collect())
+}
+
 pub fn handle_clone(config_path: &Path, source: &str, name: &str) -> Result<()> {
     let config = manifest::load(config_path)?;
     let zfs = require_zfs(&config)?;

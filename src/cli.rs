@@ -779,16 +779,30 @@ pub enum NetworkAction {
 impl Commands {
     /// Whether this command has a complete machine-readable output contract.
     pub const fn supports_machine_output(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Ps { .. }
-                | Self::Check
-                | Self::Capabilities
-                | Self::Ports { .. }
-                | Self::Network {
-                    action: NetworkAction::List
-                }
-        )
+            | Self::Check
+            | Self::Capabilities
+            | Self::Ports { .. }
+            | Self::Stats { .. }
+            | Self::Audit { .. }
+            | Self::Network {
+                action: NetworkAction::List,
+            }
+            | Self::Releases {
+                action: None | Some(ReleasesAction::List),
+                ..
+            }
+            | Self::Snapshot {
+                action: SnapshotAction::List { .. },
+            }
+            | Self::Armada {
+                action: ArmadaAction::Ps { .. },
+                ..
+            } => true,
+            Self::Health { watch, .. } => !*watch,
+            _ => false,
+        }
     }
 
     pub fn requires_root(&self) -> bool {
