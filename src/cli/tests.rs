@@ -22,6 +22,20 @@ fn test_text_output_format_is_default() {
 }
 
 #[test]
+fn test_escalation_controls_parse_globally() {
+    let argv = [
+        OsStr::new("--no-escalate"),
+        OsStr::new("--non-interactive"),
+        OsStr::new("up"),
+        OsStr::new("--all"),
+    ];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert!(cli.no_escalate);
+    assert!(cli.non_interactive);
+}
+
+#[test]
 fn test_machine_output_support_is_explicit() {
     assert!(Commands::Check.supports_machine_output());
     assert!(

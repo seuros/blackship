@@ -18,6 +18,15 @@ pub enum Error {
         euid: u32,
     },
 
+    /// The CLI was asked not to obtain the root privileges a command needs.
+    #[error(
+        "This command requires root privileges, but automatic escalation was disabled by --no-escalate (effective uid is {euid})"
+    )]
+    EscalationDisabled {
+        /// The effective uid the CLI is running with.
+        euid: u32,
+    },
+
     // IO errors
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
@@ -249,6 +258,7 @@ impl Error {
             Self::UnsupportedOutputFormat => "unsupported_output_format",
             Self::JsonOutput(_) => "json_output_failed",
             Self::NeedsRoot { .. } => "needs_root",
+            Self::EscalationDisabled { .. } => "escalation_disabled",
             Self::User(_) => "user_error",
         }
     }
