@@ -16,7 +16,10 @@ work.
 \section{Least privilege}
 
 Most inspection and authoring operations are unprivileged. Host mutations need
-root. The CLI's escalation order is mdo, doas, then sudo, using canonical paths.
+root, and so do reads that enter a jail or its state: \command{health},
+\command{logs}, and \command{gc} (even with \command{--dry-run}). An
+unprivileged \command{eva --dry-run} cannot read VNET addresses or kernel
+rctl rules and reports them as unverified. The CLI's escalation order is mdo, doas, then sudo, using canonical paths.
 The library never escalates.
 
 For interactive administration, define narrowly scoped \command{mac\_do} or

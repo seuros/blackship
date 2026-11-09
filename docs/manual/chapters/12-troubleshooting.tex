@@ -98,9 +98,11 @@ blackship restart <jail> --dry-run
 blackship restart <jail>
 \end{lstlisting}
 
-If \command{jls} cannot report a requested key, EVA may label it unreadable and
-apply an updatable desired value blind. Review that result on the host's exact
-FreeBSD version.
+A VNET jail's address is read from its interface inside the jail's stack, and
+rctl rules from the kernel; both need root. When a value cannot be read, EVA
+lists it as ``could not be read, not verified''. For an updatable parameter
+\command{jls} cannot report, EVA applies the desired value without
+verification; review that result on the host's exact FreeBSD version.
 
 \section{A build unexpectedly reruns steps}
 

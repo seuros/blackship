@@ -165,7 +165,8 @@ commit move to the release, and the jail can no longer roll back to them.
 \section{Export, import, and migration}
 
 \begin{lstlisting}[language=bash]
-# Portable archive.
+# Portable archive (bsdtar): hardlinks and file flags kept, sockets
+# skipped, devfs and other mounts left out.
 blackship export web --output web.tar.zst
 
 # ZFS stream.
@@ -181,7 +182,9 @@ blackship import legacy.tar --from auto --name legacy
 blackship migrate web admin@other-host
 \end{lstlisting}
 
-Foreign import supports iocage, ezjail, plain rootfs, or automatic detection.
+A tar export is written beside its destination and renamed into place, so a
+failed or interrupted export never leaves a truncated archive. Foreign import
+supports iocage, ezjail, plain rootfs, or automatic detection.
 Review the resulting manifest and networking before first start. Migration
 requires compatible ZFS and SSH authority on the destination and does not make
 an incompatible FreeBSD userland/kernel combination safe. It runs as root, so

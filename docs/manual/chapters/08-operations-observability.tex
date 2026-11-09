@@ -66,7 +66,10 @@ blackship logs api --follow
 
 Statistics aggregate per-process CPU and RSS from \command{jls} and
 \command{ps} libxo JSON. Health status reflects configured checks and retry
-state. Watch and follow modes are terminal streams; they are intentionally not
+state. \command{health} runs checks inside the jail and escalates to root.
+The start period counts from the jail's recorded start, so a one-shot check on
+a settled jail reports real results; within the period it reports
+\setting{starting}, and a jail that is not running reports \setting{unknown}. Watch and follow modes are terminal streams; they are intentionally not
 part of the single-envelope global JSON contract.
 
 \section{Supervisor}

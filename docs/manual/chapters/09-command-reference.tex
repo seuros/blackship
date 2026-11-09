@@ -66,9 +66,9 @@ nameserver list; the jail is removed when the command exits. \\
 Start an ephemeral jail and leave it running; takes no command. Use
 \command{exec}, then \command{rm}. \\
 \command{cp <source> <destination> [--preserve]} & Copy host-to-jail or
-jail-to-host; use \command{jail:path}. \\
+jail-to-host; use \command{jail:path} with a short or full jail name. \\
 \command{rm <jails...> [--force] [--volumes]} & Remove ephemeral/managed jail
-artifacts and optionally datasets. \\
+artifacts and optionally datasets; exits non-zero if any jail was not removed. \\
 \command{logs <jail> [--follow] [--lines N]} & Read the jail log. \\
 \bottomrule
 \end{shiptable}

@@ -507,10 +507,17 @@ in the jail definition), or `ALL`.
 
 `eva` recomputes each jail's parameters from the config, diffs them against
 the live values from jls, and applies only the changes in one
-jail_set(JAIL_UPDATE) call, then replaces rctl rules and re-pins the cpuset.
-`path`, `vnet`, and IP addresses cannot change live: drift on those is
-reported as a restart-required warning and skipped. Not-running jails are
-skipped. `--dry-run` prints the diff without touching anything.
+jail_set(JAIL_UPDATE) call. rctl rules are replaced only when they differ from
+what the kernel holds (sizes compared in bytes), and the cpuset is re-pinned.
+`path`, `vnet`, and IP addresses cannot change live: drift on those, including
+a VNET jail's address read from inside its stack, is reported as a
+restart-required warning and skipped. Not-running jails are skipped.
+`--dry-run` prints the diff without touching anything; run unprivileged, it
+cannot read a VNET address or the kernel's rctl rules and lists them as
+"could not be read, not verified".
+
+| Command | Description |
+|---------|-------------|
 | `blackship ps [--json]` | List jail status |
 | `blackship check` | Validate configuration |
 | `blackship capabilities` | Report binary and host capabilities |
@@ -531,8 +538,8 @@ skipped. `--dry-run` prints the diff without touching anything.
 
 | Command | Description |
 |---------|-------------|
-| `blackship cp <src> <dest>` | Copy files (use `jail:path` for jail paths) |
-| `blackship rm <jails...> [-f] [--volumes]` | Remove/destroy jails |
+| `blackship cp <src> <dest>` | Copy files (`jail:path` for jail paths; short or full jail name) |
+| `blackship rm <jails...> [-f] [--volumes]` | Remove/destroy jails; exits non-zero if any was not removed (missing, or running without `-f`) |
 
 ### Bootstrap & Releases
 
@@ -815,7 +822,8 @@ blackship clone web@pre-update web-test
 # Fast export using ZFS send
 blackship export web -o web-backup.zfs --zfs-send
 
-# Standard tar.zst export
+# Standard tar.zst export (bsdtar: hardlinks and file flags kept, sockets
+# skipped, devfs and other mounts left out; a failed export leaves no file)
 blackship export web -o web-backup.tar.zst
 
 # Import (auto-detects format)
@@ -996,6 +1004,12 @@ target = "jail"
 ```
 
 ### Monitoring
+
+`health` runs checks inside the jail, so it escalates to root like `exec`.
+`start_period` (default 60s) counts from when the jail started, so a one-time
+check on a jail that has been up for a while reports real results; within the
+start period it reports `starting`, and a jail that is not running reports
+`unknown`.
 
 ```sh
 # One-time check
