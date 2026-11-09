@@ -10,7 +10,7 @@ on:
         type: boolean
         default: false
       tag:
-        description: 'Tag to release (e.g. v0.1.0)'
+        description: 'Tag to release (e.g. blackship-v0.3.1)'
         type: string
 
 permissions:
@@ -25,7 +25,8 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs.release_created || inputs.force_build }}
+      # Job outputs are strings: compare against 'true', since "false" is truthy.
+      release_created: ${{ steps.release.outputs.release_created == 'true' || inputs.force_build == true }}
       tag_name: ${{ steps.release.outputs.tag_name || inputs.tag }}
     steps:
       - uses: googleapis/release-please-action@v5
@@ -36,10 +37,12 @@ jobs:
 
   build-freebsd:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created || inputs.force_build }}
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - uses: cross-platform-actions/action@v1
         with:
@@ -64,7 +67,7 @@ jobs:
 
   build-manual:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created || inputs.force_build }}
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -75,7 +78,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            latexmk texlive-latex-recommended texlive-latex-extra \
+            latexmk lmodern texlive-latex-recommended texlive-latex-extra \
             texlive-fonts-recommended texlive-pictures
 
       - name: Build manual
@@ -89,7 +92,7 @@ jobs:
 
   upload-assets:
     needs: [release-please, build-freebsd, build-manual]
-    if: ${{ always() && (needs.release-please.outputs.release_created || inputs.force_build) && needs.build-freebsd.result == 'success' && needs.build-manual.result == 'success' }}
+    if: ${{ always() && needs.release-please.outputs.release_created == 'true' && needs.build-freebsd.result == 'success' && needs.build-manual.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
