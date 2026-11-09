@@ -230,3 +230,74 @@ fn test_project_name_ignores_path_spelling() {
         "orbital"
     );
 }
+
+fn write(dir: &Path, name: &str, body: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn test_merge_override_keeps_what_it_does_not_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = write(
+        tmp.path(),
+        "base.toml",
+        r#"
+[config]
+zfs_enabled = true
+zpool = "tank"
+dataset = "fleet"
+
+[[jails]]
+name = "cache"
+release = "15.1-RELEASE"
+hostname = "cache.local"
+depends_on = ["db"]
+
+[[jails]]
+name = "db"
+release = "15.1-RELEASE"
+"#,
+    );
+    // No [config] at all: an override file only says what changes.
+    let prod = write(
+        tmp.path(),
+        "prod.toml",
+        r#"
+[[jails]]
+name = "cache"
+hostname = "cache-prod.local"
+
+[[jails]]
+name = "worker"
+release = "15.1-RELEASE"
+"#,
+    );
+
+    let config = load_merged(&[base, prod]).unwrap();
+
+    assert!(
+        config.config.zfs_enabled,
+        "zfs_enabled must survive an override that omits it"
+    );
+    assert_eq!(config.config.zpool.as_deref(), Some("tank"));
+    assert_eq!(config.config.dataset, "fleet");
+
+    let cache = config.get_jail("cache").unwrap();
+    assert_eq!(cache.hostname.as_deref(), Some("cache-prod.local"));
+    assert_eq!(cache.release.as_deref(), Some("15.1-RELEASE"));
+    assert_eq!(cache.depends_on, ["db"]);
+
+    let names: Vec<_> = config.jails.iter().map(|j| j.name.as_str()).collect();
+    assert_eq!(names, ["cache", "db", "worker"]);
+}
+
+#[test]
+fn test_merge_later_file_can_switch_settings_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = write(tmp.path(), "base.toml", "[config]\nzfs_enabled = true\n");
+    let local = write(tmp.path(), "local.toml", "[config]\nzfs_enabled = false\n");
+
+    assert!(!load_merged(&[base, local]).unwrap().config.zfs_enabled);
+}

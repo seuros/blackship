@@ -146,30 +146,27 @@ pub fn load_or_default(path: &Path) -> Result<BlackshipConfig> {
 
 /// Load and merge multiple configuration files
 ///
-/// Files are merged in order, with later files overriding earlier ones.
-/// Uses Docker Compose-style deep merge: later files only override fields they specify.
+/// Files are merged in order at the TOML level, before anything is
+/// deserialized, so a later file overrides exactly the keys it writes and
+/// nothing it leaves out: tables merge recursively, `[[jails]]` and
+/// `[[networks]]` entries merge with the earlier entry of the same `name` (or
+/// are appended), and any other value, arrays included, replaces the earlier
+/// one. Merging typed structs instead cannot tell an absent key from one set
+/// to its default, and silently reset settings such as `zfs_enabled`.
 pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
-    if paths.is_empty() {
+    let Some(first_path) = paths.first() else {
         return Err(Error::ConfigValidation(
             "No configuration files provided".into(),
         ));
-    }
+    };
 
-    let mut base: Option<BlackshipConfig> = None;
-    let first_path = &paths[0];
-
+    let mut merged = toml::Table::new();
     for path in paths {
-        let content = read_config_file(path)?;
-
-        let config: BlackshipConfig = toml::from_str(&content)?;
-
-        base = Some(match base {
-            None => config,
-            Some(b) => b.merge(config),
-        });
+        let overlay: toml::Table = toml::from_str(&read_config_file(path)?)?;
+        merge_tables(&mut merged, overlay);
     }
 
-    let mut config = base.expect("paths is non-empty, checked above");
+    let mut config: BlackshipConfig = toml::Value::Table(merged).try_into()?;
 
     if config.config.project.is_none() {
         config.config.project = Some(project_name_from_path(first_path));
@@ -177,6 +174,43 @@ pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
 
     config.validate()?;
     Ok(config)
+}
+
+/// Arrays of tables merged entry by entry on their `name` key.
+const NAMED_ARRAYS: &[&str] = &["jails", "networks"];
+
+fn merge_tables(base: &mut toml::Table, overlay: toml::Table) {
+    for (key, value) in overlay {
+        match (base.get_mut(&key), value) {
+            (Some(toml::Value::Table(existing)), toml::Value::Table(table)) => {
+                merge_tables(existing, table);
+            }
+            (Some(toml::Value::Array(existing)), toml::Value::Array(entries))
+                if NAMED_ARRAYS.contains(&key.as_str()) =>
+            {
+                merge_named_entries(existing, entries);
+            }
+            (_, value) => {
+                base.insert(key, value);
+            }
+        }
+    }
+}
+
+fn merge_named_entries(base: &mut Vec<toml::Value>, overlay: Vec<toml::Value>) {
+    for entry in overlay {
+        let name = entry.get("name").and_then(toml::Value::as_str);
+        let existing = name.and_then(|name| {
+            base.iter_mut()
+                .find(|candidate| candidate.get("name").and_then(toml::Value::as_str) == Some(name))
+        });
+        match (existing, entry) {
+            (Some(toml::Value::Table(existing)), toml::Value::Table(table)) => {
+                merge_tables(existing, table);
+            }
+            (_, entry) => base.push(entry),
+        }
+    }
 }
 
 /// Root configuration structure
@@ -366,35 +400,6 @@ impl BlackshipConfig {
             format!("{}-{}", self.config.project_name(), service_name)
         }
     }
-
-    /// Merge another config into this one (Docker Compose-style deep merge)
-    ///
-    /// Later values override earlier ones at the field level.
-    /// Jails with the same name are deep-merged.
-    pub fn merge(mut self, other: Self) -> Self {
-        // Merge global config (other overrides self)
-        self.config = self.config.merge(other.config);
-
-        // Merge networks by name
-        for net in other.networks {
-            if let Some(existing) = self.networks.iter_mut().find(|n| n.name == net.name) {
-                *existing = net;
-            } else {
-                self.networks.push(net);
-            }
-        }
-
-        // Merge jails by name (deep merge)
-        for jail in other.jails {
-            if let Some(existing) = self.jails.iter_mut().find(|j| j.name == jail.name) {
-                *existing = existing.clone().merge(jail);
-            } else {
-                self.jails.push(jail);
-            }
-        }
-
-        self
-    }
 }
 
 /// Known Black Ship names from Warhammer 40K lore
@@ -501,52 +506,6 @@ impl GlobalConfig {
     /// Should always be set by `load/load_merged`, but falls back to "blackship" if not
     pub fn project_name(&self) -> &str {
         self.project.as_deref().unwrap_or("blackship")
-    }
-
-    /// Merge another `GlobalConfig` into this one
-    /// Other's values override self's where specified
-    fn merge(self, other: Self) -> Self {
-        Self {
-            project: other.project.or(self.project),
-            data_dir: if other.data_dir == default_data_dir() {
-                self.data_dir
-            } else {
-                other.data_dir
-            },
-            zfs_enabled: other.zfs_enabled,
-            monitor_ping_url: other.monitor_ping_url.or(self.monitor_ping_url),
-            zpool: other.zpool.or(self.zpool),
-            dataset: if other.dataset == default_dataset() {
-                self.dataset
-            } else {
-                other.dataset
-            },
-            releases_dir: if other.releases_dir == default_releases_dir() {
-                self.releases_dir
-            } else {
-                other.releases_dir
-            },
-            cache_dir: if other.cache_dir == default_cache_dir() {
-                self.cache_dir
-            } else {
-                other.cache_dir
-            },
-            mirror_url: if other.mirror_url == default_mirror_url() {
-                self.mirror_url
-            } else {
-                other.mirror_url
-            },
-            bootstrap_archives: if other.bootstrap_archives == default_bootstrap_archives() {
-                self.bootstrap_archives
-            } else {
-                other.bootstrap_archives
-            },
-            rate_limit: other.rate_limit, // Take other's rate limit config
-            health: other.health,         // Take other's health defaults
-            retry: other.retry,           // Take other's retry config
-            bridge: other.bridge.or(self.bridge), // Merge bridge VLAN config
-            usage_sample_secs: other.usage_sample_secs.or(self.usage_sample_secs),
-        }
     }
 }
 
@@ -944,63 +903,6 @@ impl JailDef {
         }
         let candidate = self.build.as_ref()?.join("Jailfile");
         candidate.exists().then_some(candidate)
-    }
-
-    /// Merge another `JailDef` into this one (Docker Compose-style deep merge)
-    ///
-    /// Other's values override self's where specified (`Option::Some` or non-empty Vec)
-    pub fn merge(self, other: Self) -> Self {
-        Self {
-            name: other.name, // Name should match
-            path: other.path.or(self.path),
-            release: other.release.or(self.release),
-            build: other.build.or(self.build),
-            jailfile: other.jailfile.or(self.jailfile),
-            hostname: other.hostname.or(self.hostname),
-            depends_on: if other.depends_on.is_empty() {
-                self.depends_on
-            } else {
-                other.depends_on
-            },
-            params: {
-                let mut merged = self.params;
-                merged.extend(other.params);
-                merged
-            },
-            network: other.network.or(self.network),
-            mount: other.mount.or(self.mount),
-            hooks: if other.hooks.is_empty() {
-                self.hooks
-            } else {
-                other.hooks
-            },
-            healthcheck: if other.healthcheck.enabled || !other.healthcheck.checks.is_empty() {
-                other.healthcheck
-            } else {
-                self.healthcheck
-            },
-            resources: if other.resources.is_empty() {
-                self.resources
-            } else {
-                other.resources
-            },
-            qos: other.qos.or(self.qos),
-            drain: other.drain.or(self.drain),
-            cascade: if other.cascade == crate::scope::CascadePolicy::default() {
-                self.cascade
-            } else {
-                other.cascade
-            },
-            ephemeral: other.ephemeral.or(self.ephemeral),
-            devfs_ruleset: other.devfs_ruleset.or(self.devfs_ruleset),
-            init: other.init.or(self.init),
-            stop: other.stop.or(self.stop),
-            tags: if other.tags.is_empty() {
-                self.tags
-            } else {
-                other.tags
-            },
-        }
     }
 }
 
