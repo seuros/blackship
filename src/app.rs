@@ -473,7 +473,6 @@ impl AppContext {
 }
 
 fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
-    // SAFETY: geteuid(2) takes no arguments and cannot fail.
     if !command.requires_root() || nix::unistd::geteuid().is_root() {
         return Ok(());
     }
@@ -488,14 +487,34 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
         .map_err(|e| Error::User(format!("Failed to locate current executable: {e}")))?;
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
-    let err = ProcessCommand::new(escalator)
-        .arg(&executable)
-        .args(args)
-        .exec();
+    let mut cmd = ProcessCommand::new(escalator);
+    cmd.arg(&executable).args(args);
+    if escalator == MDO {
+        as_root_env(&mut cmd);
+    }
+    let err = cmd.exec();
 
     Err(Error::User(format!(
         "Failed to re-exec through '{escalator}': {err}"
     )))
+}
+
+const MDO: &str = "/usr/bin/mdo";
+
+/// mdo keeps the caller's environment; reset what sudo and doas reset, so
+/// default paths resolve under root's home and not the caller's.
+fn as_root_env(cmd: &mut ProcessCommand) {
+    let home = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(0))
+        .ok()
+        .flatten()
+        .map_or_else(|| PathBuf::from("/root"), |root| root.dir);
+    cmd.env("HOME", home)
+        .env("USER", "root")
+        .env("LOGNAME", "root")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("XDG_STATE_HOME");
 }
 
 fn find_escalator() -> Option<&'static str> {
@@ -506,7 +525,7 @@ fn find_escalator() -> Option<&'static str> {
             return false;
         }
 
-        path != "/usr/bin/mdo" || mdo_can_elevate(path)
+        path != MDO || mdo_can_elevate(path)
     })
 }
 
@@ -527,7 +546,7 @@ fn find_escalator_with(mut is_usable: impl FnMut(&str) -> bool) -> Option<&'stat
     // Absolute paths: an earlier PATH entry could supply a fake escalator to steal creds.
     // mdo is part of the FreeBSD base system and mac_do recognizes this canonical path.
     const ESCALATORS: [&str; 4] = [
-        "/usr/bin/mdo",
+        MDO,
         "/usr/local/bin/doas",
         "/usr/local/bin/sudo",
         "/usr/bin/sudo",

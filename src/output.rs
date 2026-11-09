@@ -36,7 +36,8 @@ pub struct CliError {
 }
 
 impl CliError {
-    pub fn new(format: OutputFormat, source: Error) -> Self {
+    #[must_use]
+    pub const fn new(format: OutputFormat, source: Error) -> Self {
         Self { format, source }
     }
 }

@@ -198,6 +198,7 @@ pub enum Error {
 
 impl Error {
     /// Stable identifier for machine-readable error handling.
+    #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Io(_) => "io_error",

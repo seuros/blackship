@@ -767,7 +767,7 @@ pub enum NetworkAction {
 
 impl Commands {
     /// Whether this command has a complete machine-readable output contract.
-    pub fn supports_machine_output(&self) -> bool {
+    pub const fn supports_machine_output(&self) -> bool {
         matches!(
             self,
             Self::Ps { .. }

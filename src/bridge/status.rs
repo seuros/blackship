@@ -241,7 +241,7 @@ impl Bridge {
         let start_order = self
             .start_order()?
             .into_iter()
-            .map(|name| self.config.jail_name(&name))
+            .map(|name| self.config.jail_name(name))
             .collect();
         let jail_paths = self
             .config
