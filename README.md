@@ -245,7 +245,9 @@ The rules of the road:
   shared mutable state.
 - **Containers are ephemeral.** Dropping a `Container` destroys it. Call
   `keep()` to let it outlive the handle (that is what `run --detach` does),
-  and `destroy()` when you want to see the errors a drop would swallow.
+  `hand_over(pid)` to give it to another process (a root helper creating
+  containers for a daemon), and `destroy()` when you want to see the errors
+  a drop would swallow.
 - **Mounts** are nullfs. `read_write` mounts are `nosuid` unless you call
   `allow_setuid()`; `noexec()` and `nosuid()` apply to either kind. These
   flags cover the jail-side mount only: the host path is as setuid-capable
@@ -263,7 +265,8 @@ The rules of the road:
 - **Orphans** are containers whose creating process is gone. Each one is
   claimed with an ownership record before anything is built, so
   `orphans()` / `reap_orphans()` find them by name prefix or label after a
-  crash. Kept containers have no owner and are never reaped.
+  crash. A handed-over container is an orphan once its new owner is gone.
+  Kept containers have no owner and are never reaped.
 - **Releases and images:** `releases()`, `has_release()`, `bootstrap()` and
   `ensure_release()` (FreeBSD 16 goes through fingerprint-verified pkgbase
   automatically). `build()` runs a Jailfile with the layer cache,

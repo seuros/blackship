@@ -80,3 +80,32 @@ fn selector_needs_every_criterion() {
             .matches(&info)
     );
 }
+
+#[test]
+fn hand_over_moves_ownership_to_a_live_process() {
+    let (host, _dir) = scratch_host("hand-over");
+    let layout = host.layout();
+    // A short-lived creator that is already gone.
+    claim(layout, "kim-helper", &record(Some(999_999))).unwrap();
+    let orphan = |name: &str| list(layout).iter().any(|i| i.name == name && i.is_orphan());
+    assert!(orphan("kim-helper"));
+
+    match hand_over(layout, "kim-helper", 999_998) {
+        Err(Error::InvalidArgument(_)) => {}
+        other => panic!("expected InvalidArgument for a dead pid, got {other:?}"),
+    }
+    assert!(hand_over(layout, "kim-helper", 0).is_err());
+    assert_eq!(load(layout, "kim-helper").unwrap().owner_pid, Some(999_999));
+
+    hand_over(layout, "kim-helper", std::process::id()).unwrap();
+    assert_eq!(
+        load(layout, "kim-helper").unwrap().owner_pid,
+        Some(std::process::id())
+    );
+    assert!(!orphan("kim-helper"));
+
+    match hand_over(layout, "kim-never", std::process::id()) {
+        Err(Error::State(_)) => {}
+        other => panic!("expected State for a missing record, got {other:?}"),
+    }
+}

@@ -369,7 +369,8 @@ impl ContainerSpec {
 }
 
 /// A live container. Dropping a handle from [`Host::create`] destroys it;
-/// [`keep`](Self::keep) opts out, [`destroy`](Self::destroy) surfaces errors.
+/// [`keep`](Self::keep) and [`hand_over`](Self::hand_over) opt out,
+/// [`destroy`](Self::destroy) surfaces errors.
 /// Handles from [`Host::open`] are kept by default.
 #[derive(Debug)]
 pub struct Container {
@@ -469,6 +470,24 @@ impl Container {
         Ok(())
     }
 
+    /// Make `pid` the container's owner and let it outlive this handle.
+    ///
+    /// For a short-lived creator (a privileged helper, say) working for a
+    /// long-lived process: from here on the container is an orphan, and
+    /// [`Host::reap_orphans`] destroys it, once `pid` is gone. Until the call
+    /// the creator owns it, so a creator dying before handing over leaves an
+    /// orphan rather than a container nobody knows about.
+    ///
+    /// # Errors
+    ///
+    /// `pid` is not a running process, or the ownership record could not be
+    /// rewritten; either way the handle still destroys on drop.
+    pub fn hand_over(&mut self, pid: u32) -> Result<()> {
+        registry::hand_over(&self.layout, &self.name, pid)?;
+        self.destroy_on_drop = false;
+        Ok(())
+    }
+
     /// Tear the container down. See [`Host::destroy_container`].
     ///
     /// # Errors
@@ -550,7 +569,8 @@ impl Host {
         Ok(registry::list(self.layout()))
     }
 
-    /// Containers matching `selector` whose creating process is gone.
+    /// Containers matching `selector` whose owner (the creating process, or
+    /// whoever it was [handed over](Container::hand_over) to) is gone.
     ///
     /// # Errors
     ///

@@ -17,7 +17,8 @@ pub struct Record {
     pub(crate) release: String,
     pub(crate) root: PathBuf,
     pub(crate) dataset: Option<String>,
-    /// The creating process; `None` once the container is kept.
+    /// The owning process: the creator, or whoever it was handed over to;
+    /// `None` once the container is kept.
     pub(crate) owner_pid: Option<u32>,
     #[serde(default)]
     pub(crate) labels: BTreeMap<String, String>,
@@ -79,6 +80,22 @@ pub fn disown(layout: &Layout, name: &str) -> Result<()> {
     }
 }
 
+/// Make `pid` the owner, so the container is an orphan once `pid` is gone.
+pub fn hand_over(layout: &Layout, name: &str, pid: u32) -> Result<()> {
+    if pid == 0 || !process_alive(pid) {
+        return Err(Error::InvalidArgument(format!(
+            "cannot hand container '{name}' to pid {pid}: no such process"
+        )));
+    }
+    let Some(mut record) = load(layout, name) else {
+        return Err(Error::State(format!(
+            "container '{name}' has no ownership record to hand over"
+        )));
+    };
+    record.owner_pid = Some(pid);
+    write_toml_atomic(&record_path(layout, name), &record, "container record")
+}
+
 /// Drop the record once the container is fully gone.
 pub fn remove(layout: &Layout, name: &str) -> Result<()> {
     match fs::remove_file(record_path(layout, name)) {
@@ -105,7 +122,8 @@ pub struct ContainerInfo {
     pub release: Option<String>,
     /// Labels given at creation.
     pub labels: BTreeMap<String, String>,
-    /// The process that created it; `None` when kept or unrecorded.
+    /// The owning process: the creator, or whoever it was handed over to;
+    /// `None` when kept or unrecorded.
     pub owner_pid: Option<u32>,
 }
 
@@ -116,7 +134,7 @@ impl ContainerInfo {
         self.jid.is_some()
     }
 
-    /// Whether the creating process is gone, leaving nobody to destroy it.
+    /// Whether the owning process is gone, leaving nobody to destroy it.
     #[must_use]
     pub fn is_orphan(&self) -> bool {
         self.owner_pid.is_some_and(|pid| !process_alive(pid))

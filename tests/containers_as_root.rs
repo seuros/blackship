@@ -379,6 +379,46 @@ fn destroy_is_idempotent_and_orphans_get_reaped() {
 
 #[test]
 #[ignore = "needs root and a bootstrapped release"]
+fn handed_over_containers_belong_to_the_new_owner() {
+    let Some(s) = setup() else { return };
+    let n = name("handover");
+    let selector = Selector::prefix(&n);
+    // The long-lived owner; this test process plays the short-lived helper.
+    let mut owner = Command::new("/bin/sleep").arg("600").spawn().unwrap();
+
+    let mut c = s.host.create(&ContainerSpec::new(&n, &s.release)).unwrap();
+    match c.hand_over(99_999) {
+        Err(Error::InvalidArgument(_)) => {}
+        other => panic!("expected InvalidArgument for a dead pid, got {other:?}"),
+    }
+    c.hand_over(owner.id()).unwrap();
+    drop(c);
+
+    // The handle is gone and the helper is still alive, but neither matters now.
+    let info = s.host.containers().unwrap();
+    let info = info
+        .iter()
+        .find(|i| i.name == n)
+        .expect("survived the drop");
+    assert_eq!(info.owner_pid, Some(owner.id()));
+    assert!(info.is_running());
+    assert_eq!(s.host.orphans(&selector).unwrap(), []);
+    assert_eq!(
+        s.host.reap_orphans(&selector).unwrap(),
+        Vec::<String>::new()
+    );
+
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    assert_eq!(
+        s.host.reap_orphans(&selector).unwrap(),
+        std::slice::from_ref(&n)
+    );
+    assert!(!s.host.containers().unwrap().iter().any(|i| i.name == n));
+}
+
+#[test]
+#[ignore = "needs root and a bootstrapped release"]
 fn containers_run_concurrently() {
     let Some(s) = setup() else { return };
     // Collecting spawns all four before joining any; lazy would serialize them.
