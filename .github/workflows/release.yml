@@ -46,7 +46,7 @@ jobs:
           operating_system: freebsd
           version: '15.1'
           run: |
-            sudo pkg install -y curl
+            sudo pkg install -y curl protobuf
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             . $HOME/.cargo/env
             cargo build --release
