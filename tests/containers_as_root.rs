@@ -124,6 +124,32 @@ fn timeout_kills_everything_in_the_jail() {
 
 #[test]
 #[ignore = "needs root and a bootstrapped release"]
+fn deadlines_are_kept_to_the_tick() {
+    let Some(s) = setup() else { return };
+    let c = s
+        .host
+        .create(&ContainerSpec::new(name("deadline"), &s.release))
+        .unwrap();
+    let budget = Duration::from_millis(1500);
+    for exec in [
+        Exec::argv(["sleep", "600"]).timeout(budget),
+        Exec::argv(["sleep", "600"]).timeout(budget).inherit_stdio(),
+    ] {
+        let out = c.exec(exec).unwrap();
+        assert_eq!(out.exit, Exit::TimedOut);
+        // The kill and reap take a few ticks; a sweep that waits on our own
+        // zombie used to add ~1.4 s on top.
+        assert!(
+            out.duration < budget + Duration::from_millis(500),
+            "a {budget:?} deadline ended after {:?}",
+            out.duration
+        );
+    }
+    c.destroy().unwrap();
+}
+
+#[test]
+#[ignore = "needs root and a bootstrapped release"]
 fn nullfs_mounts_respect_modes_and_survive_teardown() {
     let Some(s) = setup() else { return };
     let src = s.data_dir.join(format!("mount-src-{}", std::process::id()));

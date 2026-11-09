@@ -101,3 +101,19 @@ fn a_background_process_holding_the_pipe_does_not_hang_supervise() {
         nix::sys::signal::SIGKILL,
     );
 }
+
+#[test]
+fn the_command_is_reaped_before_the_jail_sweep() {
+    let mut child = spawn("sleep 30");
+    let pid = nix::unistd::Pid::from_raw(libc::pid_t::try_from(child.id()).unwrap());
+    let mut still_there = None;
+    kill_everything(&mut child, || {
+        // A zombie still answers kill(pid, 0); a reaped child is ESRCH.
+        still_there = Some(nix::sys::signal::kill(pid, None).is_ok());
+    });
+    assert_eq!(
+        still_there,
+        Some(false),
+        "the sweep ran while our own child was unreaped"
+    );
+}

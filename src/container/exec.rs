@@ -325,7 +325,7 @@ fn supervise(
                 exited = Some(status);
                 drain_until = Some(now + DRAIN_GRACE);
             } else if deadline.is_some_and(|d| now >= d) {
-                kill_everything(child, jid);
+                kill_everything(child, || kill_jail_processes(jid));
                 return Ok(Waited::TimedOut);
             }
         }
@@ -359,22 +359,28 @@ fn wait(child: &mut Child, jid: i32, deadline: Option<Instant>) -> Result<Waited
         }
         let now = Instant::now();
         if now >= deadline {
-            kill_everything(child, jid);
+            kill_everything(child, || kill_jail_processes(jid));
             return Ok(Waited::TimedOut);
         }
         std::thread::sleep(TICK.min(deadline - now));
     }
 }
 
-/// Kill the command's process group, then everything in the jail, and reap it.
-fn kill_everything(child: &mut Child, jid: i32) {
+/// Kill the command's process group and reap the command, then `sweep`
+/// the rest of the jail.
+///
+/// The reap comes first: an unreaped zombie still belongs to the jail, so
+/// `pgrep -j` kept finding our own child and the sweep spent its whole
+/// retry budget (~1.4 s) on a process only `wait` can remove.
+fn kill_everything(child: &mut Child, sweep: impl FnOnce()) {
+    // The group goes before the reap, while the zombie pins the pgid.
     if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
         // SAFETY: negative pid signals the command's own process group.
         unsafe { libc::kill(-pgid, libc::SIGKILL) };
     }
     let _ = child.kill(); // usually already dead from the group SIGKILL
-    kill_jail_processes(jid);
     let _ = child.wait(); // reap only; the exit status of a killed child is moot
+    sweep();
 }
 
 /// SIGKILL everything inside jail `jid`, sweeping until it is empty.
