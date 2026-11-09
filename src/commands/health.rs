@@ -26,6 +26,7 @@ fn prepare_checkers(
 
     let no_jails = jails.is_empty();
     let rate_limit = &config.config.rate_limit;
+    let audit = crate::audit::AuditLog::from_config(Some(&config));
     let checkers = jails
         .iter()
         .filter(|jail| jail.healthcheck.enabled)
@@ -39,6 +40,9 @@ fn prepare_checkers(
             );
             if let Ok(jid) = jail::jail_getid(&full_name) {
                 checker = checker.with_jid(jid);
+                if let Some(secs) = uptime(&audit, &full_name, jid) {
+                    checker = checker.with_uptime(secs);
+                }
             }
             checker
         })
@@ -47,13 +51,38 @@ fn prepare_checkers(
     Ok((checkers, no_jails))
 }
 
+/// Seconds since the jail with this `jid` reached `running`, from the audit log.
+fn uptime(audit: &crate::audit::AuditLog, jail: &str, jid: i32) -> Option<u64> {
+    let jid = jid.to_string();
+    let started = audit
+        .read(jail)
+        .ok()?
+        .into_iter()
+        .rev()
+        .find(|r| {
+            r.event == crate::audit::AuditEvent::Running
+                && r.detail.get("jid").is_some_and(|j| *j == jid)
+        })?
+        .ts;
+    u64::try_from(crate::scope::now_unix() - started).ok()
+}
+
+/// One check pass. A jail that is not running has no health to report: it
+/// is `unknown`, not `starting`.
+fn pass(checker: &mut HealthChecker) -> Result<HealthStatus> {
+    if jail::jail_getid(checker.jail_name()).is_err() {
+        return Ok(HealthStatus::Unknown);
+    }
+    checker.run_checks()
+}
+
 /// Run one health-check pass without writing terminal output.
 pub fn data(config_path: &Path, jail: Option<&str>) -> Result<Vec<serde_json::Value>> {
     let (mut checkers, _) = prepare_checkers(config_path, jail)?;
     checkers
         .iter_mut()
         .map(|checker| {
-            let status = checker.run_checks()?;
+            let status = pass(checker)?;
             Ok(checker_json(checker, status))
         })
         .collect()
@@ -97,7 +126,7 @@ pub fn handle(
         let mut json_results: Vec<serde_json::Value> = Vec::new();
 
         for checker in &mut checkers {
-            let status = checker.run_checks()?;
+            let status = pass(checker)?;
             if json {
                 json_results.push(checker_json(checker, status));
             } else {

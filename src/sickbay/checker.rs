@@ -350,6 +350,16 @@ impl HealthChecker {
         self
     }
 
+    /// Count the start period from when the jail started `secs` ago, not from
+    /// when this checker was built. A one-shot `health` builds its checker long
+    /// after the jail came up.
+    pub fn with_uptime(mut self, secs: u64) -> Self {
+        if let Some(started) = Instant::now().checked_sub(Duration::from_secs(secs)) {
+            self.started_at = started;
+        }
+        self
+    }
+
     /// Get current health status
     pub const fn status(&self) -> HealthStatus {
         self.status

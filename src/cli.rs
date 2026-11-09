@@ -821,8 +821,10 @@ impl Commands {
             | Self::Eva { dry_run, .. }
             | Self::Build { dry_run, .. } => !dry_run,
             Self::Qos { show, .. } => !show,
-            // Even a dry run reads root-owned scope records under the gc lock.
+            // gc reads root-owned scope records under its lock even in a dry
+            // run; health checks jail_attach into the jail.
             Self::Gc { .. }
+            | Self::Health { .. }
             | Self::Logs { .. }
             | Self::Setup { .. }
             | Self::Exec { .. }
@@ -850,7 +852,6 @@ impl Commands {
             | Self::Check
             | Self::Capabilities
             | Self::Init { .. }
-            | Self::Health { .. }
             | Self::Template { .. }
             | Self::Ports { .. }
             | Self::Stats { .. }
