@@ -206,6 +206,9 @@ impl McpState {
         let mut payload = outcome;
         if let Some(object) = payload.as_object_mut() {
             object.insert("rendered".to_string(), json!(rendered));
+            if report["warnings"].as_array().is_some_and(|w| !w.is_empty()) {
+                object.insert("warnings".to_string(), report["warnings"].clone());
+            }
         }
 
         json_output(&payload)

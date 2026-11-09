@@ -519,7 +519,7 @@ cannot read a VNET address or the kernel's rctl rules and lists them as
 | Command | Description |
 |---------|-------------|
 | `blackship ps [--json]` | List jail status |
-| `blackship check` | Validate configuration |
+| `blackship check` | Validate configuration; warn on jail releases not bootstrapped |
 | `blackship capabilities` | Report binary and host capabilities |
 | `blackship setup [--enable-pf]` | Reapply networks and PF anchors; --enable-pf turns PF on |
 | `blackship cleanup <jail> [--force]` | Clean up failed jail resources |

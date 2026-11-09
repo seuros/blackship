@@ -26,6 +26,8 @@ pub struct CheckReport {
     pub start_order: Vec<String>,
     pub zfs_enabled: bool,
     pub jail_paths: Vec<JailPathStatus>,
+    /// Host state that will stop a start but not the manifest itself.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,6 +149,13 @@ impl Bridge {
             println!("  {}: {} ({})", jail.name, jail.path, status);
         }
 
+        if !report.warnings.is_empty() {
+            println!("\nWarnings:");
+            for warning in &report.warnings {
+                println!("  {warning}");
+            }
+        }
+
         Ok(())
     }
 
@@ -177,6 +186,7 @@ impl Bridge {
             start_order,
             zfs_enabled: self.zfs.is_some(),
             jail_paths,
+            warnings: crate::provision::unbootstrapped_releases(&self.config),
         })
     }
 }

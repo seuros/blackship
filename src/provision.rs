@@ -508,5 +508,28 @@ pub fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Warnings for jails whose `release` is not bootstrapped under the
+/// manifest's `releases_dir`. Host state, not configuration: the release can
+/// be bootstrapped later, so callers warn rather than fail.
+pub fn unbootstrapped_releases(config: &crate::manifest::BlackshipConfig) -> Vec<String> {
+    let Ok(provisioner) = Provisioner::from_config(&config.config) else {
+        return Vec::new();
+    };
+    config
+        .jails
+        .iter()
+        .filter_map(|jail| {
+            let release = jail.release.as_deref()?;
+            (!provisioner.is_bootstrapped(release).unwrap_or(true)).then(|| {
+                format!(
+                    "jail `{}`: release `{release}` not bootstrapped in {} (blackship bootstrap {release})",
+                    jail.name,
+                    config.config.releases_dir.display()
+                )
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests;

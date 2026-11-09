@@ -32,3 +32,21 @@ fn test_archive_url() {
         "https://download.freebsd.org/releases/amd64/15.1-RELEASE/base.txz"
     );
 }
+
+#[test]
+fn test_unbootstrapped_releases_warns_per_jail() {
+    let tmp = tempfile::tempdir().unwrap();
+    let releases = tmp.path().join("releases");
+    std::fs::create_dir_all(releases.join("15.1-RELEASE/bin")).unwrap();
+    std::fs::create_dir_all(releases.join("15.1-RELEASE/usr")).unwrap();
+    let config: crate::manifest::BlackshipConfig = toml::from_str(&format!(
+        "[config]\nreleases_dir = \"{}\"\n\n[[jails]]\nname = \"ok\"\nrelease = \"15.1-RELEASE\"\n\n\
+         [[jails]]\nname = \"missing\"\nrelease = \"14.3-RELEASE\"\n\n[[jails]]\nname = \"built\"\n",
+        releases.display()
+    ))
+    .unwrap();
+
+    let warnings = unbootstrapped_releases(&config);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("`missing`") && warnings[0].contains("14.3-RELEASE"));
+}

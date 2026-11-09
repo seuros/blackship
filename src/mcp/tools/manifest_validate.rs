@@ -70,6 +70,7 @@ pub(in crate::mcp) fn validate_text(base: Value, content: &str) -> Value {
             "valid": true,
             "failed_stage": Value::Null,
             "jails": config.jails.iter().map(|jail| jail.name.clone()).collect::<Vec<_>>(),
+            "warnings": crate::provision::unbootstrapped_releases(&config),
         }),
     )
 }
