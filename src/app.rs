@@ -405,22 +405,42 @@ impl AppContext {
 
             Commands::Up { jail, all, dry_run } => {
                 let mut bridge = self.verbose_bridge()?;
-                commands::lifecycle::handle_up(&mut bridge, jail.as_deref(), all, dry_run)
+                if self.format == OutputFormat::Json && dry_run {
+                    let plan = commands::lifecycle::up_plan(&bridge, jail.as_deref(), all)?;
+                    crate::output::print_success(&plan)
+                } else {
+                    commands::lifecycle::handle_up(&mut bridge, jail.as_deref(), all, dry_run)
+                }
             }
 
             Commands::Down { jail, all, dry_run } => {
                 let mut bridge = self.verbose_bridge()?;
-                commands::lifecycle::handle_down(&mut bridge, jail.as_deref(), all, dry_run)
+                if self.format == OutputFormat::Json && dry_run {
+                    let plan = commands::lifecycle::down_plan(&bridge, jail.as_deref(), all)?;
+                    crate::output::print_success(&plan)
+                } else {
+                    commands::lifecycle::handle_down(&mut bridge, jail.as_deref(), all, dry_run)
+                }
             }
 
             Commands::Restart { jail, all, dry_run } => {
                 let mut bridge = self.verbose_bridge()?;
-                commands::lifecycle::handle_restart(&mut bridge, jail.as_deref(), all, dry_run)
+                if self.format == OutputFormat::Json && dry_run {
+                    let plan = commands::lifecycle::restart_plan(&bridge, jail.as_deref(), all)?;
+                    crate::output::print_success(&plan)
+                } else {
+                    commands::lifecycle::handle_restart(&mut bridge, jail.as_deref(), all, dry_run)
+                }
             }
 
             Commands::Eva { jail, all, dry_run } => {
                 let bridge = self.verbose_bridge()?;
-                commands::lifecycle::handle_eva(&bridge, jail.as_deref(), all, dry_run)
+                if self.format == OutputFormat::Json && dry_run {
+                    let plan = commands::lifecycle::eva_plan(&bridge, jail.as_deref(), all)?;
+                    crate::output::print_success(&plan)
+                } else {
+                    commands::lifecycle::handle_eva(&bridge, jail.as_deref(), all, dry_run)
+                }
             }
 
             Commands::Ps { json } => {

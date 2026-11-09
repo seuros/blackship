@@ -46,6 +46,14 @@ fn test_machine_output_support_is_explicit() {
         .supports_machine_output()
     );
     assert!(
+        Commands::Up {
+            jail: None,
+            all: true,
+            dry_run: true,
+        }
+        .supports_machine_output()
+    );
+    assert!(
         Commands::Releases {
             action: Some(ReleasesAction::List),
             json: false,

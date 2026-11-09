@@ -317,6 +317,10 @@ blackship --format json health web
 blackship --format json audit web
 blackship --format json snapshot list web
 blackship --format json armada ps
+blackship --format json up web --dry-run
+blackship --format json down web --dry-run
+blackship --format json restart web --dry-run
+blackship --format json eva web --dry-run
 ```
 
 Successful commands write an envelope to standard output:
@@ -355,6 +359,11 @@ compatibility.
 report lets clients discover the Blackship version, output schema, compiled
 features, FreeBSD kernel capabilities, host facilities, and installed privilege
 escalators before enabling UI actions.
+
+Lifecycle commands support the global JSON format in dry-run mode. Their
+`data` object contains the requested operation and its ordered steps, allowing
+management tools to preview dependency-aware changes without parsing terminal
+text or modifying the host. Live lifecycle operations remain text-only.
 
 ## Configuration Reference
 

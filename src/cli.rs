@@ -801,6 +801,10 @@ impl Commands {
                 ..
             } => true,
             Self::Health { watch, .. } => !*watch,
+            Self::Up { dry_run, .. }
+            | Self::Down { dry_run, .. }
+            | Self::Restart { dry_run, .. }
+            | Self::Eva { dry_run, .. } => *dry_run,
             _ => false,
         }
     }
