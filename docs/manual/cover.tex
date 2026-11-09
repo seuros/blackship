@@ -1,130 +1,33 @@
 \begin{titlepage}
 \thispagestyle{empty}
+
+% The cover image is deliberately kept separate from the typography: the
+% raster artwork supplies texture and atmosphere, while LaTeX keeps every word
+% sharp, searchable, and easy to update for a new release.
 \begin{tikzpicture}[remember picture,overlay]
-  % Deep-space ground with a restrained cold glow behind the vessel.
-  \shade[top color=voidblack,bottom color=black]
-    (current page.south west) rectangle (current page.north east);
-  \begin{scope}[shift={($(current page.center)+(0,-0.65cm)$)}]
-    \shade[inner color=plasma!18,outer color=voidblack,opacity=0.72]
-      (0,0.2) ellipse (7.1cm and 5.3cm);
-    \draw[plasma!18,opacity=0.28,line width=0.55pt]
-      (-7.4,-1.8) .. controls (-3.8,1.2) and (3.3,-3.0) .. (7.5,0.9);
-    \draw[steel!35,opacity=0.18,line width=1.1pt]
-      (-7.0,-2.4) .. controls (-2.7,0.4) and (2.5,-2.5) .. (7.1,1.4);
+  \node[inner sep=0pt] at (current page.center) {%
+    \includegraphics[width=\paperwidth,height=\paperheight]{assets/blackship-cover.png}%
+  };
 
-    % A half-lit world gives the silhouette depth without external artwork.
-    \fill[steel!22,opacity=0.62] (4.9,2.3) circle (2.05cm);
-    \fill[voidblack] (5.55,2.72) circle (2.02cm);
-    \draw[plasma!35,opacity=0.55,line width=0.65pt]
-      (4.9,0.25) arc[start angle=-90,end angle=90,radius=2.05cm];
-  \end{scope}
-
-  % Deterministic star field: reproducible and sharp at any resolution.
-  \foreach \x/\y/\r/\o in {
-    0.05/0.91/0.45/0.55,0.11/0.78/0.75/0.80,0.17/0.88/0.35/0.65,
-    0.23/0.70/0.45/0.70,0.29/0.95/0.60/0.75,0.35/0.81/0.35/0.50,
-    0.42/0.91/0.75/0.85,0.49/0.75/0.40/0.60,0.56/0.94/0.35/0.55,
-    0.63/0.83/0.62/0.80,0.70/0.90/0.42/0.65,0.78/0.73/0.72/0.82,
-    0.85/0.96/0.42/0.70,0.92/0.84/0.35/0.60,0.97/0.68/0.62/0.78,
-    0.08/0.61/0.35/0.50,0.15/0.51/0.52/0.70,0.24/0.63/0.34/0.55,
-    0.76/0.59/0.43/0.62,0.87/0.50/0.62/0.75,0.95/0.61/0.34/0.55,
-    0.04/0.34/0.60/0.72,0.12/0.24/0.34/0.52,0.20/0.39/0.45/0.62,
-    0.31/0.28/0.32/0.50,0.69/0.32/0.34/0.55,0.80/0.20/0.55/0.72,
-    0.91/0.39/0.34/0.52,0.61/0.16/0.45/0.65,0.38/0.18/0.30/0.48}
-    \fill[ash,opacity=\o]
-      ([xshift=\x\paperwidth,yshift=\y\paperheight]current page.south west)
-      circle (\r pt);
-
-  % Original gothic voidship: a vertical ark built from layered vector forms.
-  \begin{scope}[shift={($(current page.center)+(0,-0.75cm)$)},scale=0.93,
-      line join=round,line cap=round]
-    % Engine bloom and the massive outer silhouette.
-    \shade[inner color=plasma!80,outer color=voidblack,opacity=0.62]
-      (0,-4.55) ellipse (1.85cm and 1.0cm);
-    \fill[black,opacity=0.72]
-      (0,4.72) -- (-0.68,3.72) -- (-1.32,3.10) -- (-1.62,1.92) --
-      (-2.72,1.08) -- (-3.58,0.72) -- (-4.48,-0.18) -- (-3.58,-0.58) --
-      (-2.85,-1.38) -- (-2.48,-3.62) -- (-1.25,-4.48) -- (0,-5.08) --
-      (1.25,-4.48) -- (2.48,-3.62) -- (2.85,-1.38) -- (3.58,-0.58) --
-      (4.48,-0.18) -- (3.58,0.72) -- (2.72,1.08) -- (1.62,1.92) --
-      (1.32,3.10) -- (0.68,3.72) -- cycle;
-
-    % Armoured wings and layered prow.
-    \fill[hull]
-      (0,4.40) -- (-0.56,3.52) -- (-1.08,2.86) -- (-1.28,1.48) --
-      (-2.35,0.70) -- (-3.92,-0.12) -- (-2.64,-0.58) -- (-2.16,-1.28) --
-      (-1.86,-3.42) -- (-0.92,-4.12) -- (0,-4.55) --
-      (0.92,-4.12) -- (1.86,-3.42) -- (2.16,-1.28) -- (2.64,-0.58) --
-      (3.92,-0.12) -- (2.35,0.70) -- (1.28,1.48) -- (1.08,2.86) --
-      (0.56,3.52) -- cycle;
-    \fill[steel!28!hull]
-      (-3.86,-0.12) -- (-1.34,1.25) -- (-1.58,0.18) -- (-2.62,-0.62) -- cycle;
-    \fill[steel!28!hull]
-      (3.86,-0.12) -- (1.34,1.25) -- (1.58,0.18) -- (2.62,-0.62) -- cycle;
-    \draw[steel!68,line width=0.55pt]
-      (-3.72,-0.12) -- (-1.40,0.98) -- (-0.94,3.05) -- (0,4.20) --
-      (0.94,3.05) -- (1.40,0.98) -- (3.72,-0.12);
-
-    % Cathedral nave, buttresses, and needle-like towers.
-    \fill[voidblack]
-      (0,3.86) -- (-0.48,2.85) -- (-0.62,-2.94) -- (0,-4.12) --
-      (0.62,-2.94) -- (0.48,2.85) -- cycle;
-    \fill[steel!38!hull]
-      (0,3.55) -- (-0.30,2.70) -- (-0.34,-2.68) -- (0,-3.54) --
-      (0.34,-2.68) -- (0.30,2.70) -- cycle;
-    \foreach \s in {-1,1}{
-      \fill[hull] ({\s*0.70},2.08) -- ({\s*1.02},3.22) --
-        ({\s*1.20},1.62) -- ({\s*0.92},0.68) -- cycle;
-      \fill[hull] ({\s*1.08},0.62) -- ({\s*1.62},2.02) --
-        ({\s*1.76},0.34) -- ({\s*1.38},-0.78) -- cycle;
-      \fill[hull] ({\s*1.34},-0.88) -- ({\s*2.05},0.02) --
-        ({\s*2.20},-1.60) -- ({\s*1.68},-2.62) -- cycle;
-      \draw[steel!58,line width=0.45pt]
-        ({\s*0.72},2.02) -- ({\s*1.16},1.47) -- ({\s*0.92},0.60);
-      \draw[steel!58,line width=0.45pt]
-        ({\s*1.10},0.54) -- ({\s*1.70},0.08) -- ({\s*1.36},-0.84);
-      \draw[steel!58,line width=0.45pt]
-        ({\s*1.36},-0.94) -- ({\s*2.12},-1.50) -- ({\s*1.66},-2.55);
-    }
-
-    % Ribbed armour, lancet windows, and restrained signal lighting.
-    \foreach \y/\w in {2.42/0.82,1.70/1.08,0.98/1.34,0.26/1.52,
-        -0.46/1.48,-1.18/1.30,-1.90/1.08,-2.62/0.82}
-      \draw[steel!48,line width=0.42pt] (-\w,\y) -- (0,\y-0.20) -- (\w,\y);
-    \foreach \y in {2.35,1.76,1.17,0.58,-0.01,-0.60,-1.19,-1.78,-2.37}
-      \fill[plasma!85] (0,\y) ellipse (1.05pt and 2.15pt);
-    \draw[signalred!82,line width=0.75pt]
-      (-0.80,-3.18) -- (0,-3.56) -- (0.80,-3.18);
-
-    % Engine housings and cold exhaust apertures.
-    \foreach \x in {-1.10,-0.55,0,0.55,1.10}{
-      \fill[black] (\x,-3.82) ellipse (0.25cm and 0.46cm);
-      \fill[plasma!75] (\x,-4.02) ellipse (0.13cm and 0.30cm);
-      \fill[white,opacity=0.65] (\x,-4.08) ellipse (0.045cm and 0.15cm);
-    }
-    \draw[plasma!45,opacity=0.75,line width=0.6pt]
-      (-0.82,-4.32) .. controls (-0.50,-4.72) and (-0.20,-4.84) .. (0,-4.92)
-      .. controls (0.20,-4.84) and (0.50,-4.72) .. (0.82,-4.32);
-  \end{scope}
-
-  \fill[plasma!65!black] (current page.south west)
-    rectangle ($(current page.south east)+(0,0.12cm)$);
+  \fill[plasma!65!black]
+    (current page.south west) rectangle
+    ($(current page.south east)+(0,0.12cm)$);
 \end{tikzpicture}
 
-\vspace*{0.70in}
+\vspace*{0.66in}
 \begin{center}
-  {\fontsize{42}{46}\selectfont\bfseries\color{ash} BLACKSHIP}\par
+  {\fontsize{42}{46}\selectfont\bfseries\color{white} BLACKSHIP}\par
   \vspace{0.16in}
   {\Large\color{plasma}\MakeUppercase{Technical Manual}}\par
   \vspace{0.10in}
-  {\large\color{steel!45!white} FreeBSD Jail Orchestration}\par
+  {\large\color{ash} FreeBSD Jail Orchestration}\par
 \end{center}
 
 \vfill
 \begin{center}
-  {\large\color{ash} Version \BlackshipVersion}\par
+  {\large\color{white} Version \BlackshipVersion}\par
   \vspace{0.10in}
-  {\small\color{steel!35!white} \ManualEdition\quad---\quad November 2026}\par
+  {\small\color{ash} \ManualEdition\quad---\quad November 2026}\par
 \end{center}
 \vspace*{0.42in}
 \end{titlepage}
