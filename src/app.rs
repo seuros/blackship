@@ -206,7 +206,7 @@ impl AppContext {
             Commands::Supervise => commands::supervise::handle(&self.config_path, self.verbose),
 
             #[cfg(feature = "mcp")]
-            Commands::Mcp => commands::mcp::handle(&self.config_path),
+            Commands::Mcp { listen } => commands::mcp::handle(&self.config_path, listen.as_deref()),
 
             Commands::Bootstrap {
                 release,

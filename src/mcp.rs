@@ -1,5 +1,6 @@
-//! MCP stdio server for authoring and validating jail configuration.
-//! Stdout is the JSON-RPC stream: never print; diagnostics go to `mcp.log`.
+//! MCP server for authoring and validating jail configuration, over stdio or
+//! Streamable HTTP. On stdio, stdout is the JSON-RPC stream: never print;
+//! diagnostics go to `mcp.log` on both transports.
 
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
@@ -7,6 +8,7 @@ use std::sync::Arc;
 
 use mcp_host::prelude::*;
 use mcp_host::registry::router::{McpResourceTemplateRouter, McpRouter};
+use mcp_host::transport::http::{HttpBearerAuthConfig, HttpTransport, HttpTransportConfig};
 
 use crate::error;
 use crate::error::Result;
@@ -47,8 +49,42 @@ const INSTRUCTIONS: &str = "This server authors and validates blackship jail con
      approval through elicitation, so expect a confirmation step and do not \
      retry a declined write.";
 
-/// Run the MCP server over stdio until the client closes the connection.
-pub async fn serve(config_path: &Path) -> Result<()> {
+/// Endpoint path for the HTTP transport.
+const HTTP_ENDPOINT: &str = "/mcp";
+
+/// Principal recorded for requests carrying the operator's token.
+const HTTP_PRINCIPAL: &str = "operator";
+
+/// Where the server talks to its client.
+pub enum Transport {
+    Stdio,
+    Http {
+        addr: std::net::SocketAddr,
+        token: Option<String>,
+    },
+}
+
+impl Transport {
+    /// HTTP on `addr`. Off loopback a token is mandatory: the tools describe
+    /// the host and write files on it.
+    pub fn http(addr: &str, token: Option<String>) -> Result<Self> {
+        let addr: std::net::SocketAddr = addr.parse().map_err(|e| {
+            error::Error::InvalidArgument(format!(
+                "--listen expects an address and port such as 127.0.0.1:7340: {e}"
+            ))
+        })?;
+        let token = token.filter(|t| !t.is_empty());
+        if !addr.ip().is_loopback() && token.is_none() {
+            return Err(error::Error::InvalidArgument(format!(
+                "refusing to serve MCP on {addr} without authentication: set BLACKSHIP_MCP_TOKEN"
+            )));
+        }
+        Ok(Self::Http { addr, token })
+    }
+}
+
+/// Run the MCP server until the client closes stdio or the HTTP listener stops.
+pub async fn serve(config_path: &Path, transport: Transport) -> Result<()> {
     init_logging();
 
     let state = Arc::new(McpState {
@@ -71,13 +107,52 @@ pub async fn serve(config_path: &Path) -> Result<()> {
     tracing::info!(
         tools = server.tool_registry().list().len(),
         resources = server.resource_manager().list().len(),
-        "blackship MCP server starting on stdio"
+        "blackship MCP server starting"
     );
 
-    server
-        .run(StdioTransport::new())
+    match transport {
+        Transport::Stdio => server
+            .run(StdioTransport::new())
+            .await
+            .map_err(|e| error::Error::User(format!("MCP server failed: {e}"))),
+        Transport::Http { addr, token } => serve_http(server, addr, token).await,
+    }
+}
+
+async fn serve_http(
+    server: Server,
+    addr: std::net::SocketAddr,
+    token: Option<String>,
+) -> Result<()> {
+    let bearer_auth = token
+        .map(|token| HttpBearerAuthConfig::new(token, HTTP_PRINCIPAL))
+        .transpose()
+        .map_err(|e| error::Error::InvalidArgument(format!("BLACKSHIP_MCP_TOKEN: {e}")))?
+        .map(Into::into);
+    let authenticated = bearer_auth.is_some();
+    let config = HttpTransportConfig {
+        bind_addr: addr.to_string(),
+        endpoint: HTTP_ENDPOINT.to_string(),
+        // Loopback keeps mcp-host's Host/Origin checks against DNS rebinding.
+        localhost_only: addr.ip().is_loopback(),
+        bearer_auth,
+        ..Default::default()
+    };
+
+    eprintln!(
+        "blackship MCP listening on http://{addr}{HTTP_ENDPOINT}{}",
+        if authenticated {
+            " (bearer token required)"
+        } else {
+            ""
+        }
+    );
+    tracing::info!(%addr, authenticated, "blackship MCP serving HTTP");
+
+    HttpTransport::new(server, config)
+        .run()
         .await
-        .map_err(|e| error::Error::User(format!("MCP server failed: {e}")))
+        .map_err(|e| error::Error::User(format!("MCP HTTP server failed: {e}")))
 }
 
 /// Install a file-backed tracing subscriber, or none if the log dir is unusable.
@@ -105,3 +180,6 @@ fn init_logging() {
         .with_env_filter(filter)
         .try_init();
 }
+
+#[cfg(test)]
+mod tests;

@@ -512,9 +512,14 @@ pub enum Commands {
     /// Start the Warden supervisor to monitor and auto-restart jails
     Supervise,
 
-    /// Run an MCP stdio server for generating jail configuration
+    /// Run an MCP server for generating jail configuration (stdio, or HTTP with --listen)
     #[cfg(feature = "mcp")]
-    Mcp,
+    Mcp {
+        /// Serve Streamable HTTP on this address (e.g. 127.0.0.1:7340) instead of stdio.
+        /// Off loopback, `BLACKSHIP_MCP_TOKEN` must hold the bearer token.
+        #[usage(long)]
+        listen: Option<String>,
+    },
 
     /// Tail logs from a running jail
     Logs {
@@ -858,7 +863,7 @@ impl Commands {
             | Self::Audit { .. }
             | Self::Completion { .. } => false,
             #[cfg(feature = "mcp")]
-            Self::Mcp => false,
+            Self::Mcp { .. } => false,
         }
     }
 }
