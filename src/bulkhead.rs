@@ -17,11 +17,7 @@ const PF_ANCHOR: &str = "blackship";
 /// Enable PF on the host: write a minimal /etc/pf.conf carrying the
 /// blackship anchors if none exists, persist `pf_enable=YES`, and start pf.
 pub fn enable_pf() -> Result<()> {
-    let running = Command::new("/sbin/pfctl")
-        .args(["-s", "info"])
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if running {
+    if pf_enabled() {
         return Ok(());
     }
 
@@ -291,12 +287,7 @@ impl BulkheadManager {
     /// anchor "blackship"
     /// ```
     pub fn init() -> Result<()> {
-        let output = Command::new("/sbin/pfctl")
-            .args(["-s", "info"])
-            .output()
-            .map_err(|e| Error::Network(format!("Failed to check PF status: {e}")))?;
-
-        if !output.status.success() {
+        if !pf_enabled() {
             return Err(Error::Network(
                 "PF is not running. Enable it with: service pf start".to_string(),
             ));
