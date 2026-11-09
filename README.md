@@ -4,8 +4,10 @@ A FreeBSD jail orchestrator with TOML configuration, dependency management, stat
 
 ## Documentation
 
-The README is the quick reference. Each release ships `blackship-manual.pdf`
-as a release asset: the complete operator guide, architecture, configuration,
+- [Blackship Technical Manual (PDF, latest release)](https://github.com/seuros/blackship/releases/latest/download/blackship-manual.pdf)
+
+The README is the quick reference. The manual is built for every release and
+attached to it: the complete operator guide, architecture, configuration,
 command reference, integration, security model, and troubleshooting material.
 
 ## Features
