@@ -94,7 +94,14 @@ pub fn handle_releases(
             }
         }
         ReleasesAction::Delete { release } => {
-            bs.delete(&release)?;
+            // The library call is ZFS-aware: a release dataset that clones
+            // still depend on is refused whole, never emptied file by file.
+            let host = Host::from_manifest(config_path)?;
+            if !host.has_release(&release)? {
+                return Err(crate::error::Error::ReleaseNotFound(release));
+            }
+            host.remove_release(&release)?;
+            println!("Deleted release: {release}");
         }
         ReleasesAction::Verify { release } => {
             if bs.verify(&release)? {

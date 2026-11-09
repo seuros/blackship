@@ -444,21 +444,6 @@ impl Provisioner {
         Ok(())
     }
 
-    /// Delete a bootstrapped release
-    pub fn delete(&self, release: &str) -> Result<()> {
-        let path = self.release_path(release)?;
-
-        if !path.exists() {
-            return Err(Error::ReleaseNotFound(release.to_string()));
-        }
-
-        fs::remove_dir_all(&path)
-            .map_err(|e| Error::ExtractionFailed(format!("Failed to delete release: {e}")))?;
-
-        eprintln!("Deleted release: {release}");
-        Ok(())
-    }
-
     /// Verify a bootstrapped release against MANIFEST
     pub fn verify(&self, release: &str) -> Result<bool> {
         if !self.is_bootstrapped(release)? {
