@@ -88,24 +88,38 @@ fn workdir_creates_inside_the_jail() {
     assert!(dir.path().join("jail/app/data").is_dir());
 }
 
+/// Where the fixture's `escape` link (an absolute path on the host) lands when
+/// followed the way the jail sees it: re-rooted under the jail root.
+fn rerooted_outside(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let outside = dir.path().join("outside");
+    dir.path()
+        .join("jail")
+        .join(outside.strip_prefix("/").unwrap())
+}
+
 #[test]
-fn workdir_and_volume_refuse_symlink_escapes() {
+fn workdir_and_volume_keep_symlinks_inside_the_jail() {
     let (dir, mut executor) = escape_fixture();
     for instruction in [
         Instruction::Workdir("/escape/pwned".into()),
         Instruction::Volume("/escape/pwned".into()),
     ] {
-        assert!(executor.execute_instruction(&instruction).is_err());
+        executor.execute_instruction(&instruction).unwrap();
     }
     assert!(outside_is_empty(&dir));
+    assert!(rerooted_outside(&dir).join("pwned").is_dir());
 }
 
 #[test]
-fn copy_refuses_symlink_escapes() {
+fn copy_keeps_symlinks_inside_the_jail() {
     let (dir, mut executor) = escape_fixture();
     let copy = Instruction::Copy(CopySpec::new("file.txt", "/escape/file.txt"));
-    assert!(executor.execute_instruction(&copy).is_err());
+    executor.execute_instruction(&copy).unwrap();
     assert!(outside_is_empty(&dir));
+    assert_eq!(
+        fs::read_to_string(rerooted_outside(&dir).join("file.txt")).unwrap(),
+        "payload"
+    );
 }
 
 #[test]

@@ -71,6 +71,80 @@ fn reject_parent_components(
     Ok(())
 }
 
+/// Symlink hops allowed while resolving a path inside a jail root, as `MAXSYMLINKS`.
+const MAX_SYMLINK_HOPS: usize = 32;
+
+/// Resolve `relative` under `root` with chroot semantics: each existing
+/// component is `lstat`ed, symlinks are expanded with absolute targets
+/// re-rooted at `root`, and `..` is clamped at `root`. Components that do not
+/// exist yet are kept as written. The result is always lexically under `root`
+/// and contains no symlink among its existing components.
+fn resolve_in_root(
+    root: &Path,
+    relative: &Path,
+    original: &str,
+) -> std::result::Result<PathBuf, crate::error::Error> {
+    use std::collections::VecDeque;
+    use std::ffi::OsString;
+    use std::path::Component;
+
+    let mut resolved = PathBuf::new();
+    let mut pending: VecDeque<OsString> = VecDeque::new();
+    let mut hops = 0;
+
+    let push_components =
+        |pending: &mut VecDeque<OsString>, resolved: &mut PathBuf, path: &Path| {
+            let mut parts = Vec::new();
+            for component in path.components() {
+                match component {
+                    Component::RootDir | Component::Prefix(_) => {
+                        resolved.clear();
+                        parts.clear();
+                    }
+                    Component::CurDir => {}
+                    Component::ParentDir => parts.push(OsString::from("..")),
+                    Component::Normal(name) => parts.push(name.to_os_string()),
+                }
+            }
+            for part in parts.into_iter().rev() {
+                pending.push_front(part);
+            }
+        };
+
+    push_components(&mut pending, &mut resolved, relative);
+
+    while let Some(part) = pending.pop_front() {
+        if part == ".." {
+            resolved.pop();
+            continue;
+        }
+        let candidate = root.join(&resolved).join(&part);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                hops += 1;
+                if hops > MAX_SYMLINK_HOPS {
+                    return Err(crate::error::Error::BuildFailed {
+                        step: "path".to_string(),
+                        message: format!(
+                            "Destination '{original}' passes through more than {MAX_SYMLINK_HOPS} symlinks"
+                        ),
+                    });
+                }
+                let target = std::fs::read_link(&candidate).map_err(|e| {
+                    crate::error::Error::BuildFailed {
+                        step: "path".to_string(),
+                        message: format!("Failed to read symlink {}: {e}", candidate.display()),
+                    }
+                })?;
+                push_components(&mut pending, &mut resolved, &target);
+            }
+            _ => resolved.push(&part),
+        }
+    }
+
+    Ok(root.join(resolved))
+}
+
 /// Canonicalize a path; `what` labels it in the error message.
 fn canonicalize_or_fail(
     path: &Path,
@@ -208,6 +282,12 @@ impl BuildContext {
     }
 
     /// Resolve a destination path against the target jail; rejects `..` traversal.
+    ///
+    /// Symlinks already in the jail are followed the way the jail itself sees
+    /// them: an absolute target is rooted at the jail root, never at the
+    /// host's `/`, and `..` stops at the jail root. Package layouts such as
+    /// `/usr/local/www/nginx -> /usr/local/www/nginx-dist` therefore resolve
+    /// to the jail's directory, and no link can lead the copy out of the jail.
     pub fn resolve_dest(&self, dest: &str) -> std::result::Result<PathBuf, crate::error::Error> {
         let path = if Path::new(dest).is_absolute() {
             PathBuf::from(dest)
@@ -220,55 +300,12 @@ impl BuildContext {
 
         reject_parent_components(relative, dest, "jail root")?;
 
-        let joined = self.target_path.join(relative);
-
-        // Only checkable when the path exists on disk: real builds, not unit tests.
+        // Only resolvable when the root is on disk: real builds, not unit tests.
         if self.target_path.exists() {
-            let canonical_target = canonicalize_or_fail(&self.target_path, "target path")?;
-
-            if joined.exists() {
-                let canonical = canonicalize_or_fail(&joined, "dest path")?;
-                if !canonical.starts_with(&canonical_target) {
-                    return Err(crate::error::Error::BuildFailed {
-                        step: "path".to_string(),
-                        message: format!(
-                            "Destination '{}' resolves to '{}' which is outside the jail root '{}'",
-                            dest,
-                            canonical.display(),
-                            canonical_target.display()
-                        ),
-                    });
-                }
-            } else {
-                let mut ancestor = joined.as_path();
-                loop {
-                    match ancestor.parent() {
-                        Some(parent) if parent.exists() => {
-                            let canonical_ancestor = canonicalize_or_fail(parent, "ancestor")?;
-                            if !canonical_ancestor.starts_with(&canonical_target) {
-                                return Err(crate::error::Error::BuildFailed {
-                                    step: "path".to_string(),
-                                    message: format!(
-                                        "Destination '{}' has ancestor '{}' resolving to '{}' which is outside the jail root '{}'",
-                                        dest,
-                                        parent.display(),
-                                        canonical_ancestor.display(),
-                                        canonical_target.display()
-                                    ),
-                                });
-                            }
-                            break;
-                        }
-                        Some(parent) => {
-                            ancestor = parent;
-                        }
-                        None => break,
-                    }
-                }
-            }
+            resolve_in_root(&self.target_path, relative, dest)
+        } else {
+            Ok(self.target_path.join(relative))
         }
-
-        Ok(joined)
     }
 
     /// Substitute variables in a string

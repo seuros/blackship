@@ -82,3 +82,59 @@ fn test_workdir() {
         PathBuf::from("/jails/test/usr/local/bin/app")
     );
 }
+
+/// A jail root on disk with the symlinks a real userland carries.
+fn jail_root_with_links() -> (tempfile::TempDir, BuildContext) {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("jail");
+    std::fs::create_dir_all(root.join("usr/local/www/nginx-dist")).unwrap();
+    std::fs::create_dir_all(root.join("usr/share")).unwrap();
+    // As the nginx package installs it: absolute, meant for the jail's view.
+    symlink(
+        "/usr/local/www/nginx-dist",
+        root.join("usr/local/www/nginx"),
+    )
+    .unwrap();
+    symlink("../share", root.join("usr/local/share")).unwrap();
+    symlink("/../../../../etc", root.join("escape")).unwrap();
+    symlink("loop-b", root.join("loop-a")).unwrap();
+    symlink("loop-a", root.join("loop-b")).unwrap();
+
+    let ctx = BuildContext::new(tmp.path(), &root, "test");
+    (tmp, ctx)
+}
+
+#[test]
+fn test_resolve_dest_follows_absolute_links_inside_the_jail() {
+    let (tmp, ctx) = jail_root_with_links();
+    assert_eq!(
+        ctx.resolve_dest("/usr/local/www/nginx/index.html").unwrap(),
+        tmp.path().join("jail/usr/local/www/nginx-dist/index.html")
+    );
+}
+
+#[test]
+fn test_resolve_dest_follows_relative_links() {
+    let (tmp, ctx) = jail_root_with_links();
+    assert_eq!(
+        ctx.resolve_dest("/usr/local/share/doc/x").unwrap(),
+        tmp.path().join("jail/usr/share/doc/x")
+    );
+}
+
+#[test]
+fn test_resolve_dest_clamps_links_at_the_jail_root() {
+    let (tmp, ctx) = jail_root_with_links();
+    assert_eq!(
+        ctx.resolve_dest("/escape/passwd").unwrap(),
+        tmp.path().join("jail/etc/passwd")
+    );
+}
+
+#[test]
+fn test_resolve_dest_rejects_symlink_loops() {
+    let (_tmp, ctx) = jail_root_with_links();
+    assert!(ctx.resolve_dest("/loop-a/file").is_err());
+}
