@@ -385,10 +385,15 @@ impl Bridge {
     }
 
     /// Start all jails (or a specific one with its dependencies)
+    ///
+    /// Jails already running are skipped, so bringing up a jail whose
+    /// dependencies are up only starts what is missing.
     pub fn up(&mut self, jail: Option<&str>) -> Result<()> {
-        let jails_to_start = self.jails_for_up(jail)?;
-
-        for name in &jails_to_start {
+        for name in &self.jails_for_up(jail)? {
+            if self.is_running(name)? {
+                println!("Jail '{name}' is already running");
+                continue;
+            }
             self.start_jail(name)?;
         }
 
@@ -396,18 +401,37 @@ impl Bridge {
     }
 
     /// Stop all jails (or a specific one with its dependents)
+    ///
+    /// Jails already stopped are skipped.
     pub fn down(&mut self, jail: Option<&str>) -> Result<()> {
+        self.down_and_report(jail).map(|_| ())
+    }
+
+    /// Stop what `down` would stop, returning the jails actually stopped in
+    /// stop order.
+    fn down_and_report(&mut self, jail: Option<&str>) -> Result<Vec<String>> {
         let plan = self.down_plan(jail)?;
 
         for name in &plan.isolate {
             self.isolate_jail(name);
         }
 
+        let mut stopped = Vec::new();
         for name in &plan.stop {
+            if !self.is_running(name)? {
+                println!("Jail '{name}' is not running");
+                continue;
+            }
             self.stop_jail(name)?;
+            stopped.push(name.clone());
         }
 
-        Ok(())
+        Ok(stopped)
+    }
+
+    fn is_running(&self, name: &str) -> Result<bool> {
+        let (_, full_name) = self.resolve_jail_names(name)?;
+        Ok(jail_getid(&full_name).is_ok())
     }
 
     /// Fence a dependent off at the firewall without stopping it. The anchor is
@@ -444,9 +468,17 @@ impl Bridge {
     }
 
     /// Restart jails
+    ///
+    /// Dependents that `down` cascaded through come back up too, in start
+    /// order (the reverse of stop order).
     pub fn restart(&mut self, jail: Option<&str>) -> Result<()> {
-        self.down(jail)?;
+        let stopped = self.down_and_report(jail)?;
         self.up(jail)?;
+        for name in stopped.iter().rev() {
+            if !self.is_running(name)? {
+                self.start_jail(name)?;
+            }
+        }
         Ok(())
     }
 
