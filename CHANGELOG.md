@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.1](https://github.com/seuros/blackship/compare/blackship-v0.2.0...blackship-v0.2.1) (2026-11-09)
+
+
+### Features
+
+* **cli:** add machine-readable output contract ([#18](https://github.com/seuros/blackship/issues/18)) ([b037e53](https://github.com/seuros/blackship/commit/b037e53b469b679af8818906450849767d574068))
+* **lib:** public library API for ephemeral containers, releases and images ([b703f6c](https://github.com/seuros/blackship/commit/b703f6cba12ecbcf3d844eb006c7b65415b38ae7))
+* **network:** add shared jail network option ([935f9e0](https://github.com/seuros/blackship/commit/935f9e0ff93507b2d5beb5a7b0bdf07ac6b4f5dc))
+* **privilege:** support mdo escalation ([#17](https://github.com/seuros/blackship/issues/17)) ([0ecfe9c](https://github.com/seuros/blackship/commit/0ecfe9cf48a5bec21262e17f605897024b7289e2))
+
+
+### Bug Fixes
+
+* **cli:** mdo escalation resets the caller's environment; lint [#18](https://github.com/seuros/blackship/issues/18) ([5b82e02](https://github.com/seuros/blackship/commit/5b82e0284c72a88005b9337a93557b2a9c4ba1f6))
+
 ## [0.2.0](https://github.com/seuros/blackship/compare/blackship-v0.1.9...blackship-v0.2.0) (2026-10-11)
 
 
