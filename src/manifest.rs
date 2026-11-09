@@ -100,20 +100,19 @@ pub fn read_config_file(path: &Path) -> Result<String> {
     })
 }
 
-/// Derive a project name from a config file path (falls back to cwd, then random name)
+/// Derive a project name from the directory holding the config file, so the
+/// same manifest yields the same jail names however its path is spelled
+/// (`blackship.toml`, `../blackship.toml`, absolute). Falls back to a random
+/// name when that directory has no usable name (`/`).
 fn project_name_from_path(path: &Path) -> String {
-    path.parent()
-        .filter(|p| !p.as_os_str().is_empty() && p.as_os_str() != ".")
-        .and_then(|p| p.file_name())
+    std::path::absolute(path)
+        .ok()
+        .and_then(|p| p.canonicalize().ok().or(Some(p)))
+        .as_deref()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
         .and_then(|n| n.to_str())
-        .map(std::string::ToString::to_string)
-        .or_else(|| {
-            // Config in current directory - use cwd name
-            std::env::current_dir()
-                .ok()
-                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-        })
-        .unwrap_or_else(|| black_ship_name_from_path(path))
+        .map_or_else(|| black_ship_name_from_path(path), ToString::to_string)
 }
 
 /// Load configuration from a file

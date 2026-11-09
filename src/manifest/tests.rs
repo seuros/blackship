@@ -209,3 +209,24 @@ fn default_global_config_matches_an_empty_config_table() {
         toml::to_string(&built).unwrap()
     );
 }
+
+#[test]
+fn test_project_name_ignores_path_spelling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("orbital");
+    std::fs::create_dir_all(project.join("sub")).unwrap();
+    std::fs::write(project.join("blackship.toml"), "").unwrap();
+
+    assert_eq!(
+        project_name_from_path(&project.join("blackship.toml")),
+        "orbital"
+    );
+    assert_eq!(
+        project_name_from_path(&project.join("sub/../blackship.toml")),
+        "orbital"
+    );
+    assert_eq!(
+        project_name_from_path(&project.join("./blackship.toml")),
+        "orbital"
+    );
+}
