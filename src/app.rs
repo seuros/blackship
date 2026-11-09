@@ -1,7 +1,9 @@
 //! Application entry point and CLI dispatch.
 
 use crate::bridge::Bridge;
-use crate::cli::{Cli, Commands, NetworkAction, OutputFormat};
+use crate::cli::{
+    ArmadaAction, Cli, Commands, NetworkAction, OutputFormat, ReleasesAction, SnapshotAction,
+};
 use crate::error::{Error, Result};
 use crate::output::CliError;
 use crate::{commands, console, manifest};
@@ -65,7 +67,7 @@ fn run_cli(cli: Cli) -> Result<()> {
         return Err(Error::UnsupportedOutputFormat);
     }
 
-    maybe_escalate_to_root(&cli.command)?;
+    maybe_escalate_to_root(&cli.command, cli.no_escalate, cli.non_interactive)?;
     let ctx = AppContext::new(cli.config, cli.verbose, cli.format);
     ctx.init_telemetry();
     let result = ctx.dispatch(cli.command);
@@ -159,6 +161,14 @@ impl AppContext {
                 Ok(())
             }
 
+            Commands::Capabilities => {
+                if self.format == OutputFormat::Json {
+                    crate::output::print_success(&commands::capabilities::data()?)
+                } else {
+                    commands::capabilities::handle()
+                }
+            }
+
             Commands::Init {
                 file,
                 release,
@@ -167,7 +177,12 @@ impl AppContext {
             } => commands::build::handle_init(&file, release, toml, force),
 
             Commands::Armada { files, action } => {
-                commands::armada::handle(&self.config_path, self.verbose, &files, action)
+                if self.format == OutputFormat::Json && matches!(&action, ArmadaAction::Ps { .. }) {
+                    let status = commands::armada::ps_data(&files, self.verbose)?;
+                    crate::output::print_success(&status)
+                } else {
+                    commands::armada::handle(&self.config_path, self.verbose, &files, action)
+                }
             }
 
             Commands::Migrate {
@@ -184,7 +199,12 @@ impl AppContext {
             ),
 
             Commands::Stats { jail, json } => {
-                commands::stats::handle(&self.config_path, jail, json)
+                if self.format == OutputFormat::Json {
+                    let stats = commands::stats::data(&self.config_path, jail)?;
+                    crate::output::print_success(&stats)
+                } else {
+                    commands::stats::handle(&self.config_path, jail, json)
+                }
             }
 
             Commands::Logs {
@@ -212,7 +232,14 @@ impl AppContext {
             ),
 
             Commands::Releases { action, json } => {
-                commands::bootstrap::handle_releases(&self.config_path, action, json)
+                if self.format == OutputFormat::Json
+                    && matches!(&action, None | Some(ReleasesAction::List))
+                {
+                    let releases = commands::bootstrap::releases_data(&self.config_path)?;
+                    crate::output::print_success(&releases)
+                } else {
+                    commands::bootstrap::handle_releases(&self.config_path, action, json)
+                }
             }
 
             Commands::Network { action } => {
@@ -230,7 +257,14 @@ impl AppContext {
                 watch,
                 interval,
                 json,
-            } => commands::health::handle(&self.config_path, jail, watch, interval, json),
+            } => {
+                if self.format == OutputFormat::Json && !watch {
+                    let health = commands::health::data(&self.config_path, jail.as_deref())?;
+                    crate::output::print_success(&health)
+                } else {
+                    commands::health::handle(&self.config_path, jail, watch, interval, json)
+                }
+            }
 
             Commands::Build {
                 file,
@@ -298,7 +332,12 @@ impl AppContext {
                 commands::qos::handle_qos(&self.config_path, self.verbose, &jail, request)
             }
             Commands::Audit { jail, json } => {
-                commands::audit::handle_audit(&self.config_path, &jail, json)
+                if self.format == OutputFormat::Json {
+                    let audit = commands::audit::data(&self.config_path, &jail)?;
+                    crate::output::print_success(&audit)
+                } else {
+                    commands::audit::handle_audit(&self.config_path, &jail, json)
+                }
             }
             Commands::Gc {
                 jail,
@@ -345,7 +384,15 @@ impl AppContext {
             },
 
             Commands::Snapshot { action } => {
-                commands::snapshot::handle_snapshot(&self.config_path, action)
+                if self.format == OutputFormat::Json
+                    && let SnapshotAction::List { jail, .. } = &action
+                {
+                    let snapshots =
+                        commands::snapshot::snapshot_list_data(&self.config_path, jail)?;
+                    crate::output::print_success(&snapshots)
+                } else {
+                    commands::snapshot::handle_snapshot(&self.config_path, action)
+                }
             }
 
             Commands::Commit { jail, release } => {
@@ -492,8 +539,13 @@ impl AppContext {
     }
 }
 
-fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
-    if !command.requires_root() || nix::unistd::geteuid().is_root() {
+fn maybe_escalate_to_root(
+    command: &Commands,
+    no_escalate: bool,
+    non_interactive: bool,
+) -> Result<()> {
+    let euid = nix::unistd::geteuid();
+    if !should_escalate(command.requires_root(), euid.as_raw(), no_escalate)? {
         return Ok(());
     }
 
@@ -507,11 +559,7 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
         .map_err(|e| Error::User(format!("Failed to locate current executable: {e}")))?;
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
-    let mut cmd = ProcessCommand::new(escalator);
-    cmd.arg(&executable).args(args);
-    if escalator == MDO {
-        as_root_env(&mut cmd);
-    }
+    let mut cmd = escalation_command(escalator, &executable, &args, non_interactive);
     let err = cmd.exec();
 
     Err(Error::User(format!(
@@ -520,6 +568,33 @@ fn maybe_escalate_to_root(command: &Commands) -> Result<()> {
 }
 
 const MDO: &str = "/usr/bin/mdo";
+
+fn should_escalate(requires_root: bool, euid: u32, no_escalate: bool) -> Result<bool> {
+    if !requires_root || euid == 0 {
+        Ok(false)
+    } else if no_escalate {
+        Err(Error::EscalationDisabled { euid })
+    } else {
+        Ok(true)
+    }
+}
+
+fn escalation_command(
+    escalator: &str,
+    executable: &std::path::Path,
+    args: &[OsString],
+    non_interactive: bool,
+) -> ProcessCommand {
+    let mut cmd = ProcessCommand::new(escalator);
+    if non_interactive && escalator != MDO {
+        cmd.arg("-n");
+    }
+    cmd.arg(executable).args(args);
+    if escalator == MDO {
+        as_root_env(&mut cmd);
+    }
+    cmd
+}
 
 /// mdo keeps the caller's environment; reset what sudo and doas reset, so
 /// default paths resolve under root's home and not the caller's.

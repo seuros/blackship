@@ -7,48 +7,35 @@ use crate::error::Result;
 use crate::{error, jail, manifest, sickbay};
 use sickbay::{HealthChecker, HealthStatus};
 
-pub fn handle(
+fn prepare_checkers(
     config_path: &Path,
-    jail: Option<String>,
-    watch: bool,
-    interval: u64,
-    json: bool,
-) -> Result<()> {
+    jail_name: Option<&str>,
+) -> Result<(Vec<HealthChecker>, bool)> {
     let config = manifest::load(config_path)?;
 
-    let jails: Vec<_> = if let Some(jail_name) = &jail {
+    let jails: Vec<_> = if let Some(jail_name) = jail_name {
         let (service_name, _full_name) = config
             .resolve_jail_names(jail_name)
-            .ok_or_else(|| error::Error::JailNotFound(jail_name.clone()))?;
+            .ok_or_else(|| error::Error::JailNotFound(jail_name.to_string()))?;
         config
             .jails
             .iter()
-            .filter(|j| j.name == service_name)
+            .filter(|jail| jail.name == service_name)
             .collect()
     } else {
         config.jails.iter().collect()
     };
 
-    if jails.is_empty() {
-        if json {
-            println!("[]");
-        } else if let Some(name) = jail {
-            println!("Jail '{name}' not found in configuration.");
-        } else {
-            println!("No jails defined in configuration.");
-        }
-        return Ok(());
-    }
-
+    let no_jails = jails.is_empty();
     let rate_limit = &config.config.rate_limit;
-    let mut checkers: Vec<HealthChecker> = jails
+    let checkers = jails
         .iter()
-        .filter(|j| j.healthcheck.enabled)
-        .map(|j| {
-            let full_name = config.jail_name(&j.name);
+        .filter(|jail| jail.healthcheck.enabled)
+        .map(|jail_def| {
+            let full_name = config.jail_name(&jail_def.name);
             let mut checker = HealthChecker::with_rate_limit(
                 &full_name,
-                j.healthcheck.clone(),
+                jail_def.healthcheck.clone(),
                 rate_limit.health_capacity,
                 rate_limit.health_refill_rate,
             );
@@ -58,6 +45,41 @@ pub fn handle(
             checker
         })
         .collect();
+
+    Ok((checkers, no_jails))
+}
+
+/// Run one health-check pass without writing terminal output.
+pub fn data(config_path: &Path, jail: Option<&str>) -> Result<Vec<serde_json::Value>> {
+    let (mut checkers, _) = prepare_checkers(config_path, jail)?;
+    checkers
+        .iter_mut()
+        .map(|checker| {
+            let status = checker.run_checks()?;
+            Ok(checker_json(checker, status))
+        })
+        .collect()
+}
+
+pub fn handle(
+    config_path: &Path,
+    jail: Option<String>,
+    watch: bool,
+    interval: u64,
+    json: bool,
+) -> Result<()> {
+    let (mut checkers, no_jails) = prepare_checkers(config_path, jail.as_deref())?;
+
+    if no_jails {
+        if json {
+            println!("[]");
+        } else if let Some(name) = jail {
+            println!("Jail '{name}' not found in configuration.");
+        } else {
+            println!("No jails defined in configuration.");
+        }
+        return Ok(());
+    }
 
     if checkers.is_empty() {
         if json {

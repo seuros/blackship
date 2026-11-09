@@ -22,8 +22,23 @@ fn test_text_output_format_is_default() {
 }
 
 #[test]
+fn test_escalation_controls_parse_globally() {
+    let argv = [
+        OsStr::new("--no-escalate"),
+        OsStr::new("--non-interactive"),
+        OsStr::new("up"),
+        OsStr::new("--all"),
+    ];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert!(cli.no_escalate);
+    assert!(cli.non_interactive);
+}
+
+#[test]
 fn test_machine_output_support_is_explicit() {
     assert!(Commands::Check.supports_machine_output());
+    assert!(Commands::Capabilities.supports_machine_output());
     assert!(
         Commands::Network {
             action: NetworkAction::List
@@ -35,6 +50,79 @@ fn test_machine_output_support_is_explicit() {
             jail: None,
             all: true,
             dry_run: true,
+        }
+        .supports_machine_output()
+    );
+    assert!(
+        Commands::Releases {
+            action: Some(ReleasesAction::List),
+            json: false,
+        }
+        .supports_machine_output()
+    );
+    assert!(
+        Commands::Stats {
+            jail: None,
+            json: false,
+        }
+        .supports_machine_output()
+    );
+    assert!(
+        Commands::Audit {
+            jail: "web".into(),
+            json: false,
+        }
+        .supports_machine_output()
+    );
+    assert!(
+        Commands::Snapshot {
+            action: SnapshotAction::List {
+                jail: "web".into(),
+                json: false,
+            },
+        }
+        .supports_machine_output()
+    );
+    assert!(
+        Commands::Armada {
+            files: vec!["blackship.toml".into()],
+            action: ArmadaAction::Ps { json: false },
+        }
+        .supports_machine_output()
+    );
+    assert!(
+        Commands::Health {
+            jail: None,
+            watch: false,
+            interval: 5,
+            json: false,
+        }
+        .supports_machine_output()
+    );
+    assert!(
+        !Commands::Health {
+            jail: None,
+            watch: true,
+            interval: 5,
+            json: false,
+        }
+        .supports_machine_output()
+    );
+    assert!(
+        !Commands::Releases {
+            action: Some(ReleasesAction::Delete {
+                release: "15.1-RELEASE".into(),
+            }),
+            json: false,
+        }
+        .supports_machine_output()
+    );
+    assert!(
+        !Commands::Snapshot {
+            action: SnapshotAction::Delete {
+                jail: "web".into(),
+                snapshot: "before-upgrade".into(),
+            },
         }
         .supports_machine_output()
     );

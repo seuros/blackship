@@ -72,6 +72,20 @@ cache_dir = "/var/blackship/cache"
 
 > **Note:** While paths are user-writable by default, `bootstrap` extraction requires root privileges because FreeBSD base archives contain root-owned files with special permissions (setuid binaries, etc.). Blackship will re-exec through FreeBSD's `mdo` when the current user has an applicable `mac_do` rule, then fall back to `doas` or `sudo`.
 
+Automatic privilege escalation can be controlled globally:
+
+```sh
+# Fail instead of re-executing through mdo, doas, or sudo
+blackship --no-escalate up --all
+
+# Allow escalation, but never prompt for authentication
+blackship --non-interactive up --all
+```
+
+`--non-interactive` passes `-n` to `doas` and `sudo`. FreeBSD's `mdo` is
+already non-interactive: authorization comes entirely from `mac_do`, without a
+password prompt. `--no-escalate` takes precedence when both options are used.
+
 ## Quick Start
 
 ### 1. Initialize Jailfile
@@ -251,7 +265,9 @@ The rules of the road:
   `commit_image()` and `Container::commit()` freeze a root into a new
   release, and `remove_image()` / `remove_release()` clean up.
 - **Privilege:** library calls assume they already run as root and return
-  `Error::NeedsRoot` otherwise. Only the CLI re-executes through sudo/doas.
+  `Error::NeedsRoot` otherwise. Only the CLI re-executes through `mdo`, `doas`,
+  or `sudo`; callers can disable that with `--no-escalate` or prevent prompts
+  with `--non-interactive`.
 - **Errors** are one typed `blackship::Error` enum. No `anyhow` in sight.
 
 `examples/ephemeral.rs` walks the whole lifecycle:
@@ -289,9 +305,18 @@ commands most useful to management UIs:
 ```sh
 blackship --format json ps
 blackship --format json check
+blackship --format json capabilities
 blackship --format json network list
 blackship --format json ports
 blackship --format json ports web
+blackship --format json releases list
+blackship --format json stats
+blackship --format json stats web
+blackship --format json health
+blackship --format json health web
+blackship --format json audit web
+blackship --format json snapshot list web
+blackship --format json armada ps
 blackship --format json up web --dry-run
 blackship --format json down web --dry-run
 blackship --format json restart web --dry-run
@@ -325,8 +350,15 @@ intended for program logic; messages remain for people and diagnostics:
 
 Commands without a complete JSON contract fail with
 `unsupported_output_format`; they never fall back to mixed human-readable
-output. Existing command-local flags such as `blackship ps --json` retain
-their original, unenveloped output for compatibility.
+output. Streaming modes such as `health --watch` are intentionally excluded
+from the single-envelope contract. Existing command-local flags such as
+`blackship ps --json` retain their original, unenveloped output for
+compatibility.
+
+`blackship capabilities` requires neither a manifest nor root access. Its JSON
+report lets clients discover the Blackship version, output schema, compiled
+features, FreeBSD kernel capabilities, host facilities, and installed privilege
+escalators before enabling UI actions.
 
 Lifecycle commands support the global JSON format in dry-run mode. Their
 `data` object contains the requested operation and its ordered steps, allowing
@@ -439,6 +471,7 @@ reported as a restart-required warning and skipped. Not-running jails are
 skipped. `--dry-run` prints the diff without touching anything.
 | `blackship ps [--json]` | List jail status |
 | `blackship check` | Validate configuration |
+| `blackship capabilities` | Report binary and host capabilities |
 | `blackship setup [--enable-pf]` | Reapply networks and PF anchors; --enable-pf turns PF on |
 | `blackship cleanup <jail> [--force]` | Clean up failed jail resources |
 | `blackship init [-f file] [--release] [--toml]` | Create a new Jailfile |

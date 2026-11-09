@@ -17,7 +17,9 @@ struct JailStats {
     rss_kib: u64,
 }
 
-pub fn handle(config_path: &Path, jail: Option<String>, json: bool) -> Result<()> {
+type StatsRow = (String, String, JailStats);
+
+fn collect_rows(config_path: &Path, jail: Option<String>) -> Result<Vec<StatsRow>> {
     let config = manifest::load_or_default(config_path)?;
 
     // JID -> jail name
@@ -77,7 +79,7 @@ pub fn handle(config_path: &Path, jail: Option<String>, json: bool) -> Result<()
             .unwrap_or(j)
     });
 
-    let mut rows: Vec<(String, String, JailStats)> = names
+    let mut rows: Vec<StatsRow> = names
         .into_iter()
         .filter(|(_, name)| filter.as_deref().is_none_or(|f| f == name))
         .map(|(jid, name)| {
@@ -87,19 +89,34 @@ pub fn handle(config_path: &Path, jail: Option<String>, json: bool) -> Result<()
         .collect();
     rows.sort_by(|a, b| a.1.cmp(&b.1));
 
-    if json {
-        let out: Vec<_> = rows
-            .iter()
-            .map(|(jid, name, s)| {
-                serde_json::json!({
-                    "jid": jid,
-                    "name": name,
-                    "processes": s.processes,
-                    "cpu_percent": (s.cpu_percent * 10.0).round() / 10.0,
-                    "rss_mib": s.rss_kib / 1024,
-                })
+    Ok(rows)
+}
+
+fn json_rows(rows: &[StatsRow]) -> Vec<serde_json::Value> {
+    rows.iter()
+        .map(|(jid, name, stats)| {
+            serde_json::json!({
+                "jid": jid,
+                "name": name,
+                "processes": stats.processes,
+                "cpu_percent": (stats.cpu_percent * 10.0).round() / 10.0,
+                "rss_mib": stats.rss_kib / 1024,
             })
-            .collect();
+        })
+        .collect()
+}
+
+/// Return per-jail statistics without writing terminal output.
+pub fn data(config_path: &Path, jail: Option<String>) -> Result<Vec<serde_json::Value>> {
+    let rows = collect_rows(config_path, jail)?;
+    Ok(json_rows(&rows))
+}
+
+pub fn handle(config_path: &Path, jail: Option<String>, json: bool) -> Result<()> {
+    let rows = collect_rows(config_path, jail)?;
+
+    if json {
+        let out = json_rows(&rows);
         println!(
             "{}",
             serde_json::to_string_pretty(&out).expect("serde_json::Value always serializes")

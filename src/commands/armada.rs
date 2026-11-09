@@ -59,6 +59,14 @@ pub fn handle(
     }
 }
 
+/// Return Armada jail status without writing terminal output.
+pub fn ps_data(files: &[PathBuf], verbose: bool) -> Result<serde_json::Value> {
+    let config = manifest::load_merged(files)?;
+    let bridge = bridge::Bridge::open(config, verbose)?;
+    serde_json::to_value(bridge.ps_data())
+        .map_err(|error| error::Error::JsonOutput(error.to_string()))
+}
+
 /// Starter manifest written by `armada init`
 const ARMADA_TEMPLATE: &str = r#"# Blackship Armada Configuration
 # https://github.com/seuros/blackship
