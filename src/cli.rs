@@ -819,9 +819,12 @@ impl Commands {
             | Self::Down { dry_run, .. }
             | Self::Restart { dry_run, .. }
             | Self::Eva { dry_run, .. }
-            | Self::Gc { dry_run, .. } => !dry_run,
+            | Self::Build { dry_run, .. } => !dry_run,
             Self::Qos { show, .. } => !show,
-            Self::Setup { .. }
+            // Even a dry run reads root-owned scope records under the gc lock.
+            Self::Gc { .. }
+            | Self::Logs { .. }
+            | Self::Setup { .. }
             | Self::Exec { .. }
             | Self::Run { .. }
             | Self::Cp { .. }
@@ -848,10 +851,8 @@ impl Commands {
             | Self::Capabilities
             | Self::Init { .. }
             | Self::Health { .. }
-            | Self::Build { .. }
             | Self::Template { .. }
             | Self::Ports { .. }
-            | Self::Logs { .. }
             | Self::Stats { .. }
             | Self::Audit { .. }
             | Self::Completion { .. } => false,
@@ -876,8 +877,10 @@ impl SnapshotAction {
 impl ArmadaAction {
     fn requires_root(&self) -> bool {
         match self {
-            Self::Up { dry_run, .. } | Self::Down { dry_run, .. } => !dry_run,
-            Self::Init { .. } | Self::Build { .. } | Self::Ps { .. } | Self::Config { .. } => false,
+            Self::Up { dry_run, .. } | Self::Down { dry_run, .. } | Self::Build { dry_run, .. } => {
+                !dry_run
+            }
+            Self::Init { .. } | Self::Ps { .. } | Self::Config { .. } => false,
         }
     }
 }
