@@ -39,6 +39,7 @@ usage-rs = { version = "7", features = ["completions"], optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "1.1"
+tempfile = "3.27.0"
 
 # Dependency graph
 petgraph = "0.8"
@@ -86,7 +87,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = tr
 
 [dev-dependencies]
 state-machines = { version = "0.34.1", features = ["dynamic", "runtime-send", "serde", "inspect"] }
-tempfile = "3.27.0"
 
 [lints.rust]
 # FFI lives in the modules that opt in with #![allow(unsafe_code)]; anything
