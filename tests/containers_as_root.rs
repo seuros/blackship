@@ -304,7 +304,7 @@ fn same_name_twice_is_refused_without_harming_the_first() {
 
 #[test]
 #[ignore = "needs root and a bootstrapped release"]
-fn limits_without_racct_fail_cleanly() {
+fn limits_apply_or_fail_cleanly() {
     let Some(s) = setup() else { return };
     let racct = Command::new("/sbin/sysctl")
         .args(["-n", "kern.racct.enable"])
@@ -315,7 +315,15 @@ fn limits_without_racct_fail_cleanly() {
         &ContainerSpec::new(&n, &s.release).limits(Limits::new().memory("256m").max_processes(64)),
     );
     if racct {
-        made.unwrap().destroy().unwrap();
+        let c = made.unwrap();
+        let rules = Command::new("/usr/bin/rctl")
+            .arg(format!("jail:{n}"))
+            .output()
+            .unwrap();
+        let rules = String::from_utf8_lossy(&rules.stdout);
+        assert!(rules.contains("memoryuse:deny=268435456"), "{rules}");
+        assert!(rules.contains("maxproc:deny=64"), "{rules}");
+        c.destroy().unwrap();
     } else {
         match made {
             Err(Error::Rctl(_)) => {}

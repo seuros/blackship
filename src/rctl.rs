@@ -381,7 +381,9 @@ fn rctl_string_syscall(
     arg: &str,
     fail_msg: impl FnOnce(std::io::Error) -> String,
 ) -> Result<()> {
-    let arg_bytes = arg.as_bytes();
+    // The kernel copyinstr()s the argument: the length must cover the NUL.
+    let arg = std::ffi::CString::new(arg)?;
+    let arg_bytes = arg.as_bytes_with_nul();
 
     // SAFETY: live input with its length; NULL output with length 0.
     let ret = unsafe {
@@ -403,9 +405,49 @@ fn rctl_string_syscall(
 
 /// Add an RCTL rule via syscall
 fn rctl_add_rule(rule: &str) -> Result<()> {
-    rctl_string_syscall(SYS_RCTL_ADD_RULE, rule, |e| {
+    let expanded = expand_rule(rule)?;
+    rctl_string_syscall(SYS_RCTL_ADD_RULE, &expanded, |e| {
         format!("Failed to add rule '{rule}': {e}")
     })
+}
+
+/// Expand the amount's size suffix as rctl(8) does; the kernel only takes integers.
+fn expand_rule(rule: &str) -> Result<String> {
+    let Some((head, tail)) = rule.split_once('=') else {
+        return Ok(rule.to_string());
+    };
+    let (amount, per) = tail
+        .split_once('/')
+        .map_or((tail, None), |(a, p)| (a, Some(p)));
+    let num = expand_number(amount).ok_or_else(|| {
+        Error::Rctl(format!(
+            "malformed rule '{rule}': invalid amount '{amount}'"
+        ))
+    })?;
+    Ok(per.map_or_else(|| format!("{head}={num}"), |p| format!("{head}={num}/{p}")))
+}
+
+/// `expand_number(3)`: an integer with an optional k/m/g/t/p/e suffix (powers of 1024).
+fn expand_number(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let s = s
+        .strip_suffix(['b', 'B'])
+        .filter(|r| r.ends_with(|c: char| c.is_ascii_alphabetic()))
+        .unwrap_or(s);
+    let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let (digits, suffix) = s.split_at(split);
+    let base: u64 = digits.parse().ok()?;
+    let shift = match suffix.to_ascii_lowercase().as_str() {
+        "" => 0,
+        "k" => 10,
+        "m" => 20,
+        "g" => 30,
+        "t" => 40,
+        "p" => 50,
+        "e" => 60,
+        _ => return None,
+    };
+    base.checked_mul(1u64.checked_shl(shift)?)
 }
 
 /// Remove RCTL rules matching a filter
@@ -417,7 +459,8 @@ fn rctl_remove_rule(filter: &str) -> Result<()> {
 
 /// Get resource accounting data for a subject
 fn rctl_get_racct(filter: &str) -> Result<std::collections::HashMap<String, u64>> {
-    let filter_bytes = filter.as_bytes();
+    let filter_c = std::ffi::CString::new(filter)?;
+    let filter_bytes = filter_c.as_bytes_with_nul();
     let mut outbuf = [0u8; 4096];
 
     // SAFETY: live buffers, each passed with its own length.

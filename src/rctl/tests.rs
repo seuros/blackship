@@ -143,3 +143,33 @@ fn test_qos_config_profile_falls_back_to_startup() {
         Some("4g")
     );
 }
+
+#[test]
+fn rules_reach_the_kernel_as_plain_integers() {
+    assert_eq!(
+        expand_rule("jail:web:memoryuse:deny=256m").unwrap(),
+        "jail:web:memoryuse:deny=268435456"
+    );
+    assert_eq!(
+        expand_rule("jail:web:readbps:throttle=1G/process").unwrap(),
+        "jail:web:readbps:throttle=1073741824/process"
+    );
+    assert_eq!(
+        expand_rule("jail:web:maxproc:deny=64").unwrap(),
+        "jail:web:maxproc:deny=64"
+    );
+    assert_eq!(expand_rule("jail:web").unwrap(), "jail:web");
+    assert!(expand_rule("jail:web:memoryuse:deny=lots").is_err());
+    assert!(expand_rule("jail:web:memoryuse:deny=99999999e").is_err());
+}
+
+#[test]
+fn expand_number_matches_libutil() {
+    assert_eq!(expand_number("0"), Some(0));
+    assert_eq!(expand_number("1k"), Some(1024));
+    assert_eq!(expand_number("4G"), Some(4 << 30));
+    assert_eq!(expand_number("2mb"), Some(2 << 20));
+    assert_eq!(expand_number("12b"), None);
+    assert_eq!(expand_number(""), None);
+    assert_eq!(expand_number("1x"), None);
+}
