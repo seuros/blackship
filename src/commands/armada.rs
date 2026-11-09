@@ -246,9 +246,7 @@ fn select_jails<'a>(
     }
     let mut service_names = Vec::new();
     for name in jails {
-        let (service_name, _full_name) = config
-            .resolve_jail_names(name)
-            .ok_or_else(|| error::Error::JailNotFound(name.clone()))?;
+        let (service_name, _full_name) = config.require_jail_names(name)?;
         service_names.push(service_name);
     }
     Ok(config

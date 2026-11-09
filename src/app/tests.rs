@@ -1,5 +1,6 @@
 use super::{MDO, escalation_command, find_escalator_with, requested_json, should_escalate};
 use crate::error::Error;
+use std::assert_matches;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
@@ -40,7 +41,7 @@ fn no_escalator_is_reported_when_none_are_usable() {
 fn no_escalate_fails_before_selecting_an_escalator() {
     let error = should_escalate(true, 1000, true).unwrap_err();
 
-    assert!(matches!(error, Error::EscalationDisabled { euid: 1000 }));
+    assert_matches!(error, Error::EscalationDisabled { euid: 1000 });
     assert_eq!(error.code(), "escalation_disabled");
 }
 

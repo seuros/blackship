@@ -1,7 +1,6 @@
 //! Status and dry-run operations
 
 use crate::error::Result;
-use crate::hooks::HookPhase;
 use crate::jail::jail_getid;
 use serde::Serialize;
 
@@ -37,131 +36,6 @@ pub struct JailPathStatus {
 }
 
 impl Bridge {
-    /// Build the machine-readable plan behind an `up --dry-run` invocation.
-    pub(crate) fn up_plan_data(&self, jail: Option<&str>) -> Result<Vec<serde_json::Value>> {
-        self.jails_for_up(jail)?
-            .iter()
-            .map(|name| {
-                let (service_name, full_name) = self.resolve_jail_names(name)?;
-                let jail_def = self
-                    .config
-                    .get_jail(&service_name)
-                    .ok_or_else(|| crate::error::Error::JailNotFound(service_name.clone()))?;
-                let path = jail_def.effective_path(&self.config.config, &full_name);
-                let ip = jail_def
-                    .network
-                    .as_ref()
-                    .and_then(|network| network.ip)
-                    .map(|ip| ip.to_string());
-                Ok(serde_json::json!({
-                    "action": "start",
-                    "jail": full_name,
-                    "path": path.display().to_string(),
-                    "ip": ip,
-                    "currently_running": jail_getid(&full_name).is_ok(),
-                    "create_zfs_dataset": self.zfs.is_some() && jail_def.path.is_none(),
-                    "hooks": {
-                        "pre_start": hook_count(jail_def, HookPhase::PreStart),
-                        "post_start": hook_count(jail_def, HookPhase::PostStart),
-                    }
-                }))
-            })
-            .collect()
-    }
-
-    /// Build the machine-readable plan behind a `down --dry-run` invocation.
-    pub(crate) fn down_plan_data(&self, jail: Option<&str>) -> Result<Vec<serde_json::Value>> {
-        self.jails_for_down(jail)?
-            .iter()
-            .map(|name| {
-                let (service_name, full_name) = self.resolve_jail_names(name)?;
-                let jail_def = self.config.get_jail(&service_name);
-                Ok(serde_json::json!({
-                    "action": "stop",
-                    "jail": full_name,
-                    "currently_running": jail_getid(&full_name).is_ok(),
-                    "hooks": {
-                        "pre_stop": jail_def.map_or(0, |jail| hook_count(jail, HookPhase::PreStop)),
-                        "post_stop": jail_def.map_or(0, |jail| hook_count(jail, HookPhase::PostStop)),
-                    }
-                }))
-            })
-            .collect()
-    }
-
-    /// Dry run: show what 'up' would do without making changes
-    pub fn up_dry_run(&self, jail: Option<&str>) -> Result<()> {
-        println!("=== DRY RUN - No changes will be made ===\n");
-
-        let jails_to_start = self.jails_for_up(jail)?;
-
-        println!("Would start {} jail(s):\n", jails_to_start.len());
-
-        for name in &jails_to_start {
-            let (service_name, full_name) = self.resolve_jail_names(name)?;
-            let jail_def = self.config.get_jail(&service_name);
-            if let Some(jail_def) = jail_def {
-                let path = jail_def.effective_path(&self.config.config, &full_name);
-                let ip = jail_def
-                    .network
-                    .as_ref()
-                    .and_then(|n| n.ip)
-                    .map_or_else(|| "none".to_string(), |ip| ip.to_string());
-
-                println!("  [START] {full_name}");
-                println!("          Path: {}", path.display());
-                println!("          IP: {ip}");
-
-                if self.zfs.is_some() && jail_def.path.is_none() {
-                    println!("          ZFS: would create dataset");
-                }
-
-                print_hook_counts(
-                    jail_def,
-                    "          ",
-                    [
-                        (HookPhase::PreStart, "pre_start"),
-                        (HookPhase::PostStart, "post_start"),
-                    ],
-                );
-                println!();
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Dry run: show what 'down' would do without making changes
-    pub fn down_dry_run(&self, jail: Option<&str>) -> Result<()> {
-        println!("=== DRY RUN - No changes will be made ===\n");
-
-        let jails_to_stop = self.jails_for_down(jail)?;
-
-        println!("Would stop {} jail(s):\n", jails_to_stop.len());
-
-        for name in &jails_to_stop {
-            let (service_name, full_name) = self.resolve_jail_names(name)?;
-            let is_running = jail_getid(&full_name).is_ok();
-            let status = if is_running { "running" } else { "stopped" };
-
-            println!("  [STOP] {full_name} (currently {status})");
-
-            if let Some(jail_def) = self.config.get_jail(&service_name) {
-                print_hook_counts(
-                    jail_def,
-                    "         ",
-                    [
-                        (HookPhase::PreStop, "pre_stop"),
-                        (HookPhase::PostStop, "post_stop"),
-                    ],
-                );
-            }
-        }
-
-        println!();
-        Ok(())
-    }
-
     /// The owning jail descriptor fd held for a jail, when there is one.
     pub fn jail_descriptor_fd(&self, full_name: &str) -> Option<i32> {
         self.instances
@@ -172,31 +46,19 @@ impl Bridge {
 
     /// Print jail status
     pub fn ps(&self, json: bool) {
+        let jails = self.ps_data();
         if json {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&self.ps_data())
-                    .expect("JailStatus always serializes")
+                serde_json::to_string_pretty(&jails).expect("JailStatus always serializes")
             );
-        } else {
-            println!("{:<20} {:<10} {:<10}", "NAME", "STATE", "JID");
-            println!("{}", "-".repeat(42));
-
-            for jail_def in &self.config.jails {
-                let full_name = self.config.jail_name(&jail_def.name);
-                let (state, jid) = if let Some(instance) = self.instances.get(&full_name) {
-                    let state = format!("{:?}", instance.state());
-                    let jid = instance.jid.map(|j| j.to_string()).unwrap_or_default();
-                    (state, jid)
-                } else {
-                    match jail_getid(&full_name) {
-                        Ok(jid) => ("Running".to_string(), jid.to_string()),
-                        Err(_) => ("Stopped".to_string(), String::new()),
-                    }
-                };
-
-                println!("{full_name:<20} {state:<10} {jid:<10}");
-            }
+            return;
+        }
+        println!("{:<20} {:<10} {:<10}", "NAME", "STATE", "JID");
+        println!("{}", "-".repeat(42));
+        for jail in jails {
+            let jid = jail.jid.map(|j| j.to_string()).unwrap_or_default();
+            println!("{:<20} {:<10} {jid:<10}", jail.name, jail.state);
         }
     }
 
@@ -316,23 +178,5 @@ impl Bridge {
             zfs_enabled: self.zfs.is_some(),
             jail_paths,
         })
-    }
-}
-
-fn hook_count(jail: &crate::manifest::JailDef, phase: HookPhase) -> usize {
-    jail.hooks.iter().filter(|hook| hook.phase == phase).count()
-}
-
-/// Dry-run line per phase that has hooks: `Hooks: 2 pre_start`.
-fn print_hook_counts(
-    jail_def: &crate::manifest::JailDef,
-    indent: &str,
-    phases: [(HookPhase, &str); 2],
-) {
-    for (phase, label) in phases {
-        let count = jail_def.hooks.iter().filter(|h| h.phase == phase).count();
-        if count > 0 {
-            println!("{indent}Hooks: {count} {label}");
-        }
     }
 }

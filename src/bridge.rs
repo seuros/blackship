@@ -11,6 +11,7 @@ mod dns;
 mod eva;
 mod graph;
 pub mod lifecycle;
+mod plan;
 mod ports;
 mod qos;
 mod status;
@@ -19,4 +20,5 @@ mod tests;
 mod usage;
 
 pub use self::core::Bridge;
+pub use self::plan::PlanStep;
 pub use self::qos::{ShiftOutcome, startup_deadline_secs};

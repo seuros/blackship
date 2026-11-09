@@ -189,9 +189,7 @@ impl Bridge {
 
     /// Resolve a jail identifier to (`service_name`, `full_name`)
     pub(super) fn resolve_jail_names(&self, name: &str) -> Result<(String, String)> {
-        self.config
-            .resolve_jail_names(name)
-            .ok_or_else(|| Error::JailNotFound(name.to_string()))
+        self.config.require_jail_names(name)
     }
 
     pub(super) fn prepare_runtime(&mut self) -> Result<()> {

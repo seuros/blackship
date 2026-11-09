@@ -289,6 +289,12 @@ impl BlackshipConfig {
             .find(|j| self.full_name_matches(&j.name, name))
     }
 
+    /// [`Self::resolve_jail_names`], failing with [`Error::JailNotFound`].
+    pub fn require_jail_names(&self, name: &str) -> Result<(String, String)> {
+        self.resolve_jail_names(name)
+            .ok_or_else(|| Error::JailNotFound(name.to_string()))
+    }
+
     /// Resolve a jail identifier to (`service_name`, `full_name`)
     pub fn resolve_jail_names(&self, name: &str) -> Option<(String, String)> {
         let names_of = |jail: &JailDef| (jail.name.clone(), self.jail_name(&jail.name));

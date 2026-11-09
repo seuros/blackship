@@ -44,7 +44,8 @@ fn test_stop_order() {
 #[test]
 fn test_machine_up_plan_preserves_dependency_order() {
     let bridge = Bridge::new(test_config()).unwrap();
-    let plan = bridge.up_plan_data(Some("frontend")).unwrap();
+    let plan = serde_json::to_value(bridge.start_steps(Some("frontend")).unwrap()).unwrap();
+    let plan = plan.as_array().unwrap();
     let names: Vec<_> = plan
         .iter()
         .map(|step| step["jail"].as_str().unwrap())
@@ -64,7 +65,8 @@ fn test_machine_up_plan_preserves_dependency_order() {
 #[test]
 fn test_machine_down_plan_preserves_reverse_dependency_order() {
     let bridge = Bridge::new(test_config()).unwrap();
-    let plan = bridge.down_plan_data(Some("database")).unwrap();
+    let plan = serde_json::to_value(bridge.stop_steps(Some("database")).unwrap()).unwrap();
+    let plan = plan.as_array().unwrap();
     let names: Vec<_> = plan
         .iter()
         .map(|step| step["jail"].as_str().unwrap())

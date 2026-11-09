@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::error::Result;
-use crate::{error, jail, manifest, sickbay};
+use crate::{jail, manifest, sickbay};
 use sickbay::{HealthChecker, HealthStatus};
 
 fn prepare_checkers(
@@ -14,9 +14,7 @@ fn prepare_checkers(
     let config = manifest::load(config_path)?;
 
     let jails: Vec<_> = if let Some(jail_name) = jail_name {
-        let (service_name, _full_name) = config
-            .resolve_jail_names(jail_name)
-            .ok_or_else(|| error::Error::JailNotFound(jail_name.to_string()))?;
+        let (service_name, _full_name) = config.require_jail_names(jail_name)?;
         config
             .jails
             .iter()

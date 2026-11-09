@@ -24,17 +24,6 @@ pub fn require_zfs(config: &BlackshipConfig) -> Result<zfs::ZfsManager> {
     ))
 }
 
-/// Resolve a jail name and verify it exists in the config
-fn resolve_jail(config: &BlackshipConfig, jail: &str) -> Result<(String, String)> {
-    let (service_name, full_name) = config
-        .resolve_jail_names(jail)
-        .ok_or_else(|| error::Error::JailNotFound(jail.to_string()))?;
-    if config.get_jail(&service_name).is_none() {
-        return Err(error::Error::JailNotFound(jail.to_string()));
-    }
-    Ok((service_name, full_name))
-}
-
 /// Stage the jail's definition (and Jailfile, when known) inside the dataset
 /// at .blackship/ so snapshots, exports, and zfs send carry everything needed
 /// to reconstruct the jail elsewhere.
@@ -75,7 +64,7 @@ pub fn stage_config_in_dataset(config: &BlackshipConfig, service_name: &str, ful
 pub fn handle_commit(config_path: &Path, jail: &str, release: &str) -> Result<()> {
     let config = manifest::load(config_path)?;
     let zfs = require_zfs(&config)?;
-    let (service_name, full_name) = resolve_jail(&config, jail)?;
+    let (service_name, full_name) = config.require_jail_names(jail)?;
     stage_config_in_dataset(&config, &service_name, &full_name);
 
     let host = crate::host::Host::from_config(Some(config));
@@ -101,14 +90,14 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
 
     match action {
         SnapshotAction::Create { jail, name } => {
-            let (service_name, full_name) = resolve_jail(&config, &jail)?;
+            let (service_name, full_name) = config.require_jail_names(&jail)?;
 
             stage_config_in_dataset(&config, &service_name, &full_name);
             let snap_name = zfs.create_snapshot(&full_name, name.as_deref())?;
             println!("Created snapshot: {full_name}@{snap_name}");
         }
         SnapshotAction::List { jail, json } => {
-            let (_service_name, full_name) = resolve_jail(&config, &jail)?;
+            let (_service_name, full_name) = config.require_jail_names(&jail)?;
 
             let snapshots = zfs.list_snapshots(&full_name)?;
 
@@ -151,7 +140,7 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
             snapshot,
             force,
         } => {
-            let (_service_name, full_name) = resolve_jail(&config, &jail)?;
+            let (_service_name, full_name) = config.require_jail_names(&jail)?;
 
             if jail::jail_getid(&full_name).is_ok() {
                 return Err(error::Error::JailOperation(format!(
@@ -163,7 +152,7 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
             println!("Rolled back jail '{full_name}' to snapshot '{snapshot}'");
         }
         SnapshotAction::Delete { jail, snapshot } => {
-            let (_service_name, full_name) = resolve_jail(&config, &jail)?;
+            let (_service_name, full_name) = config.require_jail_names(&jail)?;
 
             zfs.delete_snapshot(&full_name, &snapshot)?;
             println!("Deleted snapshot '{full_name}@{snapshot}'");
@@ -177,7 +166,7 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
 pub fn snapshot_list_data(config_path: &Path, jail: &str) -> Result<Vec<serde_json::Value>> {
     let config = manifest::load(config_path)?;
     let zfs = require_zfs(&config)?;
-    let (_service_name, full_name) = resolve_jail(&config, jail)?;
+    let (_service_name, full_name) = config.require_jail_names(jail)?;
     Ok(zfs
         .list_snapshots(&full_name)?
         .iter()
@@ -204,7 +193,7 @@ pub fn handle_clone(config_path: &Path, source: &str, name: &str) -> Result<()> 
     }
     let (source_jail, snapshot) = (parts[0], parts[1]);
 
-    let (_source_service, source_full) = resolve_jail(&config, source_jail)?;
+    let (_source_service, source_full) = config.require_jail_names(source_jail)?;
 
     if config.resolve_jail_names(name).is_some() {
         return Err(error::Error::JailOperation(format!(
@@ -235,7 +224,7 @@ pub fn handle_export(
 ) -> Result<()> {
     let config = manifest::load(config_path)?;
 
-    let (service_name, full_name) = resolve_jail(&config, jail)?;
+    let (service_name, full_name) = config.require_jail_names(jail)?;
     let jail_def = config
         .get_jail(&service_name)
         .ok_or_else(|| error::Error::JailNotFound(jail.to_string()))?;

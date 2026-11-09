@@ -9,9 +9,7 @@ use crate::{error, manifest};
 pub fn handle(config_path: &Path, jail: &str, follow: bool, lines: usize) -> Result<()> {
     let config = manifest::load(config_path)?;
 
-    let (service_name, full_name) = config
-        .resolve_jail_names(jail)
-        .ok_or_else(|| error::Error::JailNotFound(jail.to_string()))?;
+    let (service_name, full_name) = config.require_jail_names(jail)?;
     let jail_def = config
         .get_jail(&service_name)
         .ok_or_else(|| error::Error::JailNotFound(jail.to_string()))?;

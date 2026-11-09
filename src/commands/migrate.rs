@@ -18,9 +18,7 @@ pub fn handle_migrate(
 ) -> Result<()> {
     let config = manifest::load(config_path)?;
     let zfs = super::snapshot::require_zfs(&config)?;
-    let (service_name, full_name) = config
-        .resolve_jail_names(jail)
-        .ok_or_else(|| Error::JailNotFound(jail.to_string()))?;
+    let (service_name, full_name) = config.require_jail_names(jail)?;
 
     if crate::jail::jail_getid(&full_name).is_ok() {
         return Err(Error::JailOperation(format!(

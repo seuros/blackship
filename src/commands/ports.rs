@@ -100,9 +100,7 @@ pub fn list_ports(config_path: &Path, jail: Option<&str>) -> Result<Vec<PortForw
 
 pub fn handle_unexpose(config_path: &Path, verbose: bool, jail: &str) -> Result<()> {
     let config = manifest::load(config_path)?;
-    let (_service_name, full_name) = config
-        .resolve_jail_names(jail)
-        .ok_or_else(|| error::Error::JailNotFound(jail.to_string()))?;
+    let (_service_name, full_name) = config.require_jail_names(jail)?;
     let mut bridge = bridge::Bridge::open(config, verbose)?;
     bridge.remove_port_forwards(&full_name)?;
     println!("Removed all port forwards for jail '{full_name}'");

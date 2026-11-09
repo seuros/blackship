@@ -4,6 +4,7 @@ use crate::bridge::Bridge;
 use crate::cli::{
     ArmadaAction, Cli, Commands, NetworkAction, OutputFormat, ReleasesAction, SnapshotAction,
 };
+use crate::commands::lifecycle::Operation;
 use crate::error::{Error, Result};
 use crate::output::CliError;
 use crate::{commands, console, manifest};
@@ -92,6 +93,9 @@ impl AppContext {
 
     #[allow(clippy::too_many_lines)] // flat one-arm-per-subcommand dispatch table
     fn dispatch(self, command: Commands) -> Result<()> {
+        if self.format == OutputFormat::Json {
+            return self.dispatch_json(command);
+        }
         match command {
             Commands::Exec {
                 jail,
@@ -161,13 +165,7 @@ impl AppContext {
                 Ok(())
             }
 
-            Commands::Capabilities => {
-                if self.format == OutputFormat::Json {
-                    crate::output::print_success(&commands::capabilities::data()?)
-                } else {
-                    commands::capabilities::handle()
-                }
-            }
+            Commands::Capabilities => commands::capabilities::handle(),
 
             Commands::Init {
                 file,
@@ -177,12 +175,7 @@ impl AppContext {
             } => commands::build::handle_init(&file, release, toml, force),
 
             Commands::Armada { files, action } => {
-                if self.format == OutputFormat::Json && matches!(&action, ArmadaAction::Ps { .. }) {
-                    let status = commands::armada::ps_data(&files, self.verbose)?;
-                    crate::output::print_success(&status)
-                } else {
-                    commands::armada::handle(&self.config_path, self.verbose, &files, action)
-                }
+                commands::armada::handle(&self.config_path, self.verbose, &files, action)
             }
 
             Commands::Migrate {
@@ -199,12 +192,7 @@ impl AppContext {
             ),
 
             Commands::Stats { jail, json } => {
-                if self.format == OutputFormat::Json {
-                    let stats = commands::stats::data(&self.config_path, jail)?;
-                    crate::output::print_success(&stats)
-                } else {
-                    commands::stats::handle(&self.config_path, jail, json)
-                }
+                commands::stats::handle(&self.config_path, jail, json)
             }
 
             Commands::Logs {
@@ -232,24 +220,12 @@ impl AppContext {
             ),
 
             Commands::Releases { action, json } => {
-                if self.format == OutputFormat::Json
-                    && matches!(&action, None | Some(ReleasesAction::List))
-                {
-                    let releases = commands::bootstrap::releases_data(&self.config_path)?;
-                    crate::output::print_success(&releases)
-                } else {
-                    commands::bootstrap::handle_releases(&self.config_path, action, json)
-                }
+                commands::bootstrap::handle_releases(&self.config_path, action, json)
             }
 
             Commands::Network { action } => {
                 let config = self.load_config_if_present()?;
-                if self.format == OutputFormat::Json && matches!(&action, NetworkAction::List) {
-                    let networks = commands::network::list(config.as_ref())?;
-                    crate::output::print_success(&networks)
-                } else {
-                    commands::network::handle(config.as_ref(), action)
-                }
+                commands::network::handle(config.as_ref(), action)
             }
 
             Commands::Health {
@@ -257,14 +233,7 @@ impl AppContext {
                 watch,
                 interval,
                 json,
-            } => {
-                if self.format == OutputFormat::Json && !watch {
-                    let health = commands::health::data(&self.config_path, jail.as_deref())?;
-                    crate::output::print_success(&health)
-                } else {
-                    commands::health::handle(&self.config_path, jail, watch, interval, json)
-                }
-            }
+            } => commands::health::handle(&self.config_path, jail, watch, interval, json),
 
             Commands::Build {
                 file,
@@ -303,12 +272,7 @@ impl AppContext {
             ),
 
             Commands::Ports { jail } => {
-                if self.format == OutputFormat::Json {
-                    let forwards = commands::ports::list_ports(&self.config_path, jail.as_deref())?;
-                    crate::output::print_success(&forwards)
-                } else {
-                    commands::ports::handle_ports(&self.config_path, jail.as_deref())
-                }
+                commands::ports::handle_ports(&self.config_path, jail.as_deref())
             }
 
             Commands::Unexpose { jail } => {
@@ -332,12 +296,7 @@ impl AppContext {
                 commands::qos::handle_qos(&self.config_path, self.verbose, &jail, request)
             }
             Commands::Audit { jail, json } => {
-                if self.format == OutputFormat::Json {
-                    let audit = commands::audit::data(&self.config_path, &jail)?;
-                    crate::output::print_success(&audit)
-                } else {
-                    commands::audit::handle_audit(&self.config_path, &jail, json)
-                }
+                commands::audit::handle_audit(&self.config_path, &jail, json)
             }
             Commands::Gc {
                 jail,
@@ -384,15 +343,7 @@ impl AppContext {
             },
 
             Commands::Snapshot { action } => {
-                if self.format == OutputFormat::Json
-                    && let SnapshotAction::List { jail, .. } = &action
-                {
-                    let snapshots =
-                        commands::snapshot::snapshot_list_data(&self.config_path, jail)?;
-                    crate::output::print_success(&snapshots)
-                } else {
-                    commands::snapshot::handle_snapshot(&self.config_path, action)
-                }
+                commands::snapshot::handle_snapshot(&self.config_path, action)
             }
 
             Commands::Commit { jail, release } => {
@@ -404,66 +355,93 @@ impl AppContext {
             }
 
             Commands::Up { jail, all, dry_run } => {
-                let mut bridge = self.verbose_bridge()?;
-                if self.format == OutputFormat::Json && dry_run {
-                    let plan = commands::lifecycle::up_plan(&bridge, jail.as_deref(), all)?;
-                    crate::output::print_success(&plan)
-                } else {
-                    commands::lifecycle::handle_up(&mut bridge, jail.as_deref(), all, dry_run)
-                }
+                self.lifecycle(Operation::Up, jail.as_deref(), all, dry_run)
             }
-
             Commands::Down { jail, all, dry_run } => {
-                let mut bridge = self.verbose_bridge()?;
-                if self.format == OutputFormat::Json && dry_run {
-                    let plan = commands::lifecycle::down_plan(&bridge, jail.as_deref(), all)?;
-                    crate::output::print_success(&plan)
-                } else {
-                    commands::lifecycle::handle_down(&mut bridge, jail.as_deref(), all, dry_run)
-                }
+                self.lifecycle(Operation::Down, jail.as_deref(), all, dry_run)
             }
-
             Commands::Restart { jail, all, dry_run } => {
-                let mut bridge = self.verbose_bridge()?;
-                if self.format == OutputFormat::Json && dry_run {
-                    let plan = commands::lifecycle::restart_plan(&bridge, jail.as_deref(), all)?;
-                    crate::output::print_success(&plan)
-                } else {
-                    commands::lifecycle::handle_restart(&mut bridge, jail.as_deref(), all, dry_run)
-                }
+                self.lifecycle(Operation::Restart, jail.as_deref(), all, dry_run)
             }
-
             Commands::Eva { jail, all, dry_run } => {
-                let bridge = self.verbose_bridge()?;
-                if self.format == OutputFormat::Json && dry_run {
-                    let plan = commands::lifecycle::eva_plan(&bridge, jail.as_deref(), all)?;
-                    crate::output::print_success(&plan)
-                } else {
-                    commands::lifecycle::handle_eva(&bridge, jail.as_deref(), all, dry_run)
-                }
+                self.lifecycle(Operation::Eva, jail.as_deref(), all, dry_run)
             }
 
             Commands::Ps { json } => {
-                let bridge = self.verbose_bridge()?;
-                if self.format == OutputFormat::Json {
-                    crate::output::print_success(&bridge.ps_data())
-                } else {
-                    bridge.ps(json);
-                    Ok(())
-                }
+                self.verbose_bridge()?.ps(json);
+                Ok(())
             }
 
-            Commands::Check => {
-                let bridge = self.verbose_bridge()?;
-                if self.format == OutputFormat::Json {
-                    crate::output::print_success(&bridge.check_data()?)
-                } else {
-                    bridge.check()
-                }
-            }
+            Commands::Check => self.verbose_bridge()?.check(),
 
             Commands::Setup { enable_pf } => self.setup(enable_pf),
         }
+    }
+
+    /// The `--format json` surface, gated by `Commands::supports_machine_output`.
+    fn dispatch_json(&self, command: Commands) -> Result<()> {
+        use crate::output::print_success as emit;
+        let config = self.config_path.as_path();
+        match command {
+            Commands::Capabilities => emit(&commands::capabilities::data()?),
+            Commands::Ps { .. } => emit(&self.verbose_bridge()?.ps_data()),
+            Commands::Check => emit(&self.verbose_bridge()?.check_data()?),
+            Commands::Ports { jail } => {
+                emit(&commands::ports::list_ports(config, jail.as_deref())?)
+            }
+            Commands::Network {
+                action: NetworkAction::List,
+            } => emit(&commands::network::list(
+                self.load_config_if_present()?.as_ref(),
+            )?),
+            Commands::Stats { jail, .. } => emit(&commands::stats::data(config, jail)?),
+            Commands::Audit { jail, .. } => emit(&commands::audit::data(config, &jail)?),
+            Commands::Health {
+                jail, watch: false, ..
+            } => emit(&commands::health::data(config, jail.as_deref())?),
+            Commands::Releases {
+                action: None | Some(ReleasesAction::List),
+                ..
+            } => emit(&commands::bootstrap::releases_data(config)?),
+            Commands::Snapshot {
+                action: SnapshotAction::List { jail, .. },
+            } => emit(&commands::snapshot::snapshot_list_data(config, &jail)?),
+            Commands::Armada {
+                files,
+                action: ArmadaAction::Ps { .. },
+            } => emit(&commands::armada::ps_data(&files, self.verbose)?),
+            Commands::Up {
+                jail,
+                all,
+                dry_run: true,
+            } => self.emit_plan(Operation::Up, jail.as_deref(), all),
+            Commands::Down {
+                jail,
+                all,
+                dry_run: true,
+            } => self.emit_plan(Operation::Down, jail.as_deref(), all),
+            Commands::Restart {
+                jail,
+                all,
+                dry_run: true,
+            } => self.emit_plan(Operation::Restart, jail.as_deref(), all),
+            Commands::Eva {
+                jail,
+                all,
+                dry_run: true,
+            } => self.emit_plan(Operation::Eva, jail.as_deref(), all),
+            _ => Err(Error::UnsupportedOutputFormat),
+        }
+    }
+
+    fn emit_plan(&self, op: Operation, jail: Option<&str>, all: bool) -> Result<()> {
+        let bridge = self.verbose_bridge()?;
+        crate::output::print_success(&commands::lifecycle::plan(&bridge, op, jail, all)?)
+    }
+
+    fn lifecycle(&self, op: Operation, jail: Option<&str>, all: bool, dry_run: bool) -> Result<()> {
+        let mut bridge = self.verbose_bridge()?;
+        commands::lifecycle::handle(&mut bridge, op, jail, all, dry_run)
     }
 
     /// `blackship setup`: enable PF, recreate persisted networks, prepare the host.
@@ -569,7 +547,7 @@ fn maybe_escalate_to_root(
 
 const MDO: &str = "/usr/bin/mdo";
 
-fn should_escalate(requires_root: bool, euid: u32, no_escalate: bool) -> Result<bool> {
+const fn should_escalate(requires_root: bool, euid: u32, no_escalate: bool) -> Result<bool> {
     if !requires_root || euid == 0 {
         Ok(false)
     } else if no_escalate {
@@ -613,15 +591,11 @@ fn as_root_env(cmd: &mut ProcessCommand) {
 }
 
 fn find_escalator() -> Option<&'static str> {
-    find_escalator_with(|path| {
-        if !std::fs::metadata(path)
-            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        {
-            return false;
-        }
+    find_escalator_with(|path| is_executable(path) && (path != MDO || mdo_can_elevate(path)))
+}
 
-        path != MDO || mdo_can_elevate(path)
-    })
+pub fn is_executable(path: &str) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 fn mdo_can_elevate(path: &str) -> bool {
@@ -637,16 +611,15 @@ fn mdo_can_elevate(path: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn find_escalator_with(mut is_usable: impl FnMut(&str) -> bool) -> Option<&'static str> {
-    // Absolute paths: an earlier PATH entry could supply a fake escalator to steal creds.
-    // mdo is part of the FreeBSD base system and mac_do recognizes this canonical path.
-    const ESCALATORS: [&str; 4] = [
-        MDO,
-        "/usr/local/bin/doas",
-        "/usr/local/bin/sudo",
-        "/usr/bin/sudo",
-    ];
+/// Absolute paths, so an earlier PATH entry cannot supply a fake escalator.
+pub const ESCALATORS: [&str; 4] = [
+    MDO,
+    "/usr/local/bin/doas",
+    "/usr/local/bin/sudo",
+    "/usr/bin/sudo",
+];
 
+fn find_escalator_with(mut is_usable: impl FnMut(&str) -> bool) -> Option<&'static str> {
     ESCALATORS.into_iter().find(|path| is_usable(path))
 }
 

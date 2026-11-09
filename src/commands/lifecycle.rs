@@ -1,120 +1,95 @@
-//! Lifecycle commands: up, down, restart, ps, check, setup
+//! Lifecycle commands: up, down, restart, eva
 
-use crate::bridge;
+use serde::Serialize;
+
+use crate::bridge::{Bridge, PlanStep};
 use crate::error::{Error, Result};
 
-fn validate_selection(jail: Option<&str>, all: bool, operation: &str) -> Result<()> {
-    if jail.is_none() && !all {
-        return Err(Error::InvalidArgument(format!(
-            "specify a jail name or use --all to {operation} all jails"
-        )));
-    }
-    Ok(())
+/// A lifecycle command over one jail (with its dependencies) or all of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    Up,
+    Down,
+    Restart,
+    Eva,
 }
 
-fn plan_value(operation: &str, steps: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({
-        "operation": operation,
-        "dry_run": true,
-        "steps": steps,
+impl Operation {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::Restart => "restart",
+            Self::Eva => "eva",
+        }
+    }
+
+    const fn verb(self) -> &'static str {
+        match self {
+            Self::Up => "start",
+            Self::Down => "stop",
+            Self::Restart => "restart",
+            Self::Eva => "update",
+        }
+    }
+
+    fn check_selection(self, jail: Option<&str>, all: bool) -> Result<()> {
+        if jail.is_none() && !all {
+            return Err(Error::InvalidArgument(format!(
+                "specify a jail name or use --all to {} all jails",
+                self.verb()
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// The machine-readable answer to a `--dry-run`.
+#[derive(Debug, Serialize)]
+pub struct Plan {
+    operation: &'static str,
+    dry_run: bool,
+    steps: Vec<PlanStep>,
+}
+
+pub fn plan(bridge: &Bridge, op: Operation, jail: Option<&str>, all: bool) -> Result<Plan> {
+    op.check_selection(jail, all)?;
+    let steps = match op {
+        Operation::Up => bridge.start_steps(jail)?,
+        Operation::Down => bridge.stop_steps(jail)?,
+        Operation::Restart => {
+            let mut steps = bridge.stop_steps(jail)?;
+            steps.extend(bridge.start_steps(jail)?);
+            steps
+        }
+        Operation::Eva => bridge.eva_steps(jail)?,
+    };
+    Ok(Plan {
+        operation: op.name(),
+        dry_run: true,
+        steps,
     })
 }
 
-pub fn up_plan(
-    bridge: &bridge::Bridge,
-    jail: Option<&str>,
-    all: bool,
-) -> Result<serde_json::Value> {
-    validate_selection(jail, all, "start")?;
-    Ok(plan_value("up", bridge.up_plan_data(jail)?))
-}
-
-pub fn down_plan(
-    bridge: &bridge::Bridge,
-    jail: Option<&str>,
-    all: bool,
-) -> Result<serde_json::Value> {
-    validate_selection(jail, all, "stop")?;
-    Ok(plan_value("down", bridge.down_plan_data(jail)?))
-}
-
-pub fn restart_plan(
-    bridge: &bridge::Bridge,
-    jail: Option<&str>,
-    all: bool,
-) -> Result<serde_json::Value> {
-    validate_selection(jail, all, "restart")?;
-    let mut steps = bridge.down_plan_data(jail)?;
-    steps.extend(bridge.up_plan_data(jail)?);
-    Ok(plan_value("restart", steps))
-}
-
-pub fn eva_plan(
-    bridge: &bridge::Bridge,
-    jail: Option<&str>,
-    all: bool,
-) -> Result<serde_json::Value> {
-    validate_selection(jail, all, "update")?;
-    Ok(plan_value("eva", bridge.eva_plan_data(jail)?))
-}
-
-pub fn handle_up(
-    bridge: &mut bridge::Bridge,
+pub fn handle(
+    bridge: &mut Bridge,
+    op: Operation,
     jail: Option<&str>,
     all: bool,
     dry_run: bool,
 ) -> Result<()> {
-    validate_selection(jail, all, "start")?;
-    if dry_run {
-        bridge.up_dry_run(jail)?;
-    } else {
-        bridge.up(jail)?;
+    op.check_selection(jail, all)?;
+    match (op, dry_run) {
+        (Operation::Up, true) => bridge.up_dry_run(jail),
+        (Operation::Up, false) => bridge.up(jail),
+        (Operation::Down, true) => bridge.down_dry_run(jail),
+        (Operation::Down, false) => bridge.down(jail),
+        (Operation::Restart, true) => {
+            bridge.down_dry_run(jail)?;
+            bridge.up_dry_run(jail)
+        }
+        (Operation::Restart, false) => bridge.restart(jail),
+        (Operation::Eva, true) => bridge.eva_dry_run(jail),
+        (Operation::Eva, false) => bridge.eva(jail),
     }
-    Ok(())
-}
-
-pub fn handle_down(
-    bridge: &mut bridge::Bridge,
-    jail: Option<&str>,
-    all: bool,
-    dry_run: bool,
-) -> Result<()> {
-    validate_selection(jail, all, "stop")?;
-    if dry_run {
-        bridge.down_dry_run(jail)?;
-    } else {
-        bridge.down(jail)?;
-    }
-    Ok(())
-}
-
-pub fn handle_eva(
-    bridge: &bridge::Bridge,
-    jail: Option<&str>,
-    all: bool,
-    dry_run: bool,
-) -> Result<()> {
-    validate_selection(jail, all, "update")?;
-    if dry_run {
-        bridge.eva_dry_run(jail)?;
-    } else {
-        bridge.eva(jail)?;
-    }
-    Ok(())
-}
-
-pub fn handle_restart(
-    bridge: &mut bridge::Bridge,
-    jail: Option<&str>,
-    all: bool,
-    dry_run: bool,
-) -> Result<()> {
-    validate_selection(jail, all, "restart")?;
-    if dry_run {
-        bridge.down_dry_run(jail)?;
-        bridge.up_dry_run(jail)?;
-    } else {
-        bridge.restart(jail)?;
-    }
-    Ok(())
 }

@@ -2,13 +2,17 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 use crate::hooks::{HookContext, HookPhase, HookRunner};
 use crate::jail::{ParamValue, jail_getid, jail_update};
+use crate::manifest::JailDef;
+use crate::rctl::ResourceConfig;
 
 use super::Bridge;
 use super::lifecycle::build_jail_params;
+use super::plan::PlanStep;
 
 /// How a parameter behaves once the jail is running. `ip4.addr`/`ip6.addr`
 /// are kernel-updatable on non-vnet jails but stay immutable here: blackship
@@ -177,62 +181,102 @@ fn jls_json(full_name: &str, keys: &[&str]) -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
+/// Everything EVA needs to know about one running jail.
+struct EvaPlan<'a> {
+    jail_def: &'a JailDef,
+    full_name: String,
+    jid: i32,
+    path: PathBuf,
+    static_ip: Option<IpAddr>,
+    diff: EvaDiff,
+    unreadable: Vec<String>,
+    resources: &'a ResourceConfig,
+    rctl_rules: Vec<String>,
+    cpu_list: Option<String>,
+}
+
+impl EvaPlan<'_> {
+    fn is_noop(&self) -> bool {
+        self.diff.changes.is_empty() && !self.resources.has_rctl_rules() && self.cpu_list.is_none()
+    }
+
+    fn step(&self) -> PlanStep {
+        PlanStep::Update {
+            jail: self.full_name.clone(),
+            jid: self.jid,
+            parameter_changes: self.diff.display.clone(),
+            restart_required: self.diff.immutable_diffs.clone(),
+            unreadable_parameters: self.unreadable.clone(),
+            rctl_rules: if self.resources.has_rctl_rules() {
+                self.rctl_rules.clone()
+            } else {
+                Vec::new()
+            },
+            cpu_list: self.cpu_list.clone(),
+            no_changes: self.is_noop(),
+        }
+    }
+}
+
+enum EvaTarget<'a> {
+    Skip(PlanStep),
+    Ready(Box<EvaPlan<'a>>),
+}
+
 impl Bridge {
-    /// Build the machine-readable plan behind an `eva --dry-run` invocation.
-    pub(crate) fn eva_plan_data(&self, jail: Option<&str>) -> Result<Vec<serde_json::Value>> {
+    fn eva_target(&self, name: &str) -> Result<EvaTarget<'_>> {
+        let (service_name, full_name) = self.resolve_jail_names(name)?;
+        let skip = |reason| {
+            EvaTarget::Skip(PlanStep::Skip {
+                jail: full_name.clone(),
+                reason,
+            })
+        };
+        let Some(jail_def) = self.config.get_jail(&service_name) else {
+            return Ok(skip("not_configured"));
+        };
+        let Ok(jid) = jail_getid(&full_name) else {
+            return Ok(skip("not_running"));
+        };
+
+        let is_vnet = jail_def.network.as_ref().is_some_and(|n| n.vnet);
+        let static_ip = jail_def.network.as_ref().and_then(|n| n.ip);
+        let path = jail_def.effective_path(&self.config.config, &full_name);
+        let mut desired = build_jail_params(jail_def, &full_name, is_vnet, static_ip)?;
+        desired.insert(
+            crate::sys::consts::JAIL_PARAM_PATH.to_string(),
+            ParamValue::String(path.display().to_string()),
+        );
+        let keys: Vec<&str> = desired.keys().map(String::as_str).collect();
+        let (live, unreadable) = read_live_params(&full_name, &keys);
+        let diff = diff_params(&desired, &live, &unreadable);
+
+        let resources = self.effective_resources(&full_name, jail_def);
+        let cpu_list =
+            crate::rctl::resolve_cpu_list(resources, self.other_cpuset_pins(&service_name));
+        Ok(EvaTarget::Ready(Box::new(EvaPlan {
+            jail_def,
+            rctl_rules: resources.to_rules(&full_name),
+            full_name,
+            jid,
+            path,
+            static_ip,
+            diff,
+            unreadable,
+            resources,
+            cpu_list,
+        })))
+    }
+
+    /// What `eva` would do, per target jail.
+    pub(crate) fn eva_steps(&self, jail: Option<&str>) -> Result<Vec<PlanStep>> {
         self.jails_for_up(jail)?
             .iter()
             .map(|name| {
-                let (service_name, full_name) = self.resolve_jail_names(name)?;
-                let Some(jail_def) = self.config.get_jail(&service_name) else {
-                    return Ok(serde_json::json!({
-                        "action": "skip",
-                        "jail": full_name,
-                        "reason": "not_configured"
-                    }));
-                };
-
-                let Ok(jid) = jail_getid(&full_name) else {
-                    return Ok(serde_json::json!({
-                        "action": "skip",
-                        "jail": full_name,
-                        "reason": "not_running"
-                    }));
-                };
-
-                let is_vnet = jail_def
-                    .network
-                    .as_ref()
-                    .is_some_and(|network| network.vnet);
-                let static_ip = jail_def.network.as_ref().and_then(|network| network.ip);
-                let path = jail_def.effective_path(&self.config.config, &full_name);
-                let mut desired = build_jail_params(jail_def, &full_name, is_vnet, static_ip)?;
-                desired.insert(
-                    crate::sys::consts::JAIL_PARAM_PATH.to_string(),
-                    ParamValue::String(path.display().to_string()),
-                );
-
-                let keys: Vec<&str> = desired.keys().map(String::as_str).collect();
-                let (live, unreadable) = read_live_params(&full_name, &keys);
-                let diff = diff_params(&desired, &live, &unreadable);
-                let resources = self.effective_resources(&full_name, jail_def);
-                let rctl_rules = resources.to_rules(&full_name);
-                let cpu_list =
-                    crate::rctl::resolve_cpu_list(resources, self.other_cpuset_pins(&service_name));
-                let no_changes =
-                    diff.changes.is_empty() && !resources.has_rctl_rules() && cpu_list.is_none();
-
-                Ok(serde_json::json!({
-                    "action": "update",
-                    "jail": full_name,
-                    "jid": jid,
-                    "parameter_changes": diff.display,
-                    "restart_required": diff.immutable_diffs,
-                    "unreadable_parameters": unreadable,
-                    "rctl_rules": rctl_rules,
-                    "cpu_list": cpu_list,
-                    "no_changes": no_changes,
-                }))
+                Ok(match self.eva_target(name)? {
+                    EvaTarget::Skip(step) => step,
+                    EvaTarget::Ready(plan) => plan.step(),
+                })
             })
             .collect()
     }
@@ -249,16 +293,22 @@ impl Bridge {
     }
 
     fn eva_inner(&self, jail: Option<&str>, dry_run: bool) -> Result<()> {
-        let targets = self.jails_for_up(jail)?;
-        let mut failures: Vec<(String, Error)> = Vec::new();
-
-        for name in &targets {
-            match self.eva_jail(name, dry_run) {
-                Ok(()) => {}
-                Err(e) => {
-                    eprintln!("EVA failed for '{name}': {e}");
-                    failures.push((name.clone(), e));
+        let mut failures = Vec::new();
+        for name in self.jails_for_up(jail)? {
+            let outcome = self.eva_target(&name).and_then(|target| match target {
+                EvaTarget::Skip(step) => {
+                    step.print();
+                    Ok(())
                 }
+                EvaTarget::Ready(plan) if dry_run => {
+                    plan.step().print();
+                    Ok(())
+                }
+                EvaTarget::Ready(plan) => self.apply_eva(&plan),
+            });
+            if let Err(e) = outcome {
+                eprintln!("EVA failed for '{name}': {e}");
+                failures.push(name);
             }
         }
 
@@ -268,75 +318,23 @@ impl Bridge {
             Err(Error::JailOperation(format!(
                 "EVA failed for {} jail(s): {}",
                 failures.len(),
-                failures
-                    .iter()
-                    .map(|(n, _)| n.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                failures.join(", ")
             )))
         }
     }
 
-    fn eva_jail(&self, name: &str, dry_run: bool) -> Result<()> {
-        let (service_name, full_name) = self.resolve_jail_names(name)?;
-        let Some(jail_def) = self.config.get_jail(&service_name) else {
-            return Ok(());
-        };
-
-        let Ok(jid) = jail_getid(&full_name) else {
-            println!("  [SKIP] {full_name} (not running)");
-            return Ok(());
-        };
-
-        let is_vnet = jail_def.network.as_ref().is_some_and(|n| n.vnet);
-        let static_ip: Option<IpAddr> = jail_def.network.as_ref().and_then(|n| n.ip);
-
-        let path = jail_def.effective_path(&self.config.config, &full_name);
-        let mut desired = build_jail_params(jail_def, &full_name, is_vnet, static_ip)?;
-        desired.insert(
-            crate::sys::consts::JAIL_PARAM_PATH.to_string(),
-            ParamValue::String(path.display().to_string()),
-        );
-
-        let keys: Vec<&str> = desired.keys().map(String::as_str).collect();
-        let (live, unreadable) = read_live_params(&full_name, &keys);
-        let diff = diff_params(&desired, &live, &unreadable);
-
-        let resources = self.effective_resources(&full_name, jail_def);
-        let rctl_rules = resources.to_rules(&full_name);
-        let cpu_list =
-            crate::rctl::resolve_cpu_list(resources, self.other_cpuset_pins(&service_name));
-
-        if dry_run {
-            println!("  [EVA] {full_name} (JID {jid})");
-            for line in &diff.display {
-                println!("          {line}");
-            }
-            for line in &diff.immutable_diffs {
-                println!("        ! {line} (requires restart)");
-            }
-            for key in &unreadable {
-                println!("          {key}: not reported by jls, would apply blind");
-            }
-            if resources.has_rctl_rules() {
-                println!("          rctl: replace with {} rule(s):", rctl_rules.len());
-                for rule in &rctl_rules {
-                    println!("            {rule}");
-                }
-            }
-            if let Some(ref list) = cpu_list {
-                println!("          cpuset: pin to CPUs {list}");
-            }
-            if diff.changes.is_empty() && !resources.has_rctl_rules() && cpu_list.is_none() {
-                println!("          (no changes)");
-            }
-            println!();
-            return Ok(());
-        }
-
-        let hook_runner = HookRunner::new(jail_def.hooks.clone()).verbose(self.verbose);
-        let mut hook_context = HookContext::new(&full_name, &path).with_jid(jid);
-        if let Some(ip) = static_ip {
+    fn apply_eva(&self, plan: &EvaPlan<'_>) -> Result<()> {
+        let EvaPlan {
+            full_name,
+            jid,
+            diff,
+            resources,
+            cpu_list,
+            ..
+        } = plan;
+        let hook_runner = HookRunner::new(plan.jail_def.hooks.clone()).verbose(self.verbose);
+        let mut hook_context = HookContext::new(full_name, &plan.path).with_jid(*jid);
+        if let Some(ip) = plan.static_ip {
             hook_context = hook_context.with_ip(ip.to_string());
         }
 
@@ -347,23 +345,23 @@ impl Bridge {
         }
 
         if !diff.changes.is_empty() {
-            jail_update(jid, &diff.changes)?;
+            jail_update(*jid, &diff.changes)?;
             for line in &diff.display {
                 println!("  {full_name}: {line}");
             }
         }
 
-        crate::rctl::remove_limits(&full_name);
+        crate::rctl::remove_limits(full_name);
         if resources.has_rctl_rules()
-            && let Err(e) = crate::rctl::apply_limits(&full_name, resources)
+            && let Err(e) = crate::rctl::apply_limits(full_name, resources)
         {
             eprintln!(
                 "Warning: rctl limits partially applied for '{full_name}': {e} -- re-run eva or restart"
             );
         }
 
-        if let Some(ref list) = cpu_list {
-            match crate::rctl::apply_cpuset(jid, list) {
+        if let Some(list) = cpu_list {
+            match crate::rctl::apply_cpuset(*jid, list) {
                 Ok(()) => println!("  {full_name}: pinned to CPUs {list}"),
                 Err(e) => eprintln!(
                     "Warning: cpuset re-pin failed for '{full_name}': {e} -- re-run eva or restart"
@@ -373,16 +371,14 @@ impl Bridge {
 
         hook_runner.execute_phase(HookPhase::PostEva, &hook_context)?;
 
-        if diff.changes.is_empty() && !resources.has_rctl_rules() && cpu_list.is_none() {
+        if plan.is_noop() {
             println!("  [OK] {full_name} (no changes)");
         } else {
             println!(
-                "  [OK] {} ({} param(s) updated)",
-                full_name,
+                "  [OK] {full_name} ({} param(s) updated)",
                 diff.changes.len()
             );
         }
-
         Ok(())
     }
 }

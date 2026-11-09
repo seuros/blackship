@@ -1,9 +1,8 @@
 //! Runtime capability discovery for CLI clients.
 
-use std::os::unix::fs::PermissionsExt;
-
 use serde::Serialize;
 
+use crate::app::{ESCALATORS, is_executable};
 use crate::error::Result;
 use crate::output::SCHEMA_VERSION;
 use crate::sys::OsVersion;
@@ -19,6 +18,7 @@ pub struct CapabilityReport {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(clippy::struct_excessive_bools, reason = "one flag per capability")]
 pub struct PlatformCapabilities {
     pub os: &'static str,
     pub arch: &'static str,
@@ -30,6 +30,7 @@ pub struct PlatformCapabilities {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(clippy::struct_excessive_bools, reason = "one flag per capability")]
 pub struct BuildFeatures {
     pub cli: bool,
     pub mcp: bool,
@@ -52,27 +53,12 @@ const FACILITIES: [(&str, &str); 5] = [
     ("zfs", "/sbin/zfs"),
 ];
 
-const ESCALATORS: [(&str, &str); 4] = [
-    ("mdo", "/usr/bin/mdo"),
-    ("doas", "/usr/local/bin/doas"),
-    ("sudo", "/usr/local/bin/sudo"),
-    ("sudo", "/usr/bin/sudo"),
-];
-
-fn is_executable(path: &str) -> bool {
-    std::fs::metadata(path)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
-fn facilities(entries: &'static [(&'static str, &'static str)]) -> Vec<Facility> {
-    entries
-        .iter()
-        .map(|(name, path)| Facility {
-            name,
-            path,
-            available: is_executable(path),
-        })
-        .collect()
+fn facility(name: &'static str, path: &'static str) -> Facility {
+    Facility {
+        name,
+        path,
+        available: is_executable(path),
+    }
 }
 
 /// Inspect the binary and host without requiring a manifest or root access.
@@ -96,8 +82,14 @@ pub fn data() -> Result<CapabilityReport> {
             telemetry: cfg!(feature = "telemetry"),
             inspect: cfg!(feature = "inspect"),
         },
-        facilities: facilities(&FACILITIES),
-        privilege_escalators: facilities(&ESCALATORS),
+        facilities: FACILITIES
+            .into_iter()
+            .map(|(name, path)| facility(name, path))
+            .collect(),
+        privilege_escalators: ESCALATORS
+            .into_iter()
+            .map(|path| facility(path.rsplit('/').next().unwrap_or(path), path))
+            .collect(),
     })
 }
 
@@ -139,17 +131,4 @@ pub fn handle() -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn report_is_manifestless_and_machine_serializable() {
-        let report = data().unwrap();
-        let value = serde_json::to_value(report).unwrap();
-
-        assert_eq!(value["output_schema_version"], SCHEMA_VERSION);
-        assert_eq!(value["platform"]["os"], "freebsd");
-        assert!(value["facilities"].is_array());
-        assert!(value["privilege_escalators"].is_array());
-    }
-}
+mod tests;
