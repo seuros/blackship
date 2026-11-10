@@ -112,6 +112,9 @@ pub enum Commands {
     /// Validate configuration
     Check,
 
+    /// Report the host planning profile as JSON
+    Host,
+
     /// System setup (PF firewall anchor, etc.)
     Setup {
         /// Enable PF if it is not running: write a minimal /etc/pf.conf
@@ -791,6 +794,7 @@ impl Commands {
         match self {
             Self::Ps { .. }
             | Self::Check
+            | Self::Host
             | Self::Capabilities
             | Self::Ports { .. }
             | Self::Stats { .. }
@@ -855,6 +859,7 @@ impl Commands {
             Self::Snapshot { action } => action.requires_root(),
             Self::Ps { .. }
             | Self::Check
+            | Self::Host
             | Self::Capabilities
             | Self::Init { .. }
             | Self::Template { .. }

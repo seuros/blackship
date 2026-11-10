@@ -42,6 +42,7 @@ order. \\
 \command{check} & Validate and resolve configuration; warn on releases not bootstrapped. \\
 \command{capabilities} & Report binary, kernel, feature, facility, and escalator
 capabilities. \\
+\command{host} & Report the comprehensive host planning profile as JSON. \\
 \command{setup [--enable-pf]} & Recreate networks/anchors and prepare the host;
 optionally configure and start PF. \\
 \command{cleanup <jail> [--force]} & Remove resources after a failed lifecycle. \\
@@ -163,7 +164,8 @@ Stable error codes are for program logic; messages are diagnostic. Commands
 without a complete contract return \command{unsupported\_output\_format} rather
 than mixing prose into JSON.
 
-Read-only coverage includes status, validation, capabilities, networks, ports,
+Read-only coverage includes status, validation, capabilities, the host planning
+profile, networks, ports,
 release listing, stats, one-shot health, audit, snapshot listing, and Armada
 status. Lifecycle JSON is restricted to \command{--dry-run}. Streaming watch or
 follow modes cannot fit a single response envelope.

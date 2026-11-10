@@ -38,6 +38,7 @@ fn test_escalation_controls_parse_globally() {
 #[test]
 fn test_machine_output_support_is_explicit() {
     assert!(Commands::Check.supports_machine_output());
+    assert!(Commands::Host.supports_machine_output());
     assert!(Commands::Capabilities.supports_machine_output());
     assert!(
         Commands::Network {
@@ -158,6 +159,11 @@ fn test_network_list_does_not_require_root() {
     };
 
     assert!(!command.requires_root());
+}
+
+#[test]
+fn test_host_does_not_require_root() {
+    assert!(!Commands::Host.requires_root());
 }
 
 #[test]

@@ -333,6 +333,7 @@ commands most useful to management UIs:
 blackship --format json ps
 blackship --format json check
 blackship --format json capabilities
+blackship --format json host
 blackship --format json network list
 blackship --format json ports
 blackship --format json ports web
@@ -386,6 +387,13 @@ compatibility.
 report lets clients discover the Blackship version, output schema, compiled
 features, FreeBSD kernel capabilities, host facilities, and installed privilege
 escalators before enabling UI actions.
+
+`blackship host` returns the same best-effort planning profile as the
+`blackship:///host` MCP resource: kernel and facility capabilities, CPU and
+memory capacity and claims, ZFS pools, releases, networks and available
+addresses, PF state, manifest jails, and unmanaged running jails. Probes that
+cannot run unprivileged report null or a local error instead of failing the
+whole profile.
 
 Lifecycle commands support the global JSON format in dry-run mode. Their
 `data` object contains the requested operation and its ordered steps, allowing
@@ -521,6 +529,7 @@ cannot read a VNET address or the kernel's rctl rules and lists them as
 | `blackship ps [--json]` | List jail status |
 | `blackship check` | Validate configuration; warn on jail releases not bootstrapped |
 | `blackship capabilities` | Report binary and host capabilities |
+| `blackship host` | Report the comprehensive host planning profile as JSON |
 | `blackship setup [--enable-pf]` | Reapply networks and PF anchors; --enable-pf turns PF on |
 | `blackship cleanup <jail> [--force]` | Clean up failed jail resources |
 | `blackship init [-f file] [--release] [--toml]` | Create a new Jailfile |
