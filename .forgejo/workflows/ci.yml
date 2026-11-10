@@ -3,7 +3,7 @@ on: [push]
 
 jobs:
   test:
-    runs-on: [kim, freebsd]
+    runs-on: kim-freebsd
     steps:
       - uses: actions/checkout@v7
 
