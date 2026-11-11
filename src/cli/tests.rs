@@ -7,9 +7,22 @@ fn test_json_output_format_parses_globally() {
     let cli = Cli::parse_from(&argv).unwrap();
 
     assert_eq!(cli.format, OutputFormat::Json);
-    let Commands::Ps { json } = cli.command else {
+    let Commands::Ps { host, json } = cli.command else {
         panic!("expected ps");
     };
+    assert!(!host);
+    assert!(!json);
+}
+
+#[test]
+fn test_ps_host_parses() {
+    let argv = [OsStr::new("ps"), OsStr::new("--host")];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    let Commands::Ps { host, json } = cli.command else {
+        panic!("expected ps");
+    };
+    assert!(host);
     assert!(!json);
 }
 

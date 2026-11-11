@@ -331,6 +331,7 @@ commands most useful to management UIs:
 
 ```sh
 blackship --format json ps
+blackship --format json ps --host
 blackship --format json check
 blackship --format json capabilities
 blackship --format json host
@@ -394,6 +395,12 @@ memory capacity and claims, ZFS pools, releases, networks and available
 addresses, PF state, manifest jails, and unmanaged running jails. Probes that
 cannot run unprivileged report null or a local error instead of failing the
 whole profile.
+
+`blackship ps --host` adds running jails outside the selected manifest to the
+configured Blackship inventory. Its result identifies each row's manager and
+ownership, includes the selected project and config path, and keeps unknown
+metadata null for unmanaged jails. Stopped unmanaged jails cannot be discovered
+without a known manifest and are therefore not reported.
 
 Lifecycle commands support the global JSON format in dry-run mode. Their
 `data` object contains the requested operation and its ordered steps, allowing
@@ -526,7 +533,7 @@ cannot read a VNET address or the kernel's rctl rules and lists them as
 
 | Command | Description |
 |---------|-------------|
-| `blackship ps [--json]` | List jail status |
+| `blackship ps [--host] [--json]` | List manifest jail status; `--host` also includes other running host jails |
 | `blackship check` | Validate configuration; warn on jail releases not bootstrapped |
 | `blackship capabilities` | Report binary and host capabilities |
 | `blackship host` | Report the comprehensive host planning profile as JSON |

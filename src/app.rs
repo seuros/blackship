@@ -369,8 +369,13 @@ impl AppContext {
                 self.lifecycle(Operation::Eva, jail.as_deref(), all, dry_run)
             }
 
-            Commands::Ps { json } => {
-                self.verbose_bridge()?.ps(json);
+            Commands::Ps { host, json } => {
+                let bridge = self.verbose_bridge()?;
+                if host {
+                    bridge.ps_host(&self.config_path, json);
+                } else {
+                    bridge.ps(json);
+                }
                 Ok(())
             }
 
@@ -392,7 +397,10 @@ impl AppContext {
         match command {
             Commands::Capabilities => emit(&commands::capabilities::data()?),
             Commands::Host => emit(&commands::host::data(config)),
-            Commands::Ps { .. } => emit(&self.verbose_bridge()?.ps_data()),
+            Commands::Ps { host: true, .. } => {
+                emit(&self.verbose_bridge()?.inventory_data(&self.config_path))
+            }
+            Commands::Ps { host: false, .. } => emit(&self.verbose_bridge()?.ps_data()),
             Commands::Check => emit(&self.verbose_bridge()?.check_data()?),
             Commands::Ports { jail } => {
                 emit(&commands::ports::list_ports(config, jail.as_deref())?)

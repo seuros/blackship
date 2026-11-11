@@ -3,6 +3,8 @@
 use crate::error::Result;
 use crate::jail::jail_getid;
 use serde::Serialize;
+use std::collections::BTreeSet;
+use std::path::Path;
 
 use super::Bridge;
 
@@ -17,6 +19,34 @@ pub struct JailStatus {
     pub ip: Option<String>,
     pub ips: Vec<String>,
     pub path: String,
+}
+
+/// Host inventory for one manifest plus running jails it does not manage.
+#[derive(Debug, Serialize)]
+pub struct InventoryReport {
+    pub project: String,
+    pub config_path: String,
+    pub jails: Vec<InventoryJail>,
+}
+
+/// One jail in the host inventory.
+#[derive(Debug, Serialize)]
+pub struct InventoryJail {
+    pub service_name: Option<String>,
+    pub full_name: String,
+    pub manager: &'static str,
+    pub managed: bool,
+    pub configured: bool,
+    pub running: bool,
+    pub state: String,
+    pub jid: Option<i32>,
+    pub release: Option<String>,
+    pub hostname: Option<String>,
+    pub ip: Option<String>,
+    pub ips: Vec<String>,
+    pub path: Option<String>,
+    pub networks: Vec<String>,
+    pub depends_on: Vec<String>,
 }
 
 /// Result of validating the manifest and resolving its jail paths.
@@ -61,6 +91,31 @@ impl Bridge {
         for jail in jails {
             let jid = jail.jid.map(|j| j.to_string()).unwrap_or_default();
             println!("{:<20} {:<10} {jid:<10}", jail.name, jail.state);
+        }
+    }
+
+    /// Print configured Blackship jails and every other running host jail.
+    pub fn ps_host(&self, config_path: &Path, json: bool) {
+        let report = self.inventory_data(config_path);
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("InventoryReport always serializes")
+            );
+            return;
+        }
+
+        println!(
+            "{:<24} {:<12} {:<10} {:<10}",
+            "NAME", "MANAGER", "STATE", "JID"
+        );
+        println!("{}", "-".repeat(60));
+        for jail in report.jails {
+            let jid = jail.jid.map(|j| j.to_string()).unwrap_or_default();
+            println!(
+                "{:<24} {:<12} {:<10} {jid:<10}",
+                jail.full_name, jail.manager, jail.state
+            );
         }
     }
 
@@ -126,6 +181,77 @@ impl Bridge {
                 }
             })
             .collect()
+    }
+
+    /// Return manifest-owned jails and running jails outside that manifest.
+    ///
+    /// Stopped unmanaged jails are intentionally absent: without a known
+    /// manifest there is no authoritative host-wide registry for them.
+    pub fn inventory_data(&self, config_path: &Path) -> InventoryReport {
+        let statuses = self.ps_data();
+        let managed_names: BTreeSet<String> = self
+            .config
+            .jails
+            .iter()
+            .map(|jail| self.config.jail_name(&jail.name))
+            .collect();
+
+        let mut jails = self
+            .config
+            .jails
+            .iter()
+            .zip(statuses)
+            .map(|(definition, status)| InventoryJail {
+                service_name: Some(definition.name.clone()),
+                full_name: status.name,
+                manager: "blackship",
+                managed: true,
+                configured: true,
+                running: status.running,
+                state: status.state,
+                jid: status.jid,
+                release: definition.release.clone(),
+                hostname: status.hostname,
+                ip: status.ip,
+                ips: status.ips,
+                path: Some(status.path),
+                networks: definition
+                    .network
+                    .as_ref()
+                    .map_or_else(Vec::new, |network| network.networks.clone()),
+                depends_on: definition.depends_on.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        jails.extend(crate::jail::RunningJails::new().filter_map(|jid| {
+            let name = crate::jail::jail_getname(jid).ok()?;
+            if managed_names.contains(&name) {
+                return None;
+            }
+            Some(InventoryJail {
+                service_name: None,
+                full_name: name,
+                manager: "native",
+                managed: false,
+                configured: false,
+                running: true,
+                state: "Running".to_string(),
+                jid: Some(jid),
+                release: None,
+                hostname: None,
+                ip: None,
+                ips: Vec::new(),
+                path: None,
+                networks: Vec::new(),
+                depends_on: Vec::new(),
+            })
+        }));
+
+        InventoryReport {
+            project: self.config.config.project_name().to_string(),
+            config_path: config_path.display().to_string(),
+            jails,
+        }
     }
 
     /// Validate configuration
