@@ -38,7 +38,8 @@ dependencies. \\
 order. \\
 \command{restart [target] [--all] [--dry-run]} & Compose stop and start plans. \\
 \command{eva [target] [--all] [--dry-run]} & Apply live-safe manifest drift. \\
-\command{ps [--json]} & List configured jail state and JID. \\
+\command{ps [--host] [--json]} & List configured jail state and JID. With
+\command{--host}, also include running jails outside the selected manifest. \\
 \command{check} & Validate and resolve configuration; warn on releases not bootstrapped. \\
 \command{capabilities} & Report binary, kernel, feature, facility, and escalator
 capabilities. \\
@@ -169,6 +170,11 @@ profile, networks, ports,
 release listing, stats, one-shot health, audit, snapshot listing, and Armada
 status. Lifecycle JSON is restricted to \command{--dry-run}. Streaming watch or
 follow modes cannot fit a single response envelope.
+
+\command{ps --host} returns the selected project and config path plus ownership
+metadata for each row. It includes every manifest jail and running unmanaged
+jails. Stopped unmanaged jails are not discoverable without a known manifest
+and are omitted.
 
 Legacy command-local \command{--json} flags remain unenveloped for compatibility.
 New clients should prefer the global format and check

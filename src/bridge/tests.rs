@@ -1,5 +1,6 @@
 use super::Bridge;
 use crate::manifest::BlackshipConfig;
+use std::path::Path;
 
 fn test_config() -> BlackshipConfig {
     toml::from_str(
@@ -99,6 +100,32 @@ name = "app"
     .unwrap();
 
     assert!(Bridge::new(config).is_ok());
+}
+
+#[test]
+fn test_inventory_identifies_manifest_owned_jails() {
+    let bridge = Bridge::new(test_config()).unwrap();
+    let inventory = serde_json::to_value(
+        bridge.inventory_data(Path::new("/usr/local/etc/blackship/blackship.toml")),
+    )
+    .unwrap();
+    let database = inventory["jails"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|jail| jail["service_name"] == "database")
+        .unwrap();
+
+    assert_eq!(inventory["project"], "blackship");
+    assert_eq!(
+        inventory["config_path"],
+        "/usr/local/etc/blackship/blackship.toml"
+    );
+    assert_eq!(database["full_name"], "blackship-database");
+    assert_eq!(database["manager"], "blackship");
+    assert_eq!(database["managed"], true);
+    assert_eq!(database["configured"], true);
+    assert_eq!(database["depends_on"], serde_json::json!([]));
 }
 
 fn cascade_config(policy: &str) -> BlackshipConfig {

@@ -104,6 +104,10 @@ pub enum Commands {
 
     /// List jail status
     Ps {
+        /// Include running jails not managed by the selected manifest
+        #[usage(long)]
+        host: bool,
+
         /// Output in JSON format
         #[usage(long)]
         json: bool,
