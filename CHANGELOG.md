@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/seuros/blackship/compare/blackship-v0.4.0...blackship-v0.4.1) (2026-11-11)
+
+
+### Features
+
+* **cli:** add host-wide ps inventory ([#30](https://github.com/seuros/blackship/issues/30)) ([7c2eaae](https://github.com/seuros/blackship/commit/7c2eaae83ba6032bb51a7882ef6f720ac0681007))
+* **cli:** expose the host planning profile ([#31](https://github.com/seuros/blackship/issues/31)) ([6541d3b](https://github.com/seuros/blackship/commit/6541d3b896e8b6c5bc4938e718b0309b5f4eb784))
+
 ## [0.4.0](https://github.com/seuros/blackship/compare/blackship-v0.3.1...blackship-v0.4.0) (2026-11-09)
 
 
