@@ -14,7 +14,6 @@ use crate::error;
 use crate::error::Result;
 
 mod elicit;
-mod host_profile;
 mod prompts;
 mod resources;
 mod tools;

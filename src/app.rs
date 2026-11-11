@@ -376,6 +376,11 @@ impl AppContext {
 
             Commands::Check => self.verbose_bridge()?.check(),
 
+            Commands::Host => {
+                commands::host::handle(&self.config_path);
+                Ok(())
+            }
+
             Commands::Setup { enable_pf } => self.setup(enable_pf),
         }
     }
@@ -386,6 +391,7 @@ impl AppContext {
         let config = self.config_path.as_path();
         match command {
             Commands::Capabilities => emit(&commands::capabilities::data()?),
+            Commands::Host => emit(&commands::host::data(config)),
             Commands::Ps { .. } => emit(&self.verbose_bridge()?.ps_data()),
             Commands::Check => emit(&self.verbose_bridge()?.check_data()?),
             Commands::Ports { jail } => {

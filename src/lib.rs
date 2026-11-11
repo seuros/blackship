@@ -62,6 +62,8 @@ mod export;
 mod gc;
 mod hooks;
 mod host;
+#[cfg(feature = "cli")]
+mod host_profile;
 mod image;
 mod jail;
 mod manifest;

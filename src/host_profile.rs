@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use crate::manifest::BlackshipConfig;
 
 /// The full host profile, as JSON.
-pub(super) fn collect(config_path: &Path) -> Value {
+pub(crate) fn collect(config_path: &Path) -> Value {
     let config = crate::manifest::load_or_default(config_path);
     let config_error = config.as_ref().err().map(ToString::to_string);
     let config = config.ok();

@@ -17,7 +17,7 @@ impl McpState {
         description = "Live host profile: FreeBSD version and kernel features, CPU, memory and jail claims, ZFS capacity, networks and free addresses, PF and NAT egress, releases, jails, host tools."
     )]
     async fn host(&self, _ctx: Ctx<'_>) -> ResourceResult {
-        let profile = serde_json::to_string(&super::super::host_profile::collect(&self.config_path))
+        let profile = serde_json::to_string(&crate::host_profile::collect(&self.config_path))
             .map_err(|e| ResourceError::Internal(format!("Failed to serialize host profile: {e}")))?;
         Ok(vec![text_resource_with_mime(URI, profile, "application/json")])
     }

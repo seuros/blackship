@@ -11,6 +11,7 @@ pub mod container;
 pub mod foreign;
 pub mod gc;
 pub mod health;
+pub mod host;
 pub mod lifecycle;
 pub mod logs;
 #[cfg(feature = "mcp")]
