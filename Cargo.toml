@@ -10,7 +10,14 @@ repository = "https://github.com/seuros/blackship"
 readme = "README.md"
 keywords = ["freebsd", "jail", "manager", "state-machine"]
 categories = ["command-line-utilities", "os::freebsd-apis"]
-exclude = ["**/tests.rs"]
+include = [
+    "/src/**",
+    "!**/tests.rs",
+    "/build.rs",
+    "/build/**",
+    "/README.md",
+    "/LICENSE",
+]
 
 [lib]
 path = "src/lib.rs"
