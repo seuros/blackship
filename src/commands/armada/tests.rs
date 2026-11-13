@@ -34,3 +34,16 @@ depends_on = ["db"]
     assert_eq!(value["jails"][1]["name"], "web");
     assert_eq!(value["jails"][1]["depends_on"][0], "db");
 }
+
+#[test]
+fn build_flags_map_to_one_mode_and_one_json_name() {
+    assert!(matches!(build_mode(false, true), (None, "none")));
+    assert!(matches!(
+        build_mode(true, false),
+        (Some(BuildMode::Force), "force")
+    ));
+    assert!(matches!(
+        build_mode(false, false),
+        (Some(BuildMode::IfMissing), "if_missing")
+    ));
+}

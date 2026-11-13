@@ -27,13 +27,7 @@ pub fn handle(
             no_build,
             dry_run,
         } => {
-            let mode = if no_build {
-                None
-            } else if build {
-                Some(BuildMode::Force)
-            } else {
-                Some(BuildMode::IfMissing)
-            };
+            let (mode, _) = build_mode(build, no_build);
             up(files, verbose, &jails, mode, dry_run, detach)
         }
 
@@ -43,13 +37,7 @@ pub fn handle(
             let config = manifest::load_merged(files)?;
 
             let jails_to_build = select_jails(&config, &jails)?;
-
-            if dry_run {
-                println!("=== DRY RUN - No changes will be made ===\n");
-            }
-
-            build_jails(&config, &jails_to_build, BuildMode::Force, dry_run, verbose)?;
-            Ok(())
+            force_build(&config, &jails_to_build, dry_run, verbose)
         }
 
         ArmadaAction::Ps { json } => {
@@ -180,13 +168,7 @@ pub fn action_data(verbose: bool, files: &[PathBuf], action: ArmadaAction) -> Re
         } => {
             let config = manifest::load_merged(files)?;
             let selected = selected_jail_names(&config, &jails)?;
-            let (mode, build_name) = if no_build {
-                (None, "none")
-            } else if build {
-                (Some(BuildMode::Force), "force")
-            } else {
-                (Some(BuildMode::IfMissing), "if_missing")
-            };
+            let (mode, build_name) = build_mode(build, no_build);
             let ((), messages) =
                 capture_stdout(|| up(files, verbose, &jails, mode, dry_run, detach))?;
             Ok(ActionReport::Up {
@@ -216,12 +198,8 @@ pub fn action_data(verbose: bool, files: &[PathBuf], action: ArmadaAction) -> Re
                 .iter()
                 .map(|jail| config.jail_name(&jail.name))
                 .collect();
-            let ((), messages) = capture_stdout(|| {
-                if dry_run {
-                    println!("=== DRY RUN - No changes will be made ===\n");
-                }
-                build_jails(&config, &selected, BuildMode::Force, dry_run, verbose)
-            })?;
+            let ((), messages) =
+                capture_stdout(|| force_build(&config, &selected, dry_run, verbose))?;
             Ok(ActionReport::Build {
                 files: file_names,
                 jails: selected_names,
@@ -410,6 +388,30 @@ fn config(files: &[PathBuf], show: bool) -> Result<()> {
         println!("  Jails: {}", config.jails.len());
     }
     Ok(())
+}
+
+/// `--build` / `--no-build` as a mode and its JSON name.
+const fn build_mode(build: bool, no_build: bool) -> (Option<BuildMode>, &'static str) {
+    if no_build {
+        (None, "none")
+    } else if build {
+        (Some(BuildMode::Force), "force")
+    } else {
+        (Some(BuildMode::IfMissing), "if_missing")
+    }
+}
+
+/// `armada build`: the dry-run banner, then a forced build of the selected jails.
+fn force_build(
+    config: &manifest::BlackshipConfig,
+    jails: &[&manifest::JailDef],
+    dry_run: bool,
+    verbose: bool,
+) -> Result<()> {
+    if dry_run {
+        println!("=== DRY RUN - No changes will be made ===\n");
+    }
+    build_jails(config, jails, BuildMode::Force, dry_run, verbose)
 }
 
 /// Whether a build should replace an existing rootfs or only fill a missing one
