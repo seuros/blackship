@@ -294,6 +294,14 @@ impl BlackshipConfig {
             }
         }
 
+        for jail in &self.jails {
+            for check in &jail.healthcheck.checks {
+                if let Some(suspicion) = &check.suspicion {
+                    suspicion.build(check.interval)?;
+                }
+            }
+        }
+
         // Check ZFS configuration
         if self.config.zfs_enabled {
             if self.config.zpool.is_none() {

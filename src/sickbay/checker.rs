@@ -7,6 +7,7 @@ use crate::jail::ffi::{jail_getid, jail_remove};
 use crate::jail::jexec::jexec_with_timeout;
 use crate::proc::{Outcome, run_supervised};
 use crate::sickbay::recovery::{RecoveryAction, RecoveryConfig};
+use crate::sickbay::suspicion::{Accrual, SuspicionConfig, Verdict};
 use crate::warden::WardenHandle;
 use breaker_machines::{CircuitBreaker, CircuitBuilder};
 use serde::{Deserialize, Serialize};
@@ -91,6 +92,9 @@ pub struct HealthCheck {
 
     /// Recovery configuration (optional)
     pub recovery: Option<RecoveryConfig>,
+
+    /// Phi-accrual thresholds replacing consecutive-failure counting (optional)
+    pub suspicion: Option<SuspicionConfig>,
 }
 
 const fn default_interval() -> u64 {
@@ -134,7 +138,14 @@ impl HealthCheck {
             start_period: default_start_period(),
             retries: default_retries(),
             recovery: None,
+            suspicion: None,
         }
+    }
+
+    /// Set suspicion thresholds
+    pub fn with_suspicion(mut self, suspicion: SuspicionConfig) -> Self {
+        self.suspicion = Some(suspicion);
+        self
     }
 
     /// Set check target
@@ -245,6 +256,8 @@ struct CheckState {
     rate_limit_tokens: f64,
     /// Rate limiter last refill time (seconds since UNIX epoch)
     rate_limit_last_refill: f64,
+    /// Suspicion detector, when the check configures one
+    accrual: Option<Accrual>,
 }
 
 impl CheckState {
@@ -257,6 +270,30 @@ impl CheckState {
             last_recovery_at: None,
             rate_limit_tokens: capacity,
             rate_limit_last_refill: now_secs,
+            accrual: None,
+        }
+    }
+}
+
+impl CheckState {
+    /// Clear the failure streak and feed the detector a heartbeat.
+    fn record_pass(&mut self, name: &str, since_start: Duration) {
+        self.failures = 0;
+        self.recovery_attempts = 0;
+        if let Some(accrual) = self.accrual.as_mut()
+            && let Err(e) = accrual.beat(since_start)
+        {
+            eprintln!("Warning: suspicion beat refused for '{name}': {e:?}");
+        }
+    }
+
+    /// `(unhealthy, failing)` for a failed check: suspicion when warmed up, retry counting otherwise.
+    fn failure_reading(&self, retries: u32, since_start: Duration) -> (bool, bool) {
+        match self.accrual.as_ref().map(|a| a.verdict(since_start)) {
+            Some(Verdict::Steady) => (false, false),
+            Some(Verdict::Unhealthy) => (true, false),
+            Some(Verdict::Failing) => (true, true),
+            Some(Verdict::Warming) | None => (true, self.failures >= retries),
         }
     }
 }
@@ -303,7 +340,20 @@ impl HealthChecker {
         rate_limit_capacity: f64,
         rate_limit_refill_rate: f64,
     ) -> Self {
-        let check_count = config.checks.len();
+        let check_states: Vec<CheckState> = config
+            .checks
+            .iter()
+            .map(|check| {
+                let mut state = CheckState::new(rate_limit_capacity);
+                // Manifest validation already rejected unusable thresholds.
+                state.accrual = check
+                    .suspicion
+                    .as_ref()
+                    .and_then(|cfg| cfg.build(check.interval).ok());
+                state
+            })
+            .collect();
+
         let interval = config.checks.first().map_or(30, |c| c.interval);
 
         // Initialize circuit breakers for each health check
@@ -326,9 +376,7 @@ impl HealthChecker {
             config,
             status: HealthStatus::Unknown,
             started_at: Instant::now(),
-            check_states: (0..check_count)
-                .map(|_| CheckState::new(rate_limit_capacity))
-                .collect(),
+            check_states,
             stop_signal: Arc::new(AtomicBool::new(false)),
             check_interval: Duration::from_secs(interval),
             circuit_breakers,
@@ -420,6 +468,7 @@ impl HealthChecker {
 
         // Get current time for rate limiting
         let now_secs = jiff::Timestamp::now().as_duration().as_secs_f64();
+        let since_start = self.started_at.elapsed();
 
         for (idx, check) in self.config.checks.iter().enumerate() {
             // Check if circuit breaker is open for this check
@@ -456,17 +505,19 @@ impl HealthChecker {
             let result = self.execute_check(check)?;
             let duration_secs = result.duration.as_secs_f64();
 
+            let state = &mut self.check_states[idx];
             if result.passed {
-                // Reset failure count on success
-                self.check_states[idx].failures = 0;
-                self.check_states[idx].recovery_attempts = 0;
+                state.record_pass(&check.name, since_start);
                 breaker_updates.push((idx, true, duration_secs));
             } else {
-                self.check_states[idx].failures += 1;
-                all_healthy = false;
+                state.failures += 1;
                 breaker_updates.push((idx, false, duration_secs));
 
-                if self.check_states[idx].failures >= check.retries {
+                let (unhealthy, failing) = state.failure_reading(check.retries, since_start);
+                if unhealthy {
+                    all_healthy = false;
+                }
+                if failing {
                     any_failing = true;
 
                     // Mark for recovery if configured

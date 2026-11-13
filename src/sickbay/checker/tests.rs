@@ -58,3 +58,60 @@ retries = 3
     assert_eq!(check.target, CheckTarget::Jail);
     assert_eq!(check.interval, 30);
 }
+
+fn host_check(command: &str) -> HealthCheck {
+    let mut check = HealthCheck::new("flag", command).with_target(CheckTarget::Host);
+    check.start_period = 0;
+    check.retries = 2;
+    check
+}
+
+fn statuses(check: HealthCheck, runs: usize) -> Vec<HealthStatus> {
+    let config = HealthCheckConfig::enabled().with_check(check);
+    let mut checker = HealthChecker::new("testjail", config);
+    (0..runs).map(|_| checker.run_checks().unwrap()).collect()
+}
+
+#[test]
+fn suspicion_is_off_unless_configured() {
+    let check: HealthCheck = toml::from_str("name = \"a\"\ncommand = \"true\"").unwrap();
+    assert!(check.suspicion.is_none());
+
+    let check: HealthCheck =
+        toml::from_str("name = \"a\"\ncommand = \"true\"\n[suspicion]\nfailing_phi = 9.0").unwrap();
+    assert_eq!(
+        check.suspicion.unwrap().failing_phi.to_bits(),
+        9.0_f64.to_bits()
+    );
+}
+
+#[test]
+fn retry_counting_without_suspicion() {
+    assert_eq!(
+        statuses(host_check("false"), 3),
+        [
+            HealthStatus::Unhealthy,
+            HealthStatus::Failing,
+            HealthStatus::Failing
+        ]
+    );
+    assert_eq!(statuses(host_check("true"), 2), [HealthStatus::Healthy; 2]);
+}
+
+#[test]
+fn warming_suspicion_falls_back_to_retry_counting() {
+    let suspicion = crate::sickbay::suspicion::SuspicionConfig {
+        min_samples: 8,
+        unhealthy_phi: 3.0,
+        failing_phi: 8.0,
+        min_std_dev_ms: None,
+    };
+    assert_eq!(
+        statuses(host_check("false").with_suspicion(suspicion), 3),
+        [
+            HealthStatus::Unhealthy,
+            HealthStatus::Failing,
+            HealthStatus::Failing
+        ]
+    );
+}

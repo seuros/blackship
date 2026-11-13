@@ -8,5 +8,6 @@
 
 pub mod checker;
 pub mod recovery;
+pub mod suspicion;
 
 pub use checker::{HealthChecker, HealthStatus};

@@ -239,6 +239,7 @@ dependencies = [
  "sha2",
  "state-machines",
  "supervisor-machines",
+ "suspect-machines",
  "tar",
  "tempfile",
  "thiserror",
@@ -3491,6 +3492,12 @@ name = "supervisor-machines"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89f7646079e8a1b802737bb514b9c68e8e0743c046c9fb3c570b50e38ba03121"
+
+[[package]]
+name = "suspect-machines"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f07972720a8dcea532f1e56beb20345db93d874694e74b0e196cf548938cb6bd"
 
 [[package]]
 name = "symlink"
