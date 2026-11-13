@@ -960,8 +960,12 @@ transfer that fails fences nothing, and blackship removes the partial dataset
 it left on the target. A jail cloned from a release is sent as a full copy of
 its current state, without its older snapshots (the target does not have the
 release to clone from). The source is never removed: `--keep` only silences the
-hint about removing it yourself (`blackship rm web --volumes`). `gc` follows its
-usual rules for a fenced dataset, so it is only reclaimed with `--force`.
+hint about removing it yourself (`blackship rm web --volumes`). The dataset
+arrives on the target with the mountpoint it had here; a target with a different
+`data_dir` moves it with `zfs set mountpoint=<data_dir>/jails/<name>` (the
+command prints the real source path). `gc` follows its usual rules for a fenced
+dataset, so it is only reclaimed with `--force`, and its report says the dataset
+was migrated and to where.
 
 ## Networking
 

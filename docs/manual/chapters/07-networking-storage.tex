@@ -201,7 +201,11 @@ from a release is sent as a full copy of its current state, without its older
 snapshots, because the target does not have the release to clone from. The source
 itself is never removed; \command{--keep} only silences the hint about removing
 it with \command{rm --volumes}. \command{gc} treats a fenced dataset like any
-other unreferenced dataset and reclaims it only with \command{--force}.
+other unreferenced dataset and reclaims it only with \command{--force}; its
+report says that the dataset was migrated and where to. The migrated dataset
+arrives with the mountpoint it had on the source, so a target with a different
+data directory moves it with \command{zfs set mountpoint}; the command prints
+the actual source path.
 
 \begin{shipwarning}[Know the dataset before forcing]
 Forced rollback destroys newer snapshots. Forced garbage collection or manual

@@ -76,6 +76,8 @@ pub struct Survey {
     pub bridges: Vec<BridgeFacts>,
     /// Bridges a network record or the manifest still names.
     pub named_bridges: HashSet<String>,
+    /// Jail datasets fenced by a migration, with where each went.
+    pub migrated: HashMap<String, String>,
 }
 
 /// Decide what is stranded. Pure: no syscalls, no filesystem.
@@ -141,7 +143,7 @@ pub fn classify(survey: &Survey) -> Vec<Orphan> {
         orphans.push(Orphan {
             jail: dataset.clone(),
             kind: OrphanKind::StrayDataset(dataset.clone()),
-            reason: "dataset has no scope record and no live jail".to_string(),
+            reason: stray_dataset_reason(survey.migrated.get(dataset)),
             resources: vec![format!("dataset {}", dataset)],
             requires_force: true,
         });
@@ -197,6 +199,19 @@ fn stray_bridge(survey: &Survey, bridge: &BridgeFacts) -> Option<Orphan> {
         resources: vec![format!("bridge {}", bridge.name)],
         requires_force: false,
     })
+}
+
+/// Why a dataset with no owner is reported; a migrated one says where it went.
+fn stray_dataset_reason(migrated_to: Option<&String>) -> String {
+    migrated_to.map_or_else(
+        || "dataset has no scope record and no live jail".to_string(),
+        |fence| {
+            let destination = fence.rsplit_once('@').map_or(fence.as_str(), |(dest, _)| dest);
+            format!(
+                "dataset was migrated to {destination} and is fenced; no scope record and no live jail"
+            )
+        },
+    )
 }
 
 /// The orphan a dead jail's scope record stands for.
@@ -308,20 +323,33 @@ impl Reaper {
             }
         }
 
+        let datasets = self
+            .zfs
+            .as_ref()
+            .map(super::zfs::ZfsManager::list_jail_datasets)
+            .unwrap_or_default();
+
         Ok(Survey {
             live,
             scopes: self.scope_store.list()?,
             vnet: self.vnet_state_store.list()?,
             tagged_ifaces: crate::sys::list_tagged_interfaces(),
-            datasets: self
-                .zfs
-                .as_ref()
-                .map(super::zfs::ZfsManager::list_jail_datasets)
-                .unwrap_or_default(),
+            datasets: datasets.clone(),
             drain_anchors: crate::bulkhead::list_drain_anchors(),
             bridges: tagged_bridges(),
             named_bridges: self.named_bridges()?,
+            migrated: self.migrated_datasets(&datasets),
         })
+    }
+
+    fn migrated_datasets(&self, datasets: &[String]) -> HashMap<String, String> {
+        let Some(zfs) = &self.zfs else {
+            return HashMap::new();
+        };
+        datasets
+            .iter()
+            .filter_map(|name| Some((name.clone(), zfs.jail_migration_fence(name)?)))
+            .collect()
     }
 
     fn named_bridges(&self) -> Result<HashSet<String>> {

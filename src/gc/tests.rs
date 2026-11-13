@@ -34,6 +34,7 @@ fn survey(
         drain_anchors: Vec::new(),
         bridges: Vec::new(),
         named_bridges: HashSet::new(),
+        migrated: HashMap::new(),
     }
 }
 
@@ -214,4 +215,30 @@ fn a_bridge_only_a_gone_jails_epair_holds_is_reclaimed() {
             .iter()
             .any(|o| o.kind == OrphanKind::StrayBridge("bridge0".into()))
     );
+}
+
+#[test]
+fn a_stray_dataset_says_when_it_was_migrated() {
+    let mut survey = survey(&[], vec![], vec![], &[], &["mig-web", "plain"]);
+    survey.migrated.insert(
+        "mig-web".to_string(),
+        "bastion/zroot/jails/mig-web@1794570755".to_string(),
+    );
+
+    let orphans = classify(&survey);
+    let reason = |jail: &str| {
+        orphans
+            .iter()
+            .find(|o| o.jail == jail)
+            .map(|o| o.reason.clone())
+            .unwrap()
+    };
+
+    assert!(reason("mig-web").contains("migrated to bastion/zroot/jails/mig-web"));
+    assert!(reason("mig-web").contains("fenced"));
+    assert_eq!(
+        reason("plain"),
+        "dataset has no scope record and no live jail"
+    );
+    assert!(orphans.iter().all(|o| o.requires_force));
 }
