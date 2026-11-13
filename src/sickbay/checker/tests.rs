@@ -115,3 +115,34 @@ fn warming_suspicion_falls_back_to_retry_counting() {
         ]
     );
 }
+
+fn jail_check() -> HealthChecker {
+    let config = HealthCheckConfig::enabled()
+        .with_check(HealthCheck::new("probe", "true").with_target(CheckTarget::Jail));
+    HealthChecker::new("web", config).with_jid(100)
+}
+
+#[test]
+fn a_restarted_jail_hands_the_checker_its_new_jid() {
+    let mut checker = jail_check();
+    assert_eq!(checker.jid(), Some(100));
+
+    checker.refresh_jid(|_| Some(207));
+    assert_eq!(checker.jid(), Some(207));
+}
+
+#[test]
+fn a_stopped_jail_leaves_no_jid_to_check_in() {
+    let mut checker = jail_check();
+    checker.refresh_jid(|_| None);
+    assert_eq!(checker.jid(), None);
+}
+
+#[test]
+fn host_only_checks_never_touch_the_jid() {
+    let config = HealthCheckConfig::enabled()
+        .with_check(HealthCheck::new("probe", "true").with_target(CheckTarget::Host));
+    let mut checker = HealthChecker::new("web", config).with_jid(100);
+    checker.refresh_jid(|_| Some(5));
+    assert_eq!(checker.jid(), Some(100));
+}

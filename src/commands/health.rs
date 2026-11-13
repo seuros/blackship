@@ -81,8 +81,7 @@ fn pass(checker: &mut HealthChecker) -> Result<HealthStatus> {
 /// the live health result from the caller.
 fn pass_and_record(checker: &mut HealthChecker, store: &HealthStateStore) -> Result<HealthStatus> {
     let status = pass(checker)?;
-    let jid = jail::jail_getid(checker.jail_name()).ok();
-    let record = HealthStateRecord::from_checker(checker, status, jid);
+    let record = HealthStateRecord::from_checker(checker, status);
     if let Err(e) = store.save(&record) {
         eprintln!(
             "Warning: Failed to save health state for '{}': {e}",

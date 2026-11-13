@@ -459,7 +459,7 @@ impl HealthChecker {
             return Ok(self.status);
         }
 
-        self.resolve_jid_if_needed();
+        self.refresh_jid(|name| jail_getid(name).ok());
 
         let previous_status = self.status;
         let mut any_failing = false;
@@ -573,26 +573,36 @@ impl HealthChecker {
         Ok(self.status)
     }
 
-    /// Pick up the JID once the jail runs and re-register with the Warden.
-    fn resolve_jid_if_needed(&mut self) {
-        if self.jid.is_none()
-            && self
-                .config
-                .checks
-                .iter()
-                .any(|c| c.target == CheckTarget::Jail)
-            && let Ok(jid) = jail_getid(&self.jail_name)
-        {
-            self.jid = Some(jid);
+    /// The JID the next jail-target check will run in; `None` while the jail is down.
+    pub const fn jid(&self) -> Option<i32> {
+        self.jid
+    }
 
-            if let Some(handle) = &self.warden_handle
-                && let Err(e) = handle.register_jail(&self.jail_name, jid, None)
-            {
-                eprintln!(
-                    "Warning: Failed to re-register jail '{}' with Warden: {}",
-                    self.jail_name, e
-                );
-            }
+    /// Follow the jail across restarts: a restarted jail has a new JID, and checks run in
+    /// the stale one would fail forever. A new JID is re-registered with the Warden.
+    fn refresh_jid(&mut self, lookup: impl Fn(&str) -> Option<i32>) {
+        if !self
+            .config
+            .checks
+            .iter()
+            .any(|c| c.target == CheckTarget::Jail)
+        {
+            return;
+        }
+        let current = lookup(&self.jail_name);
+        if current == self.jid {
+            return;
+        }
+        self.jid = current;
+
+        if let Some(jid) = current
+            && let Some(handle) = &self.warden_handle
+            && let Err(e) = handle.register_jail(&self.jail_name, jid, None)
+        {
+            eprintln!(
+                "Warning: Failed to re-register jail '{}' with Warden: {}",
+                self.jail_name, e
+            );
         }
     }
 

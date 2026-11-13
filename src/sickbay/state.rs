@@ -24,7 +24,7 @@ pub struct HealthStateRecord {
 
 impl HealthStateRecord {
     /// Capture the compact, durable part of a completed check pass.
-    pub fn from_checker(checker: &HealthChecker, status: HealthStatus, jid: Option<i32>) -> Self {
+    pub fn from_checker(checker: &HealthChecker, status: HealthStatus) -> Self {
         let results = checker.get_check_results();
         let checks_passing = results
             .iter()
@@ -39,7 +39,7 @@ impl HealthStateRecord {
             jail: checker.jail_name().to_string(),
             status,
             checked_at: scope::now_unix(),
-            jid,
+            jid: checker.jid(),
             checks_total: results.len(),
             checks_passing,
             checks_failing,

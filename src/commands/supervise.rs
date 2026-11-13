@@ -232,8 +232,7 @@ fn save_snapshot(
     if !matches!(cycle, Cycle::Ran(Ok(_))) {
         return;
     }
-    let jid = jail::jail_getid(checker.jail_name()).ok();
-    let record = sickbay::HealthStateRecord::from_checker(checker, status, jid);
+    let record = sickbay::HealthStateRecord::from_checker(checker, status);
     if let Err(e) = store.save(&record) {
         eprintln!(
             "Warning: Failed to save health state for '{}': {e}",
