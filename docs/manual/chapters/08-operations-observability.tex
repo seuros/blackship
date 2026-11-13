@@ -75,7 +75,10 @@ Each completed check pass atomically saves a compact summary under
 \path{<data_dir>/health}. \command{ps --host} reads this last-known state without
 executing a check or recovery action. It exposes the observation time and
 labels stopped, never-checked, restarted (stale JID), and unmanaged cases so a
-client does not mistake old health for current health. Watch and follow modes are terminal streams; they are intentionally not
+client does not mistake old health for current health. A cycle shed by
+\setting{health\_concurrency}, or one that errored, never refreshes the
+timestamp, and \command{supervise --autostart} monitors only the autostart jails,
+so the others report \setting{not\_checked}. Watch and follow modes are terminal streams; they are intentionally not
 part of the single-envelope global JSON contract.
 
 \section{Supervisor}

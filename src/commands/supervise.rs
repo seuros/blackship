@@ -170,11 +170,17 @@ fn spawn_qos_timers(
     }
 }
 
+/// How a check cycle ended; only a completed pass may refresh the health snapshot.
+enum Cycle {
+    Ran(Result<sickbay::HealthStatus>),
+    Shed,
+}
+
 /// Run one check cycle; with a pacer it runs on a blocking thread and is shed at the limit.
 async fn run_cycle(
     mut checker: sickbay::HealthChecker,
     pacer: Option<&SharedPacer>,
-) -> Option<(sickbay::HealthChecker, bool)> {
+) -> Option<(sickbay::HealthChecker, Cycle)> {
     let report = |checker: &sickbay::HealthChecker, result: &Result<sickbay::HealthStatus>| {
         if let Err(e) = result {
             eprintln!("Health check error for {}: {}", checker.jail_name(), e);
@@ -182,9 +188,8 @@ async fn run_cycle(
     };
     let Some(pacer) = pacer else {
         let result = checker.run_checks();
-        let completed = result.is_ok();
         report(&checker, &result);
-        return Some((checker, completed));
+        return Some((checker, Cycle::Ran(result)));
     };
 
     let admission = lock(pacer).enter();
@@ -194,7 +199,7 @@ async fn run_cycle(
             checker.jail_name(),
             lock(pacer).limit()
         );
-        return Some((checker, false));
+        return Some((checker, Cycle::Shed));
     };
 
     let timeout = checker.timeout();
@@ -206,7 +211,6 @@ async fn run_cycle(
     .await
     .ok()?;
     report(&checker, &result);
-    let completed = result.is_ok();
 
     let moved = lock(pacer).leave(admission, started.elapsed(), timeout, result.is_err());
     if let Some((before, after)) = moved {
@@ -215,7 +219,27 @@ async fn run_cycle(
             lock(pacer).in_flight()
         );
     }
-    Some((checker, completed))
+    Some((checker, Cycle::Ran(result)))
+}
+
+/// Persist the health snapshot, but only after a cycle that actually ran and succeeded.
+fn save_snapshot(
+    store: &sickbay::HealthStateStore,
+    checker: &sickbay::HealthChecker,
+    status: sickbay::HealthStatus,
+    cycle: &Cycle,
+) {
+    if !matches!(cycle, Cycle::Ran(Ok(_))) {
+        return;
+    }
+    let jid = jail::jail_getid(checker.jail_name()).ok();
+    let record = sickbay::HealthStateRecord::from_checker(checker, status, jid);
+    if let Err(e) = store.save(&record) {
+        eprintln!(
+            "Warning: Failed to save health state for '{}': {e}",
+            checker.jail_name()
+        );
+    }
 }
 
 fn lock(pacer: &SharedPacer) -> std::sync::MutexGuard<'_, sickbay::pacer::Pacer> {
@@ -263,7 +287,7 @@ fn spawn_health_monitors(
         tokio::spawn(async move {
             let mut current = Some(checker);
             while let Some(checker) = current.take().filter(|c| !c.is_stopped()) {
-                let Some((checker, completed)) = run_cycle(checker, pacer.as_ref()).await else {
+                let Some((checker, cycle)) = run_cycle(checker, pacer.as_ref()).await else {
                     eprintln!("Health monitor for '{name}' lost its checker");
                     return;
                 };
@@ -273,16 +297,7 @@ fn spawn_health_monitors(
                     .lock()
                     .await
                     .record_health(checker.jail_name(), status);
-                if completed {
-                    let jid = jail::jail_getid(checker.jail_name()).ok();
-                    let record = sickbay::HealthStateRecord::from_checker(&checker, status, jid);
-                    if let Err(e) = state_store.save(&record) {
-                        eprintln!(
-                            "Warning: Failed to save health state for '{}': {e}",
-                            checker.jail_name()
-                        );
-                    }
-                }
+                save_snapshot(&state_store, &checker, status, &cycle);
                 if status == sickbay::HealthStatus::Failing {
                     eprintln!("Health check failing for jail '{}'", checker.jail_name());
                 }
@@ -328,3 +343,6 @@ fn spawn_monitor_ping(url: String) {
     });
     println!("Dead-man ping enabled (every 300s).");
 }
+
+#[cfg(test)]
+mod tests;

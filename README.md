@@ -413,7 +413,10 @@ passive, last-known health summary. `ps --host` never executes health checks or
 recovery actions: `health` and `supervise` atomically refresh the summary under
 `<data_dir>/health`. The summary reports why a result is unknown (for example,
 `stopped`, `not_checked`, `stale_jid`, or `unmanaged`) and includes its
-`checked_at` timestamp so clients can judge freshness. Stopped unmanaged jails
+`checked_at` timestamp so clients can judge freshness. A cycle that was shed by
+`health_concurrency` or that errored never refreshes the timestamp, and
+`supervise --autostart` monitors only the autostart jails, so the others report
+`not_checked`. Stopped unmanaged jails
 cannot be discovered without a known manifest and are therefore not reported.
 
 Lifecycle commands support the global JSON format in dry-run mode. Their
