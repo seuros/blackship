@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.5.0](https://github.com/seuros/blackship/compare/blackship-v0.4.2...blackship-v0.5.0) (2026-11-13)
+
+
+### Features
+
+* **ui:** placeholder web UI served by rama with a Datastar patch stream ([d093d24](https://github.com/seuros/blackship/commit/d093d24038f7349b01ba93a8968f51efba3fc32b))
+
+
+### Bug Fixes
+
+* **armada:** config --show JSON no longer serializes the whole config ([52f4cb4](https://github.com/seuros/blackship/commit/52f4cb4a59d995186b8c35dd0c77b158a7c69fe1))
+* **autostart:** supervise --autostart is start-only; reconcile survives stop errors ([dfebe2c](https://github.com/seuros/blackship/commit/dfebe2cddfbf70109223f4ef95a0c8a07aa26b18))
+* **capabilities:** exhaustive mutates(), no dead rows, drift tests independent of the kernel ([39fa7b9](https://github.com/seuros/blackship/commit/39fa7b9bc33224d759afbcf15db87fa345495d23))
+* **gc:** say when a stray dataset was migrated, and where ([fa305c3](https://github.com/seuros/blackship/commit/fa305c3aa69b2e74a9545600f9b50aae04d9137f))
+* **migrate:** print the destination's real mountpoint, not a guessed layout ([b94000a](https://github.com/seuros/blackship/commit/b94000aa99f9b52359a547e3cc26dd3f0921424a))
+* **output:** capture tests tolerate other threads printing to fd 1; clippy nits ([ff3684a](https://github.com/seuros/blackship/commit/ff3684ac7cfd3a7ed6ea086d22b6facc33ec6700))
+* **output:** capture tests use a descriptor of their own instead of the harness's fd 1 ([27a8db7](https://github.com/seuros/blackship/commit/27a8db7cc6c130ffd631d81a8873fc305d0984ae))
+* **output:** capture_stdout keeps its output when the operation fails ([2bdf703](https://github.com/seuros/blackship/commit/2bdf703f21dc155a10f0d0c1b56a044f856b11e5))
+* **ps:** clear health snapshots on stop, rm, cleanup and gc; one-shot health keeps a settled record ([86a3849](https://github.com/seuros/blackship/commit/86a384922fd3dd5c06983300d3e53f25c0594a1f))
+* **ps:** say so when a dependency cycle hides the autostart set ([98252d1](https://github.com/seuros/blackship/commit/98252d1d3884f510a01ac0635b380233f2b668b4))
+* **sickbay:** follow the jail's JID across restarts ([2b446d9](https://github.com/seuros/blackship/commit/2b446d937865804ad22f8367a064f7a905b31788))
+
+
+### Miscellaneous Chores
+
+* release 0.5.0 ([6497260](https://github.com/seuros/blackship/commit/649726068bdaa842cbbe163b42290dc51335098c))
+
 ## [0.4.2](https://github.com/seuros/blackship/compare/blackship-v0.4.1...blackship-v0.4.2) (2026-11-13)
 
 
