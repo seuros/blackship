@@ -233,6 +233,7 @@ dependencies = [
  "petgraph",
  "rama",
  "rand 0.10.3",
+ "rogue-machines",
  "schemars",
  "serde",
  "serde_json",
@@ -3039,6 +3040,12 @@ dependencies = [
  "untrusted",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "rogue-machines"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c80e3ab9133a912517598ad96183bd8686b392181db310c42af300552d95f17b"
 
 [[package]]
 name = "rustc-hash"

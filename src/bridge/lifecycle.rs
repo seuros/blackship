@@ -619,6 +619,7 @@ impl Bridge {
                         .with("ip", ip)
                         .with("network", first_network),
                 );
+                crate::fault::trip(crate::fault::Point::AfterLease)?;
                 if self.verbose {
                     println!("  Auto-allocated IP {ip} from network '{first_network}'");
                 }
@@ -654,6 +655,7 @@ impl Bridge {
         }
 
         let (jid, jail_handle) = self.create_jail(full_name, &path, &params, scope, claims)?;
+        crate::fault::trip(crate::fault::Point::AfterJailCreate)?;
         self.apply_startup_limits(jail_def, service_name, full_name, jid, scope)?;
 
         if let Some(setup) = &claims.vnet_setup {
@@ -741,6 +743,7 @@ impl Bridge {
                     .with("dataset", dataset),
             );
         }
+        crate::fault::trip(crate::fault::Point::AfterZfs)?;
 
         Ok(path)
     }
@@ -996,6 +999,7 @@ impl Bridge {
     ) -> Result<()> {
         // Fail closed: never run without the configured resource limits.
         let startup_profile = jail_def.startup_resources();
+        crate::fault::trip(crate::fault::Point::BeforeRctl)?;
         if !startup_profile.is_empty() {
             crate::rctl::apply_limits(full_name, startup_profile).inspect_err(|e| {
                 eprintln!("Failed to apply resource limits for '{full_name}': {e}, stopping jail");
@@ -1550,3 +1554,6 @@ impl Bridge {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
