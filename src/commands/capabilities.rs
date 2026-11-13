@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::app::{ESCALATORS, is_executable};
 use crate::cli::Cli;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::output::SCHEMA_VERSION;
 use crate::sys::OsVersion;
 
@@ -73,7 +73,6 @@ struct OperationSpec {
     operation: &'static str,
     invocation: &'static str,
     args: &'static [&'static str],
-    mutates: bool,
 }
 
 const FACILITIES: [(&str, &str); 5] = [
@@ -85,84 +84,67 @@ const FACILITIES: [(&str, &str); 5] = [
 ];
 
 const OPERATION_SPECS: &[OperationSpec] = &[
-    spec("capabilities", "capabilities", &["capabilities"], false),
-    spec("host", "host", &["host"], false),
-    spec("ps", "ps", &["ps"], false),
-    spec("ps.host", "ps --host", &["ps", "--host"], false),
-    spec("check", "check", &["check"], false),
-    spec("ports", "ports", &["ports"], false),
-    spec("network.list", "network list", &["network", "list"], false),
-    spec(
-        "releases.list",
-        "releases list",
-        &["releases", "list"],
-        false,
-    ),
-    spec("stats", "stats", &["stats"], false),
-    spec("health", "health", &["health"], false),
-    spec("audit", "audit <jail>", &["audit", "jail"], false),
+    spec("capabilities", "capabilities", &["capabilities"]),
+    spec("host", "host", &["host"]),
+    spec("ps", "ps", &["ps"]),
+    spec("ps.host", "ps --host", &["ps", "--host"]),
+    spec("check", "check", &["check"]),
+    spec("ports", "ports", &["ports"]),
+    spec("network.list", "network list", &["network", "list"]),
+    spec("releases.list", "releases list", &["releases", "list"]),
+    spec("stats", "stats", &["stats"]),
+    spec("health", "health", &["health"]),
+    spec("audit", "audit <jail>", &["audit", "jail"]),
     spec(
         "snapshot.list",
         "snapshot list <jail>",
         &["snapshot", "list", "jail"],
-        false,
     ),
-    spec("up", "up --all", &["up", "--all"], true),
     spec(
         "up.dry_run",
         "up --all --dry-run",
         &["up", "--all", "--dry-run"],
-        false,
     ),
-    spec("down", "down --all", &["down", "--all"], true),
     spec(
         "down.dry_run",
         "down --all --dry-run",
         &["down", "--all", "--dry-run"],
-        false,
     ),
-    spec("restart", "restart --all", &["restart", "--all"], true),
     spec(
         "restart.dry_run",
         "restart --all --dry-run",
         &["restart", "--all", "--dry-run"],
-        false,
     ),
-    spec("eva", "eva --all", &["eva", "--all"], true),
     spec(
         "eva.dry_run",
         "eva --all --dry-run",
         &["eva", "--all", "--dry-run"],
-        false,
     ),
-    spec("armada.init", "armada init", &["armada", "init"], true),
     spec(
-        "armada.config",
-        "armada config",
-        &["armada", "config"],
-        false,
+        "autostart.dry_run",
+        "autostart --dry-run",
+        &["autostart", "--dry-run"],
     ),
-    spec("armada.ps", "armada ps", &["armada", "ps"], false),
-    spec("armada.up", "armada up", &["armada", "up"], true),
+    spec("armada.init", "armada init", &["armada", "init"]),
+    spec("armada.config", "armada config", &["armada", "config"]),
+    spec("armada.ps", "armada ps", &["armada", "ps"]),
+    spec("armada.up", "armada up", &["armada", "up"]),
     spec(
         "armada.up.dry_run",
         "armada up --dry-run",
         &["armada", "up", "--dry-run"],
-        false,
     ),
-    spec("armada.down", "armada down", &["armada", "down"], true),
+    spec("armada.down", "armada down", &["armada", "down"]),
     spec(
         "armada.down.dry_run",
         "armada down --dry-run",
         &["armada", "down", "--dry-run"],
-        false,
     ),
-    spec("armada.build", "armada build", &["armada", "build"], true),
+    spec("armada.build", "armada build", &["armada", "build"]),
     spec(
         "armada.build.dry_run",
         "armada build --dry-run",
         &["armada", "build", "--dry-run"],
-        false,
     ),
 ];
 
@@ -178,36 +160,47 @@ const fn spec(
     operation: &'static str,
     invocation: &'static str,
     args: &'static [&'static str],
-    mutates: bool,
 ) -> OperationSpec {
     OperationSpec {
         operation,
         invocation,
         args,
-        mutates,
     }
 }
 
-fn cli_capabilities() -> CliCapabilities {
+/// The machine-readable operations, each derived from the real command it names.
+///
+/// A row whose arguments do not parse, or whose mode has no JSON contract, is a bug in
+/// this table and fails loudly instead of vanishing from the report.
+pub fn cli_capabilities() -> Result<CliCapabilities> {
     let machine_output = OPERATION_SPECS
         .iter()
-        .filter_map(|spec| {
+        .map(|spec| {
             let args = spec.args.iter().map(OsStr::new).collect::<Vec<_>>();
-            let cli = Cli::parse_from(&args).expect("capability operation must parse");
-            cli.command
-                .supports_machine_output()
-                .then(|| CommandCapability {
-                    operation: spec.operation,
-                    invocation: spec.invocation,
-                    requires_root: cli.command.requires_root(),
-                    mutates: spec.mutates,
-                })
+            let cli = Cli::parse_from(&args).map_err(|e| {
+                Error::State(format!(
+                    "capability '{}' does not parse: {e:?}",
+                    spec.operation
+                ))
+            })?;
+            if !cli.command.supports_machine_output() {
+                return Err(Error::State(format!(
+                    "capability '{}' has no machine-readable mode",
+                    spec.operation
+                )));
+            }
+            Ok(CommandCapability {
+                operation: spec.operation,
+                invocation: spec.invocation,
+                requires_root: cli.command.requires_root(),
+                mutates: cli.command.mutates(),
+            })
         })
-        .collect();
-    CliCapabilities {
+        .collect::<Result<Vec<_>>>()?;
+    Ok(CliCapabilities {
         output_formats: vec!["text", "json"],
         machine_output,
-    }
+    })
 }
 
 /// Inspect the binary and host without requiring a manifest or root access.
@@ -231,7 +224,7 @@ pub fn data() -> Result<CapabilityReport> {
             telemetry: cfg!(feature = "telemetry"),
             inspect: cfg!(feature = "inspect"),
         },
-        cli: cli_capabilities(),
+        cli: cli_capabilities()?,
         facilities: FACILITIES
             .into_iter()
             .map(|(name, path)| facility(name, path))

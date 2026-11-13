@@ -842,6 +842,56 @@ impl Commands {
         }
     }
 
+    /// Whether this exact invocation changes host or jail state. Exhaustive on purpose:
+    /// a new command must decide.
+    pub const fn mutates(&self) -> bool {
+        match self {
+            Self::Up { dry_run, .. }
+            | Self::Down { dry_run, .. }
+            | Self::Restart { dry_run, .. }
+            | Self::Eva { dry_run, .. }
+            | Self::Build { dry_run, .. }
+            | Self::Autostart { dry_run }
+            | Self::Gc { dry_run, .. } => !*dry_run,
+            Self::Qos { show, .. } => !*show,
+            Self::Armada { action, .. } => action.mutates(),
+            Self::Releases { action, .. } => !matches!(action, None | Some(ReleasesAction::List)),
+            Self::Snapshot { action } => !matches!(action, SnapshotAction::List { .. }),
+            Self::Network { action } => !matches!(action, NetworkAction::List),
+            Self::Setup { .. }
+            | Self::Init { .. }
+            | Self::Exec { .. }
+            | Self::Run { .. }
+            | Self::Cp { .. }
+            | Self::Rm { .. }
+            | Self::Console { .. }
+            | Self::Bootstrap { .. }
+            | Self::Migrate { .. }
+            | Self::Unfence { .. }
+            | Self::Expose { .. }
+            | Self::Unexpose { .. }
+            | Self::Cleanup { .. }
+            | Self::Export { .. }
+            | Self::Import { .. }
+            | Self::Commit { .. }
+            | Self::Clone { .. }
+            | Self::Supervise { .. } => true,
+            Self::Ps { .. }
+            | Self::Check
+            | Self::Host
+            | Self::Template { .. }
+            | Self::Stats { .. }
+            | Self::Health { .. }
+            | Self::Ports { .. }
+            | Self::Audit { .. }
+            | Self::Completion { .. }
+            | Self::Capabilities
+            | Self::Logs { .. } => false,
+            #[cfg(feature = "mcp")]
+            Self::Mcp { .. } => false,
+        }
+    }
+
     pub fn requires_root(&self) -> bool {
         match self {
             Self::Up { dry_run, .. }
@@ -908,6 +958,16 @@ impl SnapshotAction {
 }
 
 impl ArmadaAction {
+    const fn mutates(&self) -> bool {
+        match self {
+            Self::Init { .. } => true,
+            Self::Up { dry_run, .. } | Self::Down { dry_run, .. } | Self::Build { dry_run, .. } => {
+                !*dry_run
+            }
+            Self::Ps { .. } | Self::Config { .. } => false,
+        }
+    }
+
     fn requires_root(&self) -> bool {
         match self {
             Self::Up { dry_run, .. } | Self::Down { dry_run, .. } | Self::Build { dry_run, .. } => {
