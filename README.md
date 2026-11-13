@@ -399,6 +399,12 @@ blackship --format json capabilities \
   | jq '.data.cli.machine_output[] | select(.operation == "armada.ps")'
 ```
 
+A new command mode with a JSON contract must register an operation id in
+`OPERATION_SPECS` (`src/commands/capabilities.rs`) and in the test's candidate
+table; a test fails when a JSON-capable mode has no row or a row has no JSON mode.
+Only the `--dry-run` forms of `up`, `down`, `restart`, `eva` and `autostart` have
+a JSON contract, so only those appear.
+
 `blackship host` returns the same best-effort planning profile as the
 `blackship:///host` MCP resource: kernel and facility capabilities, CPU and
 memory capacity and claims, ZFS pools, releases, networks and available
