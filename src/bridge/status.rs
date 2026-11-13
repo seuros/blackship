@@ -59,12 +59,73 @@ pub struct InventoryJail {
     pub health: HealthSummary,
 }
 
+/// The health verdict an inventory row reports. JSON strings are stable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryStatus {
+    NotConfigured,
+    Unknown,
+    Starting,
+    Healthy,
+    Unhealthy,
+    Failing,
+    Suspended,
+}
+
+impl SummaryStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotConfigured => "not_configured",
+            Self::Unknown => "unknown",
+            Self::Starting => "starting",
+            Self::Healthy => "healthy",
+            Self::Unhealthy => "unhealthy",
+            Self::Failing => "failing",
+            Self::Suspended => "suspended",
+        }
+    }
+}
+
+impl std::fmt::Display for SummaryStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad(self.as_str())
+    }
+}
+
+impl From<HealthStatus> for SummaryStatus {
+    fn from(status: HealthStatus) -> Self {
+        match status {
+            HealthStatus::Starting => Self::Starting,
+            HealthStatus::Healthy => Self::Healthy,
+            HealthStatus::Unhealthy => Self::Unhealthy,
+            HealthStatus::Failing => Self::Failing,
+            HealthStatus::Suspended => Self::Suspended,
+            HealthStatus::Unknown => Self::Unknown,
+        }
+    }
+}
+
+/// Why an inventory row's health is unknown. JSON strings are stable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnknownReason {
+    Stopped,
+    NotChecked,
+    StaleJid,
+    StateUnavailable,
+    Unmanaged,
+}
+
 /// Passive, last-known health information for a host inventory row.
+///
+/// The counts are the last results of each check, not the verdict itself. There is no
+/// expiry: judge freshness by `checked_at`, and note that a paced or slow supervisor can
+/// leave the data older than the check interval.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HealthSummary {
     pub configured: bool,
-    pub status: String,
-    pub reason: Option<&'static str>,
+    pub status: SummaryStatus,
+    pub reason: Option<UnknownReason>,
     pub checked_at: Option<i64>,
     pub checks_total: usize,
     pub checks_passing: Option<usize>,
@@ -82,7 +143,7 @@ fn managed_health_summary(
     if !definition.healthcheck.enabled || checks_total == 0 {
         return HealthSummary {
             configured: false,
-            status: "not_configured".to_string(),
+            status: SummaryStatus::NotConfigured,
             reason: None,
             checked_at: None,
             checks_total: 0,
@@ -94,7 +155,7 @@ fn managed_health_summary(
 
     let unknown = |reason| HealthSummary {
         configured: true,
-        status: "unknown".to_string(),
+        status: SummaryStatus::Unknown,
         reason: Some(reason),
         checked_at: None,
         checks_total,
@@ -104,13 +165,13 @@ fn managed_health_summary(
     };
 
     if !running {
-        return unknown("stopped");
+        return unknown(UnknownReason::Stopped);
     }
 
     match state {
         Ok(Some(record)) if record.jid == jid => HealthSummary {
             configured: true,
-            status: record.status.to_string(),
+            status: record.status.into(),
             reason: None,
             checked_at: Some(record.checked_at),
             checks_total: record.checks_total,
@@ -122,17 +183,17 @@ fn managed_health_summary(
                     .saturating_sub(record.checks_passing.saturating_add(record.checks_failing)),
             ),
         },
-        Ok(Some(_)) => unknown("stale_jid"),
-        Ok(None) => unknown("not_checked"),
-        Err(_) => unknown("state_unavailable"),
+        Ok(Some(_)) => unknown(UnknownReason::StaleJid),
+        Ok(None) => unknown(UnknownReason::NotChecked),
+        Err(_) => unknown(UnknownReason::StateUnavailable),
     }
 }
 
 fn unmanaged_health_summary() -> HealthSummary {
     HealthSummary {
         configured: false,
-        status: "unknown".to_string(),
-        reason: Some("unmanaged"),
+        status: SummaryStatus::Unknown,
+        reason: Some(UnknownReason::Unmanaged),
         checked_at: None,
         checks_total: 0,
         checks_passing: None,
@@ -461,93 +522,4 @@ impl Bridge {
 }
 
 #[cfg(test)]
-mod health_summary_tests {
-    use super::*;
-    use crate::error::Error;
-    use crate::manifest::BlackshipConfig;
-    use crate::sickbay::HealthStatus;
-
-    fn health_definition() -> crate::manifest::JailDef {
-        let mut config: BlackshipConfig = toml::from_str(
-            r#"
-[config]
-
-[[jails]]
-name = "web"
-
-[jails.healthcheck]
-enabled = true
-
-[[jails.healthcheck.checks]]
-name = "http"
-command = "fetch -qo /dev/null http://127.0.0.1/"
-"#,
-        )
-        .unwrap();
-        config.jails.remove(0)
-    }
-
-    #[test]
-    fn summary_reports_health_not_configured() {
-        let mut definition = health_definition();
-        definition.healthcheck.enabled = false;
-
-        let summary = managed_health_summary(&definition, true, Some(7), Ok(None));
-
-        assert_eq!(summary.status, "not_configured");
-        assert!(!summary.configured);
-        assert_eq!(summary.reason, None);
-    }
-
-    #[test]
-    fn summary_explains_unknown_states() {
-        let definition = health_definition();
-
-        let stopped = managed_health_summary(&definition, false, None, Ok(None));
-        let unchecked = managed_health_summary(&definition, true, Some(7), Ok(None));
-        let unavailable = managed_health_summary(
-            &definition,
-            true,
-            Some(7),
-            Err(Error::State("broken record".to_string())),
-        );
-
-        assert_eq!(stopped.reason, Some("stopped"));
-        assert_eq!(unchecked.reason, Some("not_checked"));
-        assert_eq!(unavailable.reason, Some("state_unavailable"));
-    }
-
-    #[test]
-    fn summary_uses_only_health_from_current_jail_instance() {
-        let definition = health_definition();
-        let record = HealthStateRecord {
-            jail: "blackship-web".to_string(),
-            status: HealthStatus::Healthy,
-            checked_at: 123,
-            jid: Some(7),
-            checks_total: 1,
-            checks_passing: 1,
-            checks_failing: 0,
-        };
-
-        let current = managed_health_summary(&definition, true, Some(7), Ok(Some(record.clone())));
-        let restarted = managed_health_summary(&definition, true, Some(8), Ok(Some(record)));
-
-        assert_eq!(current.status, "healthy");
-        assert_eq!(current.checked_at, Some(123));
-        assert_eq!(current.checks_passing, Some(1));
-        assert_eq!(current.checks_pending, Some(0));
-        assert_eq!(restarted.status, "unknown");
-        assert_eq!(restarted.reason, Some("stale_jid"));
-        assert_eq!(restarted.checked_at, None);
-    }
-
-    #[test]
-    fn unmanaged_summary_is_explicit() {
-        let summary = unmanaged_health_summary();
-
-        assert_eq!(summary.status, "unknown");
-        assert_eq!(summary.reason, Some("unmanaged"));
-        assert!(!summary.configured);
-    }
-}
+mod tests;
