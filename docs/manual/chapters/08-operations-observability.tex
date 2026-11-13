@@ -78,7 +78,13 @@ labels stopped, never-checked, restarted (stale JID), and unmanaged cases so a
 client does not mistake old health for current health. A cycle shed by
 \setting{health\_concurrency}, or one that errored, never refreshes the
 timestamp, and \command{supervise --autostart} monitors only the autostart jails,
-so the others report \setting{not\_checked}. Watch and follow modes are terminal streams; they are intentionally not
+so the others report \setting{not\_checked}. The counts are the last result of
+each check, not the verdict, and nothing expires them: judge freshness by the
+observation time, since a paced or slow supervisor can leave it older than the
+check interval. A restarted jail reads \setting{stale\_jid} until the
+supervisor's checker, which follows the new JID, reports again. Snapshots are
+deleted on stop, \command{rm}, \command{cleanup} and \command{gc}, and a one-shot
+\command{health} inside the start period does not replace a settled result. Watch and follow modes are terminal streams; they are intentionally not
 part of the single-envelope global JSON contract.
 
 \section{Supervisor}

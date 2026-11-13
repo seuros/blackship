@@ -416,7 +416,12 @@ recovery actions: `health` and `supervise` atomically refresh the summary under
 `checked_at` timestamp so clients can judge freshness. A cycle that was shed by
 `health_concurrency` or that errored never refreshes the timestamp, and
 `supervise --autostart` monitors only the autostart jails, so the others report
-`not_checked`. Stopped unmanaged jails
+`not_checked`. The counts are the last result of each check, not the verdict,
+and nothing expires them: judge freshness by `checked_at` (a paced or slow
+supervisor can leave it older than the check interval). A restarted jail reads
+`stale_jid` until the supervisor's checker, which follows the new JID, reports
+again. Snapshots are deleted on stop, `rm`, `cleanup` and `gc`, and a one-shot
+`health` inside the start period does not replace a settled result. Stopped unmanaged jails
 cannot be discovered without a known manifest and are therefore not reported.
 
 Lifecycle commands support the global JSON format in dry-run mode. Their
