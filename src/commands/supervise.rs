@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use crate::error::Result;
 use crate::{bridge, jail, manifest, sickbay, warden};
 
-pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
+pub fn handle(config_path: &Path, verbose: bool, autostart_only: bool) -> Result<()> {
     let config = manifest::load(config_path)?;
     let project_prefix = format!("{}-", config.config.project_name());
     let configured_jails = config.jails.clone();
@@ -18,14 +18,18 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
     let usage_sample_secs = config.config.usage_sample_secs.unwrap_or(30);
 
     let bridge = bridge::Bridge::open(config, verbose)?;
-    let autostart = bridge
-        .autostart_order()?
-        .into_iter()
-        .collect::<HashSet<_>>();
-    let jails_for_health = configured_jails
-        .into_iter()
-        .filter(|jail| autostart.contains(&jail.name))
-        .collect::<Vec<_>>();
+    let jails_for_health = if autostart_only {
+        let autostart = bridge
+            .autostart_order()?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        configured_jails
+            .into_iter()
+            .filter(|jail| autostart.contains(&jail.name))
+            .collect::<Vec<_>>()
+    } else {
+        configured_jails
+    };
     let bridge = Arc::new(Mutex::new(bridge));
 
     let rt = tokio::runtime::Runtime::new()?;
@@ -44,8 +48,13 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
 
         {
             let mut br = bridge.lock().await;
-            if let Err(e) = br.reconcile_autostart() {
-                eprintln!("Warning: Failed to reconcile project autostart: {e}");
+            let startup = if autostart_only {
+                br.reconcile_autostart()
+            } else {
+                br.up(None)
+            };
+            if let Err(e) = startup {
+                eprintln!("Warning: Failed to start some jails: {e}");
             }
         }
 

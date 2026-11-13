@@ -128,8 +128,8 @@ Command & Purpose \\
 \command{health [jail] [--watch] [--interval N] [--json]} & Run configured
 checks. \\
 \command{stats [jail] [--json]} & Aggregate CPU, RSS, and process counts. \\
-\command{supervise} & Reconcile autostart tags, then run the warden
-health/restart/usage loop for that set. \\
+\command{supervise [--autostart]} & Run the warden for all configured jails;
+the option reconciles and supervises only the effective boot set. \\
 \command{qos <jail> --show|--startup|--steady} & Inspect or change a QoS phase. \\
 \command{audit <jail> [--json]} & Render durable lifecycle history. \\
 \command{armada init|up|down|build|ps|config} & Compose multi-jail workflows and

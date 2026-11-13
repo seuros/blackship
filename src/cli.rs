@@ -523,8 +523,12 @@ pub enum Commands {
     /// Report binary and host capabilities
     Capabilities,
 
-    /// Reconcile autostart tags, then monitor and auto-restart those jails
-    Supervise,
+    /// Start the Warden supervisor to monitor and auto-restart jails
+    Supervise {
+        /// Reconcile autostart tags and supervise only that effective set
+        #[usage(long)]
+        autostart: bool,
+    },
 
     /// Run an MCP server for generating jail configuration (stdio, or HTTP with --listen)
     #[cfg(feature = "mcp")]
@@ -863,7 +867,7 @@ impl Commands {
             | Self::Clone { .. }
             | Self::Commit { .. }
             | Self::Migrate { .. }
-            | Self::Supervise => true,
+            | Self::Supervise { .. } => true,
             Self::Armada { action, .. } => action.requires_root(),
             Self::Releases { action, .. } => {
                 action.as_ref().is_some_and(ReleasesAction::requires_root)

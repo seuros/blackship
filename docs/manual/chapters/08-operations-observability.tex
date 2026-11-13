@@ -74,15 +74,18 @@ part of the single-envelope global JSON contract.
 
 \section{Supervisor}
 
-\command{blackship supervise} first reconciles the project to jails carrying
-the reserved \setting{autostart} tag (plus their dependency closure), then runs
-the warden loop for that set. It monitors jail events,
+\command{blackship supervise} keeps its existing behavior of starting every
+configured jail, then runs the warden loop. With \command{--autostart}, it
+first reconciles the project to jails carrying the reserved
+\setting{autostart} tag (plus their dependency closure), then supervises only
+that set. The warden monitors jail events,
 executes health checks, applies recovery/backoff behavior, samples resource
 usage, performs health-triggered QoS transitions, and can send a dead-man ping.
-For boot operation, use the packaged rc script with the same manifest and data
-directory as interactive administration. A project with no autostart tags
-starts no jails at boot. Use \command{blackship autostart --dry-run} to inspect
-the stop/start plan before enabling the rc service.
+For boot operation, configure the packaged rc script to run
+\command{supervise --autostart} with the same manifest and data directory as
+interactive administration. A project with no autostart tags starts no jails
+in that mode. Use \command{blackship autostart --dry-run} to inspect the
+stop/start plan before enabling the rc service.
 
 The supervisor distinguishes intentional stops from failures and avoids
 restarting a jail the operator deliberately took down. Each jail has an

@@ -203,7 +203,9 @@ impl AppContext {
                 lines,
             } => commands::logs::handle(&self.config_path, &jail, follow, lines),
 
-            Commands::Supervise => commands::supervise::handle(&self.config_path, self.verbose),
+            Commands::Supervise { autostart } => {
+                commands::supervise::handle(&self.config_path, self.verbose, autostart)
+            }
 
             #[cfg(feature = "mcp")]
             Commands::Mcp { listen } => commands::mcp::handle(&self.config_path, listen.as_deref()),

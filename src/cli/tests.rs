@@ -43,6 +43,21 @@ fn test_autostart_dry_run_parses() {
 }
 
 #[test]
+fn test_supervise_autostart_is_opt_in() {
+    let default = Cli::parse_from(&[OsStr::new("supervise")]).unwrap();
+    let filtered = Cli::parse_from(&[OsStr::new("supervise"), OsStr::new("--autostart")]).unwrap();
+
+    assert!(matches!(
+        default.command,
+        Commands::Supervise { autostart: false }
+    ));
+    assert!(matches!(
+        filtered.command,
+        Commands::Supervise { autostart: true }
+    ));
+}
+
+#[test]
 fn test_escalation_controls_parse_globally() {
     let argv = [
         OsStr::new("--no-escalate"),

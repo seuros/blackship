@@ -537,10 +537,12 @@ tags = ["autostart", "web"]
 tagged jails and their dependencies in dependency order. A dependency such as
 `database` therefore starts at boot without needing its own tag.
 
-The Warden performs this reconciliation when `blackship supervise` starts, so
-the packaged rc service uses the same manifest rule at boot. With no
-`autostart` tags, no project jails are started. `ps` JSON reports both the raw
-`tags` and the effective `autostart` value (including dependencies).
+`blackship supervise` keeps its existing behavior of starting and monitoring
+every configured jail. Use `blackship supervise --autostart` in the packaged
+rc service to reconcile and monitor only the effective autostart set at boot.
+With no `autostart` tags, that mode starts no project jails. `ps` JSON reports
+both the raw `tags` and the effective `autostart` value (including
+dependencies).
 
 `eva` recomputes each jail's parameters from the config, diffs them against
 the live values from jls, and applies only the changes in one
@@ -634,7 +636,7 @@ the dataset, so `zfs send` carries everything needed to rebuild the jail.
 |---------|-------------|
 | `blackship health [jail] [-w] [-i interval] [--json]` | Health check status |
 | `blackship stats [jail] [--json]` | Per-jail CPU, RSS, and process counts |
-| `blackship supervise` | Reconcile autostart tags, then supervise those jails |
+| `blackship supervise [--autostart]` | Supervise all jails; with `--autostart`, reconcile and supervise only the boot set |
 | `blackship logs <jail> [-f] [-n lines]` | Tail jail logs |
 | `blackship audit <jail> [--json]` | Durable lifecycle history, peak usage, exit reason |
 | `blackship qos <jail> [--show\|--steady\|--startup]` | Inspect or switch the QoS profile |
