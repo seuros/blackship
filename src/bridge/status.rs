@@ -2,6 +2,7 @@
 
 use crate::error::Result;
 use crate::jail::jail_getid;
+use crate::sickbay::{HealthStateRecord, HealthStateStore};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -47,6 +48,89 @@ pub struct InventoryJail {
     pub path: Option<String>,
     pub networks: Vec<String>,
     pub depends_on: Vec<String>,
+    pub health: HealthSummary,
+}
+
+/// Passive, last-known health information for a host inventory row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HealthSummary {
+    pub configured: bool,
+    pub status: String,
+    pub reason: Option<&'static str>,
+    pub checked_at: Option<i64>,
+    pub checks_total: usize,
+    pub checks_passing: Option<usize>,
+    pub checks_failing: Option<usize>,
+    pub checks_pending: Option<usize>,
+}
+
+fn managed_health_summary(
+    definition: &crate::manifest::JailDef,
+    running: bool,
+    jid: Option<i32>,
+    state: Result<Option<HealthStateRecord>>,
+) -> HealthSummary {
+    let checks_total = definition.healthcheck.checks.len();
+    if !definition.healthcheck.enabled || checks_total == 0 {
+        return HealthSummary {
+            configured: false,
+            status: "not_configured".to_string(),
+            reason: None,
+            checked_at: None,
+            checks_total: 0,
+            checks_passing: None,
+            checks_failing: None,
+            checks_pending: None,
+        };
+    }
+
+    let unknown = |reason| HealthSummary {
+        configured: true,
+        status: "unknown".to_string(),
+        reason: Some(reason),
+        checked_at: None,
+        checks_total,
+        checks_passing: None,
+        checks_failing: None,
+        checks_pending: None,
+    };
+
+    if !running {
+        return unknown("stopped");
+    }
+
+    match state {
+        Ok(Some(record)) if record.jid == jid => HealthSummary {
+            configured: true,
+            status: record.status.to_string(),
+            reason: None,
+            checked_at: Some(record.checked_at),
+            checks_total: record.checks_total,
+            checks_passing: Some(record.checks_passing),
+            checks_failing: Some(record.checks_failing),
+            checks_pending: Some(
+                record
+                    .checks_total
+                    .saturating_sub(record.checks_passing.saturating_add(record.checks_failing)),
+            ),
+        },
+        Ok(Some(_)) => unknown("stale_jid"),
+        Ok(None) => unknown("not_checked"),
+        Err(_) => unknown("state_unavailable"),
+    }
+}
+
+fn unmanaged_health_summary() -> HealthSummary {
+    HealthSummary {
+        configured: false,
+        status: "unknown".to_string(),
+        reason: Some("unmanaged"),
+        checked_at: None,
+        checks_total: 0,
+        checks_passing: None,
+        checks_failing: None,
+        checks_pending: None,
+    }
 }
 
 /// Result of validating the manifest and resolving its jail paths.
@@ -106,15 +190,15 @@ impl Bridge {
         }
 
         println!(
-            "{:<24} {:<12} {:<10} {:<10}",
-            "NAME", "MANAGER", "STATE", "JID"
+            "{:<24} {:<12} {:<10} {:<14} {:<10}",
+            "NAME", "MANAGER", "STATE", "HEALTH", "JID"
         );
-        println!("{}", "-".repeat(60));
+        println!("{}", "-".repeat(75));
         for jail in report.jails {
             let jid = jail.jid.map(|j| j.to_string()).unwrap_or_default();
             println!(
-                "{:<24} {:<12} {:<10} {jid:<10}",
-                jail.full_name, jail.manager, jail.state
+                "{:<24} {:<12} {:<10} {:<14} {jid:<10}",
+                jail.full_name, jail.manager, jail.state, jail.health.status
             );
         }
     }
@@ -189,6 +273,7 @@ impl Bridge {
     /// manifest there is no authoritative host-wide registry for them.
     pub fn inventory_data(&self, config_path: &Path) -> InventoryReport {
         let statuses = self.ps_data();
+        let health_store = HealthStateStore::from_config(Some(&self.config));
         let managed_names: BTreeSet<String> = self
             .config
             .jails
@@ -201,25 +286,34 @@ impl Bridge {
             .jails
             .iter()
             .zip(statuses)
-            .map(|(definition, status)| InventoryJail {
-                service_name: Some(definition.name.clone()),
-                full_name: status.name,
-                manager: "blackship",
-                managed: true,
-                configured: true,
-                running: status.running,
-                state: status.state,
-                jid: status.jid,
-                release: definition.release.clone(),
-                hostname: status.hostname,
-                ip: status.ip,
-                ips: status.ips,
-                path: Some(status.path),
-                networks: definition
-                    .network
-                    .as_ref()
-                    .map_or_else(Vec::new, |network| network.networks.clone()),
-                depends_on: definition.depends_on.clone(),
+            .map(|(definition, status)| {
+                let health = managed_health_summary(
+                    definition,
+                    status.running,
+                    status.jid,
+                    health_store.get(&status.name),
+                );
+                InventoryJail {
+                    service_name: Some(definition.name.clone()),
+                    full_name: status.name,
+                    manager: "blackship",
+                    managed: true,
+                    configured: true,
+                    running: status.running,
+                    state: status.state,
+                    jid: status.jid,
+                    release: definition.release.clone(),
+                    hostname: status.hostname,
+                    ip: status.ip,
+                    ips: status.ips,
+                    path: Some(status.path),
+                    networks: definition
+                        .network
+                        .as_ref()
+                        .map_or_else(Vec::new, |network| network.networks.clone()),
+                    depends_on: definition.depends_on.clone(),
+                    health,
+                }
             })
             .collect::<Vec<_>>();
 
@@ -244,6 +338,7 @@ impl Bridge {
                 path: None,
                 networks: Vec::new(),
                 depends_on: Vec::new(),
+                health: unmanaged_health_summary(),
             })
         }));
 
@@ -314,5 +409,97 @@ impl Bridge {
             jail_paths,
             warnings: crate::provision::unbootstrapped_releases(&self.config),
         })
+    }
+}
+
+#[cfg(test)]
+mod health_summary_tests {
+    use super::*;
+    use crate::error::Error;
+    use crate::manifest::BlackshipConfig;
+    use crate::sickbay::HealthStatus;
+
+    fn health_definition() -> crate::manifest::JailDef {
+        let mut config: BlackshipConfig = toml::from_str(
+            r#"
+[config]
+
+[[jails]]
+name = "web"
+
+[jails.healthcheck]
+enabled = true
+
+[[jails.healthcheck.checks]]
+name = "http"
+command = "fetch -qo /dev/null http://127.0.0.1/"
+"#,
+        )
+        .unwrap();
+        config.jails.remove(0)
+    }
+
+    #[test]
+    fn summary_reports_health_not_configured() {
+        let mut definition = health_definition();
+        definition.healthcheck.enabled = false;
+
+        let summary = managed_health_summary(&definition, true, Some(7), Ok(None));
+
+        assert_eq!(summary.status, "not_configured");
+        assert!(!summary.configured);
+        assert_eq!(summary.reason, None);
+    }
+
+    #[test]
+    fn summary_explains_unknown_states() {
+        let definition = health_definition();
+
+        let stopped = managed_health_summary(&definition, false, None, Ok(None));
+        let unchecked = managed_health_summary(&definition, true, Some(7), Ok(None));
+        let unavailable = managed_health_summary(
+            &definition,
+            true,
+            Some(7),
+            Err(Error::State("broken record".to_string())),
+        );
+
+        assert_eq!(stopped.reason, Some("stopped"));
+        assert_eq!(unchecked.reason, Some("not_checked"));
+        assert_eq!(unavailable.reason, Some("state_unavailable"));
+    }
+
+    #[test]
+    fn summary_uses_only_health_from_current_jail_instance() {
+        let definition = health_definition();
+        let record = HealthStateRecord {
+            jail: "blackship-web".to_string(),
+            status: HealthStatus::Healthy,
+            checked_at: 123,
+            jid: Some(7),
+            checks_total: 1,
+            checks_passing: 1,
+            checks_failing: 0,
+        };
+
+        let current = managed_health_summary(&definition, true, Some(7), Ok(Some(record.clone())));
+        let restarted = managed_health_summary(&definition, true, Some(8), Ok(Some(record)));
+
+        assert_eq!(current.status, "healthy");
+        assert_eq!(current.checked_at, Some(123));
+        assert_eq!(current.checks_passing, Some(1));
+        assert_eq!(current.checks_pending, Some(0));
+        assert_eq!(restarted.status, "unknown");
+        assert_eq!(restarted.reason, Some("stale_jid"));
+        assert_eq!(restarted.checked_at, None);
+    }
+
+    #[test]
+    fn unmanaged_summary_is_explicit() {
+        let summary = unmanaged_health_summary();
+
+        assert_eq!(summary.status, "unknown");
+        assert_eq!(summary.reason, Some("unmanaged"));
+        assert!(!summary.configured);
     }
 }

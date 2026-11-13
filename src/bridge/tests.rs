@@ -126,6 +126,8 @@ fn test_inventory_identifies_manifest_owned_jails() {
     assert_eq!(database["managed"], true);
     assert_eq!(database["configured"], true);
     assert_eq!(database["depends_on"], serde_json::json!([]));
+    assert_eq!(database["health"]["configured"], false);
+    assert_eq!(database["health"]["status"], "not_configured");
 }
 
 fn cascade_config(policy: &str) -> BlackshipConfig {

@@ -5,12 +5,12 @@ use std::path::Path;
 
 use crate::error::Result;
 use crate::{jail, manifest, sickbay};
-use sickbay::{HealthChecker, HealthStatus};
+use sickbay::{HealthChecker, HealthStateRecord, HealthStateStore, HealthStatus};
 
 fn prepare_checkers(
     config_path: &Path,
     jail_name: Option<&str>,
-) -> Result<(Vec<HealthChecker>, bool)> {
+) -> Result<(Vec<HealthChecker>, bool, HealthStateStore)> {
     let config = manifest::load(config_path)?;
 
     let jails: Vec<_> = if let Some(jail_name) = jail_name {
@@ -48,7 +48,8 @@ fn prepare_checkers(
         })
         .collect();
 
-    Ok((checkers, no_jails))
+    let state_store = HealthStateStore::from_config(Some(&config));
+    Ok((checkers, no_jails, state_store))
 }
 
 /// Seconds since the jail with this `jid` reached `running`, from the audit log.
@@ -76,13 +77,28 @@ fn pass(checker: &mut HealthChecker) -> Result<HealthStatus> {
     checker.run_checks()
 }
 
+/// Run and persist one completed pass. A state-write failure should not hide
+/// the live health result from the caller.
+fn pass_and_record(checker: &mut HealthChecker, store: &HealthStateStore) -> Result<HealthStatus> {
+    let status = pass(checker)?;
+    let jid = jail::jail_getid(checker.jail_name()).ok();
+    let record = HealthStateRecord::from_checker(checker, status, jid);
+    if let Err(e) = store.save(&record) {
+        eprintln!(
+            "Warning: Failed to save health state for '{}': {e}",
+            checker.jail_name()
+        );
+    }
+    Ok(status)
+}
+
 /// Run one health-check pass without writing terminal output.
 pub fn data(config_path: &Path, jail: Option<&str>) -> Result<Vec<serde_json::Value>> {
-    let (mut checkers, _) = prepare_checkers(config_path, jail)?;
+    let (mut checkers, _, state_store) = prepare_checkers(config_path, jail)?;
     checkers
         .iter_mut()
         .map(|checker| {
-            let status = pass(checker)?;
+            let status = pass_and_record(checker, &state_store)?;
             Ok(checker_json(checker, status))
         })
         .collect()
@@ -95,7 +111,7 @@ pub fn handle(
     interval: u64,
     json: bool,
 ) -> Result<()> {
-    let (mut checkers, no_jails) = prepare_checkers(config_path, jail.as_deref())?;
+    let (mut checkers, no_jails, state_store) = prepare_checkers(config_path, jail.as_deref())?;
 
     if no_jails {
         if json {
@@ -126,7 +142,7 @@ pub fn handle(
         let mut json_results: Vec<serde_json::Value> = Vec::new();
 
         for checker in &mut checkers {
-            let status = pass(checker)?;
+            let status = pass_and_record(checker, &state_store)?;
             if json {
                 json_results.push(checker_json(checker, status));
             } else {

@@ -8,5 +8,7 @@
 
 pub mod checker;
 pub mod recovery;
+pub mod state;
 
 pub use checker::{HealthChecker, HealthStatus};
+pub use state::{HealthStateRecord, HealthStateStore};

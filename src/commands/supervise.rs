@@ -15,6 +15,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
     let rate_limit = config.config.rate_limit.clone();
     let monitor_ping_url = config.config.monitor_ping_url.clone();
     let usage_sample_secs = config.config.usage_sample_secs.unwrap_or(30);
+    let health_state_store = sickbay::HealthStateStore::from_config(Some(&config));
 
     let bridge = bridge::Bridge::open(config, verbose)?;
     let bridge = Arc::new(Mutex::new(bridge));
@@ -66,6 +67,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
             &project_prefix,
             &rate_limit,
             &warden_handle_for_health,
+            &health_state_store,
         );
 
         if usage_sample_secs > 0 {
@@ -148,6 +150,7 @@ fn spawn_health_monitors(
     project_prefix: &str,
     rate_limit: &manifest::RateLimitConfig,
     warden_handle: &warden::WardenHandle,
+    state_store: &sickbay::HealthStateStore,
 ) -> Vec<Arc<AtomicBool>> {
     let mut health_stop_signals = Vec::new();
 
@@ -170,16 +173,29 @@ fn spawn_health_monitors(
         }
 
         health_stop_signals.push(checker.stop_signal());
+        let state_store = state_store.clone();
 
         tokio::spawn(async move {
             while !checker.is_stopped() {
-                if let Err(e) = checker.run_checks() {
-                    eprintln!("Health check error for {}: {}", checker.jail_name(), e);
-                }
-
-                let status = checker.status();
-                if status == sickbay::HealthStatus::Failing {
-                    eprintln!("Health check failing for jail '{}'", checker.jail_name());
+                match checker.run_checks() {
+                    Ok(_) => {
+                        let status = checker.status();
+                        let jid = jail::jail_getid(checker.jail_name()).ok();
+                        let record =
+                            sickbay::HealthStateRecord::from_checker(&checker, status, jid);
+                        if let Err(e) = state_store.save(&record) {
+                            eprintln!(
+                                "Warning: Failed to save health state for '{}': {e}",
+                                checker.jail_name()
+                            );
+                        }
+                        if status == sickbay::HealthStatus::Failing {
+                            eprintln!("Health check failing for jail '{}'", checker.jail_name());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Health check error for {}: {}", checker.jail_name(), e);
+                    }
                 }
 
                 tokio::time::sleep(tokio::time::Duration::from_secs(
