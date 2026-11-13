@@ -42,6 +42,75 @@ fn test_stop_order() {
     assert_eq!(order, vec!["frontend", "backend", "database"]);
 }
 
+fn autostart_config() -> BlackshipConfig {
+    toml::from_str(
+        r#"
+[config]
+data_dir = "/var/blackship"
+
+[[jails]]
+name = "database"
+path = "/jails/database"
+
+[[jails]]
+name = "api"
+path = "/jails/api"
+depends_on = ["database"]
+tags = ["autostart", "web"]
+
+[[jails]]
+name = "worker"
+path = "/jails/worker"
+depends_on = ["database"]
+
+[[jails]]
+name = "scratch"
+path = "/jails/scratch"
+"#,
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_autostart_includes_dependencies_in_start_order() {
+    let bridge = Bridge::new(autostart_config()).unwrap();
+
+    assert_eq!(bridge.autostart_order().unwrap(), vec!["database", "api"]);
+    assert_eq!(
+        bridge.autostart_stop_order().unwrap(),
+        vec!["worker", "scratch"]
+    );
+}
+
+#[test]
+fn test_autostart_without_tags_stops_every_project_jail() {
+    let bridge = Bridge::new(test_config()).unwrap();
+
+    assert_eq!(bridge.autostart_order().unwrap(), Vec::<String>::new());
+    assert_eq!(
+        bridge.autostart_stop_order().unwrap(),
+        vec!["frontend", "backend", "database"]
+    );
+}
+
+#[test]
+fn test_status_reports_effective_autostart_for_dependencies() {
+    let bridge = Bridge::new(autostart_config()).unwrap();
+    let statuses = bridge.ps_data();
+    let database = statuses
+        .iter()
+        .find(|status| status.name == "blackship-database")
+        .unwrap();
+    let worker = statuses
+        .iter()
+        .find(|status| status.name == "blackship-worker")
+        .unwrap();
+
+    assert!(database.autostart);
+    assert_eq!(database.tags, Vec::<String>::new());
+    assert!(!worker.autostart);
+}
+
 #[test]
 fn test_machine_up_plan_preserves_dependency_order() {
     let bridge = Bridge::new(test_config()).unwrap();

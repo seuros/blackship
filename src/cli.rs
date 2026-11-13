@@ -127,6 +127,13 @@ pub enum Commands {
         enable_pf: bool,
     },
 
+    /// Reconcile this project's jails to the `autostart` tag
+    Autostart {
+        /// Show the stop/start plan without changing any jails
+        #[usage(long)]
+        dry_run: bool,
+    },
+
     /// Initialize a new Jailfile in the current directory
     Init {
         /// Output file name
@@ -516,7 +523,7 @@ pub enum Commands {
     /// Report binary and host capabilities
     Capabilities,
 
-    /// Start the Warden supervisor to monitor and auto-restart jails
+    /// Reconcile autostart tags, then monitor and auto-restart those jails
     Supervise,
 
     /// Run an MCP server for generating jail configuration (stdio, or HTTP with --listen)
@@ -821,7 +828,8 @@ impl Commands {
             Self::Up { dry_run, .. }
             | Self::Down { dry_run, .. }
             | Self::Restart { dry_run, .. }
-            | Self::Eva { dry_run, .. } => *dry_run,
+            | Self::Eva { dry_run, .. }
+            | Self::Autostart { dry_run } => *dry_run,
             _ => false,
         }
     }
@@ -832,7 +840,8 @@ impl Commands {
             | Self::Down { dry_run, .. }
             | Self::Restart { dry_run, .. }
             | Self::Eva { dry_run, .. }
-            | Self::Build { dry_run, .. } => !dry_run,
+            | Self::Build { dry_run, .. }
+            | Self::Autostart { dry_run } => !dry_run,
             Self::Qos { show, .. } => !show,
             // gc reads root-owned scope records under its lock even in a dry
             // run; health checks jail_attach into the jail.

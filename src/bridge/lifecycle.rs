@@ -232,6 +232,32 @@ struct StartClaims {
 type PostStopHook = (HookRunner, PathBuf);
 
 impl Bridge {
+    /// Reconcile this project's running jails to the reserved `autostart` tag.
+    ///
+    /// Untagged jails are stopped exactly (without cascade expansion), then
+    /// tagged jails and their dependency closure are started in graph order.
+    pub fn reconcile_autostart(&mut self) -> Result<()> {
+        let stop = self.autostart_stop_order()?;
+        let start = self.autostart_order()?;
+
+        for name in &stop {
+            if self.is_running(name)? {
+                self.stop_jail(name)?;
+            }
+        }
+        for name in &start {
+            if !self.is_running(name)? {
+                self.start_jail(name)?;
+            }
+        }
+
+        println!(
+            "Project autostart reconciled: {} jail(s) should be running.",
+            start.len()
+        );
+        Ok(())
+    }
+
     /// Persist the in-flight scope record. Never fails the jail operation.
     pub(super) fn persist_scope(&self, scope: &mut ScopeRecord) {
         scope.touch();

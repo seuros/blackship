@@ -35,6 +35,14 @@ fn test_text_output_format_is_default() {
 }
 
 #[test]
+fn test_autostart_dry_run_parses() {
+    let argv = [OsStr::new("autostart"), OsStr::new("--dry-run")];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert!(matches!(cli.command, Commands::Autostart { dry_run: true }));
+}
+
+#[test]
 fn test_escalation_controls_parse_globally() {
     let argv = [
         OsStr::new("--no-escalate"),
@@ -200,6 +208,14 @@ fn test_up_dry_run_does_not_require_root() {
     };
 
     assert!(!command.requires_root());
+}
+
+#[test]
+fn test_autostart_privilege_tracks_dry_run() {
+    assert!(Commands::Autostart { dry_run: false }.requires_root());
+    assert!(!Commands::Autostart { dry_run: true }.requires_root());
+    assert!(Commands::Autostart { dry_run: true }.supports_machine_output());
+    assert!(!Commands::Autostart { dry_run: false }.supports_machine_output());
 }
 
 #[test]

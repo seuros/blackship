@@ -12,6 +12,9 @@ use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
+/// Reserved jail tag used to declare that a jail should be running after boot.
+pub const AUTOSTART_TAG: &str = "autostart";
+
 /// Validate a jail/project/network name: these reach paths, ZFS datasets and netgraph nodes.
 pub fn validate_name(kind: &str, name: &str) -> Result<()> {
     if name.is_empty() {
@@ -857,6 +860,14 @@ pub struct JailDef {
 }
 
 impl JailDef {
+    /// Whether this jail is an explicit project autostart target.
+    ///
+    /// Dependencies do not need the tag themselves: project reconciliation
+    /// includes the full dependency closure of every tagged jail.
+    pub fn autostarts(&self) -> bool {
+        self.tags.iter().any(|tag| tag == AUTOSTART_TAG)
+    }
+
     /// Get the effective path for this jail
     ///
     /// If ZFS is enabled and no path is specified, returns the ZFS mountpoint.
