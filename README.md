@@ -326,8 +326,10 @@ sudo env BLACKSHIP_E2E_DATA_DIR=/var/tmp/bw BLACKSHIP_E2E_ZFS=zroot/blackship-e2
 ## Machine-readable CLI
 
 Automation can opt into a versioned JSON contract with the global
-`--format json` option. The first contract version covers the read-only
-commands most useful to management UIs:
+`--format json` option. As an inherited global, it works before or after the
+selected command (`blackship --format json capabilities` and
+`blackship capabilities --format json` are equivalent). The first contract
+version covers the read-only commands most useful to management UIs:
 
 ```sh
 blackship --format json ps

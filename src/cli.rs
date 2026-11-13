@@ -26,7 +26,7 @@ pub struct Cli {
     pub non_interactive: bool,
 
     /// Output format for machine-readable commands
-    #[usage(long, default = "text", value_enum)]
+    #[usage(long, default = "text", value_enum, global)]
     pub format: OutputFormat,
 
     #[usage(subcommand)]

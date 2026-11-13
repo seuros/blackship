@@ -102,6 +102,8 @@ fn args(values: &[&str]) -> Vec<OsString> {
 fn detects_both_json_option_forms() {
     assert!(requested_json(&args(&["--format", "json", "ps"])));
     assert!(requested_json(&args(&["--format=json", "check"])));
+    assert!(requested_json(&args(&["capabilities", "--format", "json"])));
+    assert!(requested_json(&args(&["armada", "ps", "--format=json"])));
     assert!(requested_json(&args(&[
         "--format", "text", "--format", "json", "ps"
     ])));
