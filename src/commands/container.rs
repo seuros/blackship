@@ -188,6 +188,7 @@ pub fn remove_jails(
         }
 
         println!("Removing jail '{jail}'...");
+        crate::sickbay::HealthStateStore::from_config(config).forget(jail);
 
         if is_running {
             println!("  Stopping jail...");

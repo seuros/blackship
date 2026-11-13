@@ -86,6 +86,23 @@ impl HealthStateStore {
         Ok(Some(record))
     }
 
+    /// Drop a jail's snapshot; a missing one is fine.
+    pub fn delete(&self, jail: &str) -> Result<()> {
+        validate_name(jail)?;
+        match fs::remove_file(self.record_path(jail)) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(Error::State(format!("Failed to remove health state: {e}"))),
+        }
+    }
+
+    /// `delete`, reporting a failure instead of returning it: a stale snapshot is harmless.
+    pub fn forget(&self, jail: &str) {
+        if let Err(e) = self.delete(jail) {
+            eprintln!("Warning: could not clear health state for '{jail}': {e}");
+        }
+    }
+
     fn record_path(&self, jail: &str) -> PathBuf {
         self.root.join(format!("{jail}.toml"))
     }

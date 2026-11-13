@@ -1496,6 +1496,8 @@ impl Bridge {
             }
         }
 
+        crate::sickbay::HealthStateStore::from_config(Some(&self.config)).forget(full_name);
+
         // Not tracked by this process: the jail was mid-stop by construction.
         let step = step.or_else(|| {
             Step::phase(
@@ -1606,6 +1608,7 @@ impl Bridge {
         }
 
         self.instances.remove(&full_name);
+        crate::sickbay::HealthStateStore::from_config(Some(&self.config)).forget(&full_name);
 
         if let Some(vnet_setup) = self.vnet_setups.remove(&full_name) {
             println!("  Cleaning up VNET setup...");

@@ -59,3 +59,24 @@ fn store_rejects_mismatched_record_name() {
 
     assert!(store.get("project-web").is_err());
 }
+
+#[test]
+fn delete_removes_the_record_and_tolerates_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = HealthStateStore::new(dir.path().join("health"));
+    let record = HealthStateRecord {
+        jail: "project-web".to_string(),
+        status: HealthStatus::Healthy,
+        checked_at: 1,
+        jid: Some(3),
+        checks_total: 1,
+        checks_passing: 1,
+        checks_failing: 0,
+    };
+    store.save(&record).unwrap();
+
+    store.delete("project-web").unwrap();
+    assert_eq!(store.get("project-web").unwrap(), None);
+    store.delete("project-web").unwrap();
+    assert!(store.delete("../other").is_err());
+}

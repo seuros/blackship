@@ -250,6 +250,7 @@ pub struct Reaper {
     vnet_state_store: VnetStateStore,
     lease_store: NetworkLeaseStore,
     audit: AuditLog,
+    health_store: crate::sickbay::HealthStateStore,
     network_store: NetworkStore,
     manifest_bridges: Vec<String>,
     zfs: Option<ZfsManager>,
@@ -277,6 +278,7 @@ impl Reaper {
             vnet_state_store: VnetStateStore::from_config(Some(config)),
             lease_store: NetworkLeaseStore::from_config(Some(config)),
             audit: AuditLog::from_config(Some(config)),
+            health_store: crate::sickbay::HealthStateStore::from_config(Some(config)),
             network_store: NetworkStore::from_config(Some(config)),
             manifest_bridges: config
                 .config
@@ -436,6 +438,8 @@ impl Reaper {
             );
             residual.push("port-forwards".to_string());
         }
+
+        self.health_store.forget(&scope.name);
 
         let mut record = AuditRecord::new(&scope.name, AuditEvent::Reaped);
         if residual.is_empty() {

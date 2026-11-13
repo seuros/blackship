@@ -77,11 +77,27 @@ fn pass(checker: &mut HealthChecker) -> Result<HealthStatus> {
     checker.run_checks()
 }
 
+/// A one-shot `health` must not demote a settled supervisor record: a run still inside the
+/// start period reports `starting` and is only recorded when there is nothing better, or
+/// the jail is a different instance.
+fn should_overwrite(existing: Option<&HealthStateRecord>, new: &HealthStateRecord) -> bool {
+    match existing {
+        Some(old) if old.jid == new.jid => {
+            !(new.status == HealthStatus::Starting && old.status != HealthStatus::Starting)
+        }
+        _ => true,
+    }
+}
+
 /// Run and persist one completed pass. A state-write failure should not hide
 /// the live health result from the caller.
 fn pass_and_record(checker: &mut HealthChecker, store: &HealthStateStore) -> Result<HealthStatus> {
     let status = pass(checker)?;
     let record = HealthStateRecord::from_checker(checker, status);
+    let existing = store.get(checker.jail_name()).ok().flatten();
+    if !should_overwrite(existing.as_ref(), &record) {
+        return Ok(status);
+    }
     if let Err(e) = store.save(&record) {
         eprintln!(
             "Warning: Failed to save health state for '{}': {e}",
@@ -236,3 +252,6 @@ const fn ansi_color(status: HealthStatus) -> Option<u8> {
         HealthStatus::Unknown => None,
     }
 }
+
+#[cfg(test)]
+mod tests;
