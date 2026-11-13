@@ -221,6 +221,26 @@ fn mount_options(path: &std::path::Path) -> Vec<String> {
 
 #[test]
 #[ignore = "needs root and a bootstrapped release"]
+fn exec_survives_a_directory_fd_held_by_another_thread() {
+    let Some(s) = setup() else { return };
+    let c = s
+        .host
+        .create(&ContainerSpec::new(name("dirfd"), &s.release))
+        .unwrap();
+
+    // A sibling thread walking a directory holds a dirfd while we fork; jail_attach(2)
+    // refuses to run in a process that inherited one.
+    let held = std::fs::File::open(&s.data_dir).unwrap();
+    let out = c.exec(Exec::argv(["/bin/echo", "attached"])).unwrap();
+    drop(held);
+
+    assert_eq!(out.exit, Exit::Code(0));
+    assert_eq!(out.stdout, b"attached\n");
+    c.destroy().unwrap();
+}
+
+#[test]
+#[ignore = "needs root and a bootstrapped release"]
 fn mounts_carry_nosuid_and_noexec() {
     let Some(s) = setup() else { return };
     let pid = std::process::id();

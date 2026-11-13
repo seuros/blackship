@@ -249,6 +249,7 @@ pub fn run(jid: i32, exec: Exec<'_>) -> Result<ExecOutput> {
     // SAFETY: only async-signal-safe syscalls on memory allocated before fork.
     unsafe {
         cmd.pre_exec(move || {
+            crate::proc::close_dir_fds();
             if libc::jail_attach(jid) != 0 {
                 return Err(io::Error::last_os_error());
             }
