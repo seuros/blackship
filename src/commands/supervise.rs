@@ -56,7 +56,7 @@ pub fn handle(config_path: &Path, verbose: bool, autostart_only: bool) -> Result
         {
             let mut br = bridge.lock().await;
             let startup = if autostart_only {
-                br.reconcile_autostart()
+                br.reconcile_autostart(false)
             } else {
                 br.up(None)
             };

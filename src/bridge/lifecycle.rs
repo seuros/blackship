@@ -229,28 +229,88 @@ struct StartClaims {
     jid: Option<i32>,
 }
 
+/// What a reconcile pass does to jails; a seam so the pass is testable without a host.
+trait Hands {
+    fn is_running(&self, name: &str) -> Result<bool>;
+    fn stop(&mut self, name: &str) -> Result<()>;
+    fn start(&mut self, name: &str) -> Result<()>;
+}
+
+impl Hands for Bridge {
+    fn is_running(&self, name: &str) -> Result<bool> {
+        Self::is_running(self, name)
+    }
+
+    fn stop(&mut self, name: &str) -> Result<()> {
+        self.stop_jail(name)
+    }
+
+    fn start(&mut self, name: &str) -> Result<()> {
+        self.start_jail(name)
+    }
+}
+
+/// Stop what must go, then start what must run. A stop error never blocks the start
+/// pass; every stop error is reported once the starts are done.
+fn reconcile(hands: &mut impl Hands, stop: &[String], start: &[String]) -> Result<()> {
+    let mut stop_errors = Vec::new();
+    for name in stop {
+        match hands.is_running(name) {
+            Ok(true) => {
+                if let Err(e) = hands.stop(name) {
+                    eprintln!("Warning: could not stop '{name}': {e}");
+                    stop_errors.push(format!("stop '{name}': {e}"));
+                }
+            }
+            Ok(false) => {}
+            Err(e) => stop_errors.push(format!("check '{name}': {e}")),
+        }
+    }
+
+    let started = start.iter().try_for_each(|name| {
+        if hands.is_running(name)? {
+            Ok(())
+        } else {
+            hands.start(name)
+        }
+    });
+
+    match (started, stop_errors.is_empty()) {
+        (Ok(()), true) => Ok(()),
+        (Ok(()), false) => Err(Error::JailOperation(format!(
+            "autostart reconcile finished with {} stop error(s): {}",
+            stop_errors.len(),
+            stop_errors.join("; ")
+        ))),
+        (Err(e), true) => Err(e),
+        (Err(e), false) => Err(Error::JailOperation(format!(
+            "{e}; also {} stop error(s): {}",
+            stop_errors.len(),
+            stop_errors.join("; ")
+        ))),
+    }
+}
+
 /// The `post_stop` hook runner and the jail root it runs against.
 type PostStopHook = (HookRunner, PathBuf);
 
 impl Bridge {
     /// Reconcile this project's running jails to the reserved `autostart` tag.
     ///
-    /// Untagged jails are stopped exactly (without cascade expansion), then
-    /// tagged jails and their dependency closure are started in graph order.
-    pub fn reconcile_autostart(&mut self) -> Result<()> {
-        let stop = self.autostart_stop_order()?;
+    /// With `prune`, untagged jails are stopped exactly (without cascade
+    /// expansion) first; without it nothing is ever stopped, which is what a
+    /// supervisor restart needs. Tagged jails and their dependency closure are
+    /// then started in graph order. With no `autostart` tags there is nothing
+    /// to start, and `prune` stops every project jail.
+    pub fn reconcile_autostart(&mut self, prune: bool) -> Result<()> {
+        let stop = if prune {
+            self.autostart_stop_order()?
+        } else {
+            Vec::new()
+        };
         let start = self.autostart_order()?;
 
-        for name in &stop {
-            if self.is_running(name)? {
-                self.stop_jail(name)?;
-            }
-        }
-        for name in &start {
-            if !self.is_running(name)? {
-                self.start_jail(name)?;
-            }
-        }
+        reconcile(self, &stop, &start)?;
 
         println!(
             "Project autostart reconciled: {} jail(s) should be running.",

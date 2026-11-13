@@ -101,7 +101,12 @@ service blackship_warden start
 \end{lstlisting}
 
 The service runs \command{setup}, then \command{supervise --autostart}; it does
-not start every jail first. The autostart setting defaults to \setting{NO} for
+not start every jail first. This mode is start-only: it never stops a running
+jail, so restarting the warden leaves jails started by hand alone, and only the
+explicit \command{blackship autostart} prunes untagged project jails (a jail that
+fails to stop is reported at the end and never blocks the start pass). A jail
+counts as started once it exists and its \command{/etc/rc} is launched; services
+may still be coming up, so judge readiness by health checks. The autostart setting defaults to \setting{NO} for
 compatibility, which keeps the service's all-jails behavior. A project with no
 autostart tags starts no jails when the setting is enabled. Use
 \command{blackship autostart --dry-run} to inspect the stop/start plan before

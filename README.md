@@ -555,7 +555,16 @@ tags = ["autostart", "web"]
 `blackship autostart --dry-run` previews the desired project state. Running
 `blackship autostart` stops project jails outside that state, then starts the
 tagged jails and their dependencies in dependency order. A dependency such as
-`database` therefore starts at boot without needing its own tag.
+`database` therefore starts at boot without needing its own tag. A jail that
+fails to stop is reported at the end and never blocks the start pass. With no
+`autostart` tags it stops every project jail and starts nothing.
+
+`blackship supervise --autostart` is start-only: it starts the effective set and
+never stops anything, so restarting the warden leaves a jail you started by hand
+alone. Only the explicit `blackship autostart` prunes. With no tags it starts
+nothing. "Started" means the jail exists and its `/etc/rc` has been launched
+(`init = true`); services may still be coming up, so judge readiness by health
+checks, not by the command returning.
 
 `blackship supervise` keeps its existing behavior of starting and monitoring
 every configured jail. The packaged rc service uses that behavior by default.

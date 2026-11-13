@@ -394,7 +394,9 @@ impl AppContext {
 
             Commands::Setup { enable_pf } => self.setup(enable_pf),
             Commands::Autostart { dry_run: true } => self.verbose_bridge()?.autostart_dry_run(),
-            Commands::Autostart { dry_run: false } => self.verbose_bridge()?.reconcile_autostart(),
+            Commands::Autostart { dry_run: false } => {
+                self.verbose_bridge()?.reconcile_autostart(true)
+            }
         }
     }
 

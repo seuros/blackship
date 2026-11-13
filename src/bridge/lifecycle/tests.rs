@@ -267,3 +267,100 @@ fn a_migration_fence_refuses_start_until_cleared() {
     assert!(unfenced);
     assert!(started && running, "the jail starts once unfenced");
 }
+
+#[derive(Default)]
+struct Fake {
+    running: Vec<String>,
+    refuse_stop: Vec<String>,
+    refuse_start: Vec<String>,
+    calls: Vec<String>,
+}
+
+impl Hands for Fake {
+    fn is_running(&self, name: &str) -> Result<bool> {
+        Ok(self.running.iter().any(|n| n == name))
+    }
+
+    fn stop(&mut self, name: &str) -> Result<()> {
+        self.calls.push(format!("stop {name}"));
+        if self.refuse_stop.iter().any(|n| n == name) {
+            return Err(Error::JailOperation(format!("{name} will not stop")));
+        }
+        self.running.retain(|n| n != name);
+        Ok(())
+    }
+
+    fn start(&mut self, name: &str) -> Result<()> {
+        self.calls.push(format!("start {name}"));
+        if self.refuse_start.iter().any(|n| n == name) {
+            return Err(Error::JailOperation(format!("{name} will not start")));
+        }
+        self.running.push(name.to_string());
+        Ok(())
+    }
+}
+
+fn names(list: &[&str]) -> Vec<String> {
+    list.iter().map(ToString::to_string).collect()
+}
+
+#[test]
+fn reconcile_stops_then_starts_and_skips_what_is_already_right() {
+    let mut fake = Fake {
+        running: names(&["old", "db"]),
+        ..Fake::default()
+    };
+    reconcile(&mut fake, &names(&["old", "idle"]), &names(&["db", "web"])).unwrap();
+    assert_eq!(fake.calls, ["stop old", "start web"]);
+}
+
+#[test]
+fn a_stop_error_does_not_block_the_starts_and_is_reported_at_the_end() {
+    let mut fake = Fake {
+        running: names(&["stubborn", "other"]),
+        refuse_stop: names(&["stubborn"]),
+        ..Fake::default()
+    };
+    let error = reconcile(
+        &mut fake,
+        &names(&["stubborn", "other"]),
+        &names(&["web", "api"]),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert_eq!(
+        fake.calls,
+        ["stop stubborn", "stop other", "start web", "start api"]
+    );
+    assert!(error.contains("stop 'stubborn'"), "{error}");
+    assert!(error.contains("1 stop error"), "{error}");
+}
+
+#[test]
+fn start_only_reconcile_never_stops_anything() {
+    let mut fake = Fake {
+        running: names(&["manual"]),
+        ..Fake::default()
+    };
+    reconcile(&mut fake, &[], &names(&["web"])).unwrap();
+    assert_eq!(fake.calls, ["start web"]);
+    assert!(fake.running.contains(&"manual".to_string()));
+}
+
+#[test]
+fn a_start_error_stops_the_pass_and_keeps_the_stop_errors() {
+    let mut fake = Fake {
+        running: names(&["stubborn"]),
+        refuse_stop: names(&["stubborn"]),
+        refuse_start: names(&["db"]),
+        ..Fake::default()
+    };
+    let error = reconcile(&mut fake, &names(&["stubborn"]), &names(&["db", "web"]))
+        .unwrap_err()
+        .to_string();
+
+    assert_eq!(fake.calls, ["stop stubborn", "start db"]);
+    assert!(error.contains("db will not start"), "{error}");
+    assert!(error.contains("stop 'stubborn'"), "{error}");
+}
