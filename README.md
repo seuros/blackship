@@ -541,11 +541,21 @@ tagged jails and their dependencies in dependency order. A dependency such as
 `database` therefore starts at boot without needing its own tag.
 
 `blackship supervise` keeps its existing behavior of starting and monitoring
-every configured jail. Use `blackship supervise --autostart` in the packaged
-rc service to reconcile and monitor only the effective autostart set at boot.
-With no `autostart` tags, that mode starts no project jails. `ps` JSON reports
-both the raw `tags` and the effective `autostart` value (including
-dependencies).
+every configured jail. The packaged rc service uses that behavior by default.
+Enable its autostart mode to reconcile and monitor only the effective boot set:
+
+```sh
+sysrc blackship_warden_enable=YES
+sysrc blackship_warden_autostart=YES
+service blackship_warden start
+```
+
+The rc service runs `blackship setup` first, then launches
+`blackship supervise --autostart`; it does not briefly start the entire fleet.
+With no `autostart` tags, that mode starts no project jails. Leave
+`blackship_warden_autostart` at its default `NO` to retain the all-jails
+behavior. `ps` JSON reports both the raw `tags` and the effective `autostart`
+value (including dependencies).
 
 `eva` recomputes each jail's parameters from the config, diffs them against
 the live values from jls, and applies only the changes in one

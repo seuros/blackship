@@ -83,11 +83,20 @@ executes health checks, applies recovery/backoff behavior, samples resource
 usage, performs health-triggered QoS transitions, and can send a dead-man ping.
 Health checks can use phi-accrual suspicion in place of retry counting, and
 their concurrency can be bounded adaptively; see the configuration chapter.
-For boot operation, configure the packaged rc script to run
-\command{supervise --autostart} with the same manifest and data directory as
-interactive administration. A project with no autostart tags starts no jails
-in that mode. Use \command{blackship autostart --dry-run} to inspect the
-stop/start plan before enabling the rc service.
+For boot operation, enable autostart filtering in the packaged rc service:
+
+\begin{lstlisting}[language=bash]
+sysrc blackship_warden_enable=YES
+sysrc blackship_warden_autostart=YES
+service blackship_warden start
+\end{lstlisting}
+
+The service runs \command{setup}, then \command{supervise --autostart}; it does
+not start every jail first. The autostart setting defaults to \setting{NO} for
+compatibility, which keeps the service's all-jails behavior. A project with no
+autostart tags starts no jails when the setting is enabled. Use
+\command{blackship autostart --dry-run} to inspect the stop/start plan before
+enabling the rc service.
 
 The supervisor distinguishes intentional stops from failures and avoids
 restarting a jail the operator deliberately took down. Each jail has an

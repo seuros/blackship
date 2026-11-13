@@ -11,10 +11,17 @@ To get started:
    edit %%ETCDIR%%/blackship.toml
 
 3. Start managing jails:
-   blackship --config %%ETCDIR%%/blackship.toml status
+   blackship --config %%ETCDIR%%/blackship.toml ps
 
 4. To enable the Warden supervisor (auto-restart jails):
    sysrc blackship_warden_enable=YES
+
+   By default the service starts and supervises every configured jail.
+   To use only jails tagged "autostart" and their dependencies, set this
+   before the first start:
+   sysrc blackship_warden_autostart=YES
+
+   Start the service:
    service blackship_warden start
 
 For more information, see: https://github.com/seuros/blackship
