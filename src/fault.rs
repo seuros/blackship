@@ -3,6 +3,7 @@
 /// Seams in the start path where a test can make the next step fail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Point {
+    AfterBridge,
     AfterZfs,
     AfterLease,
     AfterJailCreate,

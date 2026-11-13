@@ -176,3 +176,58 @@ fn scrub_live_jail(env: &Env) {
         jail_remove(jid).unwrap();
     }
 }
+
+const BRIDGE: &str = "rgbr0";
+const BYSTANDER: &str = "rgbyst0";
+
+fn vnet_extra() -> String {
+    format!("[jails.network]\nvnet = true\nnetworks = [\"{NETWORK}\"]\nbridge = \"{BRIDGE}\"")
+}
+
+fn interface_exists(name: &str) -> bool {
+    crate::network::ioctl::interface_exists(name).unwrap()
+}
+
+fn destroy_if_present(name: &str) {
+    if interface_exists(name) {
+        crate::network::ioctl::destroy_interface(name).unwrap();
+    }
+}
+
+#[test]
+#[ignore = "needs root, ZFS and a bootstrapped release"]
+fn gc_reclaims_the_bridge_a_failed_vnet_start_created() {
+    let Some(env) = env(&vnet_extra()) else {
+        return;
+    };
+    destroy_if_present(BRIDGE);
+    destroy_if_present(BYSTANDER);
+    crate::network::Bridge::create(BYSTANDER).unwrap();
+
+    let mut bridge = bridge(&env);
+    fault::arm(Point::AfterBridge);
+    let outcome = bridge.up(Some("web"));
+    fault::disarm();
+    let leaked = interface_exists(BRIDGE);
+
+    let reaper = Reaper::new(&env.config, false).unwrap();
+    for orphan in classify(&reaper.survey().unwrap()) {
+        if !orphan.requires_force {
+            reaper.reap(&orphan, false, false).unwrap();
+        }
+    }
+    let reclaimed = !interface_exists(BRIDGE);
+    let bystander_kept = interface_exists(BYSTANDER);
+
+    drop(reaper);
+    scrub(&env);
+    destroy_if_present(BRIDGE);
+    destroy_if_present(BYSTANDER);
+    assert!(outcome.is_err());
+    assert!(
+        leaked,
+        "the failed start should strand the bridge it created"
+    );
+    assert!(reclaimed, "gc should reclaim the stranded bridge");
+    assert!(bystander_kept, "gc must not touch an untagged bridge");
+}

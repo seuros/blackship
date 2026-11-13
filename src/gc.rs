@@ -5,11 +5,14 @@ use crate::bulkhead::BulkheadManager;
 use crate::error::{Error, Result};
 use crate::jail::{RunningJails, jail_getname};
 use crate::manifest::BlackshipConfig;
-use crate::network::store::{FileLock, NetworkLeaseStore, VnetStateRecord, VnetStateStore};
+use crate::network::Bridge;
+use crate::network::store::{
+    FileLock, NetworkLeaseStore, NetworkStore, VnetStateRecord, VnetStateStore,
+};
 use crate::network::vnet::VnetSetup;
 use crate::scope::{ScopeRecord, ScopeStore};
 use crate::zfs::ZfsManager;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// What was found stranded, and what it takes to release it.
@@ -25,6 +28,8 @@ pub enum OrphanKind {
     StrayDataset(String),
     /// A drain sub-anchor left loaded after its jail is gone.
     StrayDrainAnchor(String),
+    /// A blackship-created bridge with no members and no network naming it.
+    StrayBridge(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,11 +51,20 @@ impl Orphan {
             OrphanKind::StrayInterface(_) => "interface",
             OrphanKind::StrayDataset(_) => "dataset",
             OrphanKind::StrayDrainAnchor(_) => "drain-anchor",
+            OrphanKind::StrayBridge(_) => "bridge",
         }
     }
 }
 
+/// A blackship-tagged `if_bridge` and how many interfaces hang off it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgeFacts {
+    pub name: String,
+    pub members: Vec<String>,
+}
+
 /// Facts a classification is made from, gathered by [`survey`].
+#[derive(Default)]
 pub struct Survey {
     pub live: HashSet<String>,
     pub scopes: Vec<ScopeRecord>,
@@ -58,6 +72,10 @@ pub struct Survey {
     pub tagged_ifaces: Vec<String>,
     pub datasets: Vec<String>,
     pub drain_anchors: Vec<String>,
+    /// Tagged interfaces that are bridges.
+    pub bridges: Vec<BridgeFacts>,
+    /// Bridges a network record or the manifest still names.
+    pub named_bridges: HashSet<String>,
 }
 
 /// Decide what is stranded. Pure: no syscalls, no filesystem.
@@ -93,8 +111,18 @@ pub fn classify(survey: &Survey) -> Vec<Orphan> {
         });
     }
 
+    let bridges: HashMap<&str, &BridgeFacts> = survey
+        .bridges
+        .iter()
+        .map(|bridge| (bridge.name.as_str(), bridge))
+        .collect();
+
     for iface in &survey.tagged_ifaces {
         if claimed_ifaces.contains(iface.as_str()) {
+            continue;
+        }
+        if let Some(bridge) = bridges.get(iface.as_str()) {
+            orphans.extend(stray_bridge(survey, bridge));
             continue;
         }
         orphans.push(Orphan {
@@ -141,6 +169,34 @@ pub fn classify(survey: &Survey) -> Vec<Orphan> {
     }
 
     orphans
+}
+
+/// A tagged bridge only a gone jail's epair, or nothing, still uses.
+///
+/// Records and members of a gone jail are reaped in the same pass, so they hold nothing.
+fn stray_bridge(survey: &Survey, bridge: &BridgeFacts) -> Option<Orphan> {
+    let gone = |owner: &str| !survey.live.contains(owner);
+    let in_use = survey
+        .vnet
+        .iter()
+        .any(|r| !gone(&r.owner) && r.bridge == bridge.name)
+        || survey.named_bridges.contains(&bridge.name);
+    let held = bridge.members.iter().any(|member| {
+        !survey
+            .vnet
+            .iter()
+            .any(|r| gone(&r.owner) && r.host_interface == *member)
+    });
+    if in_use || held {
+        return None;
+    }
+    Some(Orphan {
+        jail: bridge.name.clone(),
+        kind: OrphanKind::StrayBridge(bridge.name.clone()),
+        reason: "bridge blackship created has no members and no network naming it".to_string(),
+        resources: vec![format!("bridge {}", bridge.name)],
+        requires_force: false,
+    })
 }
 
 /// The orphan a dead jail's scope record stands for.
@@ -194,6 +250,8 @@ pub struct Reaper {
     vnet_state_store: VnetStateStore,
     lease_store: NetworkLeaseStore,
     audit: AuditLog,
+    network_store: NetworkStore,
+    manifest_bridges: Vec<String>,
     zfs: Option<ZfsManager>,
     data_dir: PathBuf,
     verbose: bool,
@@ -219,6 +277,13 @@ impl Reaper {
             vnet_state_store: VnetStateStore::from_config(Some(config)),
             lease_store: NetworkLeaseStore::from_config(Some(config)),
             audit: AuditLog::from_config(Some(config)),
+            network_store: NetworkStore::from_config(Some(config)),
+            manifest_bridges: config
+                .config
+                .bridge
+                .iter()
+                .map(|bridge| bridge.name.clone())
+                .collect(),
             zfs,
             data_dir,
             verbose,
@@ -252,7 +317,20 @@ impl Reaper {
                 .map(super::zfs::ZfsManager::list_jail_datasets)
                 .unwrap_or_default(),
             drain_anchors: crate::bulkhead::list_drain_anchors(),
+            bridges: tagged_bridges(),
+            named_bridges: self.named_bridges()?,
         })
+    }
+
+    fn named_bridges(&self) -> Result<HashSet<String>> {
+        let mut named: HashSet<String> = self
+            .network_store
+            .list()?
+            .into_iter()
+            .map(|record| record.bridge)
+            .collect();
+        named.extend(self.manifest_bridges.iter().cloned());
+        Ok(named)
     }
 
     /// Release everything an orphan claims. `dry_run` reports without mutating.
@@ -284,6 +362,7 @@ impl Reaper {
                 crate::bulkhead::flush_drain_anchor(anchor);
                 Ok(())
             }
+            OrphanKind::StrayBridge(name) => reap_bridge(name),
         }
     }
 
@@ -379,6 +458,34 @@ impl Reaper {
             )))
         }
     }
+}
+
+/// Tagged interfaces that are `if_bridge`s, with their member counts.
+fn tagged_bridges() -> Vec<BridgeFacts> {
+    crate::sys::list_tagged_interfaces()
+        .into_iter()
+        .filter_map(|name| {
+            let members = Bridge::open(&name).ok()?.members().ok()?;
+            Some(BridgeFacts { name, members })
+        })
+        .collect()
+}
+
+/// Destroy a bridge only while it is still tagged and still empty.
+fn reap_bridge(name: &str) -> Result<()> {
+    if !crate::sys::interface_is_tagged(name) {
+        return Err(Error::Network(format!(
+            "Bridge '{name}' is not tagged with group '{}'; refusing to destroy it",
+            crate::sys::IFACE_GROUP
+        )));
+    }
+    let bridge = Bridge::open(name)?;
+    if !bridge.members()?.is_empty() {
+        return Err(Error::Network(format!(
+            "Bridge '{name}' gained members; leaving it"
+        )));
+    }
+    bridge.destroy()
 }
 
 /// Reap only what blackship can prove it owns. Never fails the caller.
