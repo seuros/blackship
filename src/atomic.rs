@@ -25,15 +25,19 @@ pub fn write_toml_atomic<T: Serialize>(path: &Path, value: &T, label: &str) -> R
     write_atomic(path, &content, label)
 }
 
+/// The directory holding `path`; `.` for a bare file name, so temp files land beside it.
+pub fn parent_or_dot(path: &Path) -> &Path {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
 /// Replace `path` with `content` atomically.
 ///
 /// The temp file is created beside the target, so the final rename stays
 /// within one filesystem.
 pub fn write_atomic(path: &Path, content: &str, label: &str) -> Result<()> {
-    let dir = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    let dir = parent_or_dot(path);
     let mut tmp = tempfile::Builder::new()
         .prefix(".blackship-")
         .suffix(".tmp")

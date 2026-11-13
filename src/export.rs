@@ -206,10 +206,7 @@ fn write_archive(scratch: &Path, partial: &Path, jail_path: &Path, metadata: &st
 /// A fresh scratch directory beside `path`, on the same filesystem so the
 /// final rename is atomic.
 fn sibling(path: &Path, what: &str) -> Result<std::path::PathBuf> {
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    let parent = crate::atomic::parent_or_dot(path);
     let dir = parent.join(format!(".blackship-{what}-{:016x}", rand::random::<u64>()));
     // create_dir, not create_dir_all: an existing (possibly planted) path fails.
     std::fs::create_dir(&dir)
