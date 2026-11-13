@@ -37,3 +37,26 @@ fn a_cloned_jail_is_sent_as_a_full_stream() {
         ["send", "-R", "zroot/j/web@s"]
     );
 }
+
+#[test]
+fn the_destination_hint_names_the_real_mountpoint_not_a_guessed_layout() {
+    let steps = destination_steps(
+        "root@bastion",
+        "zroot/jails/mig-web",
+        "mig-web",
+        "web",
+        Path::new("/home/seuros/bw-scratch/jails/mig-web"),
+    )
+    .join("\n");
+
+    assert!(
+        steps.contains("/home/seuros/bw-scratch/jails/mig-web"),
+        "{steps}"
+    );
+    assert!(
+        steps.contains("<data_dir>/jails/mig-web zroot/jails/mig-web"),
+        "{steps}"
+    );
+    assert!(!steps.contains("/var/blackship"), "{steps}");
+    assert!(steps.contains("blackship up web"), "{steps}");
+}

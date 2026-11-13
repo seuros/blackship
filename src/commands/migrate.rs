@@ -101,10 +101,15 @@ pub fn handle_migrate(
     let destination = fence_value(target, &remote_dataset, crate::scope::now_unix());
     zfs.fence_jail_dataset(&full_name, &destination)?;
     println!("Source fenced: read-only, and 'up {service_name}' refuses here.");
-    println!("On {target}, finish with:");
-    println!("  zfs set mountpoint=/var/blackship/jails/{full_name} {remote_dataset}");
-    println!("  # jail definition travels at .blackship/jail.toml inside the dataset");
-    println!("  blackship up {service_name}");
+    for line in destination_steps(
+        target,
+        &remote_dataset,
+        &full_name,
+        &service_name,
+        &zfs.jail_path(&full_name),
+    ) {
+        println!("{line}");
+    }
 
     if !keep {
         println!("Remove the source for good with: blackship rm {service_name} --volumes");
@@ -135,6 +140,27 @@ fn discard_partial_destination(target: &str, remote_dataset: &str) -> bool {
 /// does not have, and the receive would fail. The cost is that its older snapshots stay behind.
 const fn send_args(snapshot: &str, cloned: bool) -> [&str; 3] {
     ["send", if cloned { "-p" } else { "-R" }, snapshot]
+}
+
+/// What to do on the target. The dataset keeps the mountpoint it had here; only a target
+/// with a different data directory needs to move it, and only the target knows its layout.
+fn destination_steps(
+    target: &str,
+    remote_dataset: &str,
+    full_name: &str,
+    service_name: &str,
+    source_path: &Path,
+) -> Vec<String> {
+    vec![
+        format!("On {target}, finish with:"),
+        format!(
+            "  # the dataset arrives with mountpoint {}; if the target's data_dir differs:",
+            source_path.display()
+        ),
+        format!("  zfs set mountpoint=<data_dir>/jails/{full_name} {remote_dataset}"),
+        "  # the jail definition travels at .blackship/jail.toml inside the dataset".to_string(),
+        format!("  blackship up {service_name}"),
+    ]
 }
 
 /// `<host>/<dataset>@<unix time>`: where a migrated jail went, and when.
