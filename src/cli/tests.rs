@@ -151,6 +151,23 @@ fn test_machine_output_support_is_explicit() {
 }
 
 #[test]
+fn test_armada_mutations_support_machine_output() {
+    assert!(
+        Commands::Armada {
+            files: vec!["blackship.toml".into()],
+            action: ArmadaAction::Up {
+                detach: false,
+                jails: Vec::new(),
+                build: false,
+                no_build: false,
+                dry_run: false,
+            },
+        }
+        .supports_machine_output()
+    );
+}
+
+#[test]
 fn test_network_create_requires_root() {
     let command = Commands::Network {
         action: NetworkAction::Create {

@@ -426,6 +426,11 @@ impl AppContext {
                 files,
                 action: ArmadaAction::Ps { .. },
             } => emit(&commands::armada::ps_data(&files, self.verbose)?),
+            Commands::Armada { files, action } => emit(&commands::armada::action_data(
+                self.verbose,
+                &files,
+                action,
+            )?),
             Commands::Up {
                 jail,
                 all,

@@ -813,10 +813,7 @@ impl Commands {
             | Self::Snapshot {
                 action: SnapshotAction::List { .. },
             }
-            | Self::Armada {
-                action: ArmadaAction::Ps { .. },
-                ..
-            } => true,
+            | Self::Armada { .. } => true,
             Self::Health { watch, .. } => !*watch,
             Self::Up { dry_run, .. }
             | Self::Down { dry_run, .. }
