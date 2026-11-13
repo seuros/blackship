@@ -196,7 +196,9 @@ hosts. Its dataset becomes read-only and carries a \setting{blackship:migrated}
 property of the form \setting{<host>/<dataset>@<unix time>}, and
 \command{up} refuses to start the jail, naming the destination.
 \command{unfence <jail>} lifts the fence. A failed transfer fences nothing and
-Blackship removes the partial dataset it created on the target. The source
+Blackship removes the partial dataset it created on the target. A jail cloned
+from a release is sent as a full copy of its current state, without its older
+snapshots, because the target does not have the release to clone from. The source
 itself is never removed; \command{--keep} only silences the hint about removing
 it with \command{rm --volumes}. \command{gc} treats a fenced dataset like any
 other unreferenced dataset and reclaims it only with \command{--force}.

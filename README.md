@@ -933,7 +933,9 @@ two hosts: its dataset goes read-only, gets a `blackship:migrated` property
 (`<host>/<dataset>@<unix time>`), and `up` refuses to start it, naming where it
 went. `blackship unfence web` lifts the fence if you change your mind. A
 transfer that fails fences nothing, and blackship removes the partial dataset
-it left on the target. The source is never removed: `--keep` only silences the
+it left on the target. A jail cloned from a release is sent as a full copy of
+its current state, without its older snapshots (the target does not have the
+release to clone from). The source is never removed: `--keep` only silences the
 hint about removing it yourself (`blackship rm web --volumes`). `gc` follows its
 usual rules for a fenced dataset, so it is only reclaimed with `--force`.
 

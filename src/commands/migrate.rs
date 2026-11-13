@@ -130,6 +130,13 @@ fn discard_partial_destination(target: &str, remote_dataset: &str) -> bool {
         .is_ok_and(|probe| !probe.status.success())
 }
 
+/// `zfs send` arguments for the snapshot. A jail cloned from a release is sent as a full
+/// stream: `-R` would make the target look for the clone's origin snapshot, which it
+/// does not have, and the receive would fail. The cost is that its older snapshots stay behind.
+const fn send_args(snapshot: &str, cloned: bool) -> [&str; 3] {
+    ["send", if cloned { "-p" } else { "-R" }, snapshot]
+}
+
 /// `<host>/<dataset>@<unix time>`: where a migrated jail went, and when.
 fn fence_value(target: &str, remote_dataset: &str, at: i64) -> String {
     let host = target.rsplit('@').next().unwrap_or(target);
