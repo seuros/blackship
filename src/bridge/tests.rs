@@ -278,3 +278,30 @@ depends_on = ["database", "cache"]
     assert_eq!(plan.isolate, Vec::<String>::new());
     assert!(plan.stop.contains(&"backend".to_string()));
 }
+
+#[test]
+fn a_dependency_cycle_is_reported_not_hidden_from_autostart() {
+    let config: BlackshipConfig = toml::from_str(
+        r#"
+[config]
+data_dir = "/var/blackship"
+
+[[jails]]
+name = "a"
+path = "/jails/a"
+depends_on = ["b"]
+tags = ["autostart"]
+
+[[jails]]
+name = "b"
+path = "/jails/b"
+depends_on = ["a"]
+"#,
+    )
+    .unwrap();
+    let bridge = Bridge::new(config).unwrap();
+
+    let (set, problem) = bridge.autostart_set();
+    assert!(set.is_empty());
+    assert!(problem.unwrap().to_string().contains("Cyclic dependency"));
+}

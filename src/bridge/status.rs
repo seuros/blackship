@@ -233,13 +233,20 @@ impl Bridge {
         }
     }
 
+    /// The effective autostart set, plus why it is empty when the graph cannot be ordered.
+    pub(super) fn autostart_set(&self) -> (BTreeSet<String>, Option<crate::error::Error>) {
+        match self.autostart_order() {
+            Ok(order) => (order.into_iter().collect(), None),
+            Err(e) => (BTreeSet::new(), Some(e)),
+        }
+    }
+
     /// Return jail status without writing terminal output.
     pub fn ps_data(&self) -> Vec<JailStatus> {
-        let autostart = self
-            .autostart_order()
-            .unwrap_or_default()
-            .into_iter()
-            .collect::<BTreeSet<_>>();
+        let (autostart, problem) = self.autostart_set();
+        if let Some(problem) = problem {
+            eprintln!("Warning: autostart cannot be resolved, reporting none: {problem}");
+        }
         self.config
             .jails
             .iter()
