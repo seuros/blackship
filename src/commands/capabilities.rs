@@ -38,6 +38,7 @@ pub struct PlatformCapabilities {
 pub struct BuildFeatures {
     pub cli: bool,
     pub mcp: bool,
+    pub ui: bool,
     pub telemetry: bool,
     pub inspect: bool,
 }
@@ -221,6 +222,7 @@ pub fn data() -> Result<CapabilityReport> {
         build_features: BuildFeatures {
             cli: cfg!(feature = "cli"),
             mcp: cfg!(feature = "mcp"),
+            ui: cfg!(feature = "ui"),
             telemetry: cfg!(feature = "telemetry"),
             inspect: cfg!(feature = "inspect"),
         },
@@ -250,6 +252,7 @@ pub fn handle() -> Result<()> {
     let features = [
         ("cli", report.build_features.cli),
         ("mcp", report.build_features.mcp),
+        ("ui", report.build_features.ui),
         ("telemetry", report.build_features.telemetry),
         ("inspect", report.build_features.inspect),
     ]

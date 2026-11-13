@@ -34,6 +34,8 @@ default = ["cli", "mcp"]
 cli = ["dep:usage-rs", "telemetry"]
 # OTLP export of lifecycle events and racct gauges (`[telemetry]`).
 telemetry = ["dep:rama"]
+# Placeholder `blackship ui`: a loopback page with Datastar patches, served by rama.
+ui = ["cli", "dep:rama"]
 mcp = ["cli", "dep:mcp-host", "dep:schemars", "dep:tracing", "dep:tracing-subscriber"]
 # state_machine! expands cfg(feature = "inspect") into the calling crate.
 inspect = ["state-machines/inspect"]

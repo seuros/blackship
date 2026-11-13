@@ -297,3 +297,16 @@ fn test_armada_up_dry_run_does_not_require_root() {
 
     assert!(!command.requires_root());
 }
+
+#[cfg(feature = "ui")]
+#[test]
+fn ui_listens_on_loopback_by_default_and_needs_no_root() {
+    let cli = Cli::parse_from(&[OsStr::new("ui")]).unwrap();
+
+    let Commands::Ui { ref listen } = cli.command else {
+        panic!("expected ui");
+    };
+    assert_eq!(listen, "127.0.0.1:7341");
+    assert!(!cli.command.requires_root());
+    assert!(!cli.command.supports_machine_output());
+}

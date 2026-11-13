@@ -546,6 +546,14 @@ pub enum Commands {
         listen: Option<String>,
     },
 
+    /// Serve the placeholder web UI (read-only, unauthenticated, loopback only)
+    #[cfg(feature = "ui")]
+    Ui {
+        /// Loopback address to serve on
+        #[usage(long, default = "127.0.0.1:7341")]
+        listen: String,
+    },
+
     /// Tail logs from a running jail
     Logs {
         /// Jail name
@@ -889,6 +897,8 @@ impl Commands {
             | Self::Logs { .. } => false,
             #[cfg(feature = "mcp")]
             Self::Mcp { .. } => false,
+            #[cfg(feature = "ui")]
+            Self::Ui { .. } => false,
         }
     }
 
@@ -941,6 +951,8 @@ impl Commands {
             | Self::Completion { .. } => false,
             #[cfg(feature = "mcp")]
             Self::Mcp { .. } => false,
+            #[cfg(feature = "ui")]
+            Self::Ui { .. } => false,
         }
     }
 }

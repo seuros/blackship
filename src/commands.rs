@@ -16,6 +16,8 @@ pub mod lifecycle;
 pub mod logs;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+#[cfg(feature = "ui")]
+pub mod ui;
 pub mod migrate;
 pub mod network;
 pub mod ports;

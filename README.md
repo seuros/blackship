@@ -321,6 +321,7 @@ sudo env BLACKSHIP_E2E_DATA_DIR=/var/tmp/bw BLACKSHIP_E2E_ZFS=zroot/blackship-e2
 | `cli` | yes | The `blackship` binary and its usage-rs parser; implies `telemetry` |
 | `mcp` | yes | `blackship mcp` (mcp-host, schemars, tracing); implies `cli` |
 | `telemetry` | via `cli` | OTLP export through rama; without it `[telemetry]` still parses and does nothing |
+| `ui` | no | `blackship ui`, a placeholder web page served by rama (see [Web UI](#web-ui-placeholder)); implies `cli` |
 | `inspect` | no | state machine introspection |
 
 ## Machine-readable CLI
@@ -755,6 +756,7 @@ jailfile = "./custom/Api.jailfile"  # Explicit Jailfile path
 | Command | Description |
 |---------|-------------|
 | `blackship mcp [--listen addr:port]` | Serve MCP on stdio, or Streamable HTTP with `--listen` (see [MCP Server](#mcp-server-1)) |
+| `blackship ui [--listen addr:port]` | Placeholder web page, `--features ui` (see [Web UI](#web-ui-placeholder)) |
 
 ## Jailfile Format
 
@@ -1488,6 +1490,22 @@ When act_runner receives a job with a `jail://` label, the runner could:
 4. Clean up via `blackship rm <jail> --force`
 
 **Note:** This requires custom act_runner configuration or a wrapper script - it is not built into act_runner by default.
+
+## Web UI (placeholder)
+
+Not a real UI yet, just the hook. Build with `--features ui` (off by default),
+then:
+
+```sh
+blackship ui                          # http://127.0.0.1:7341/
+blackship ui --listen 127.0.0.1:8080
+```
+
+It serves one page and one [Datastar](https://data-star.dev) SSE stream
+(`/stream`) that patches the blackship version and the running jail count
+every two seconds. It is read-only and has **no authentication**, so
+`--listen` refuses anything that is not a loopback address. Datastar comes
+from rama itself (`rama::http::sse::datastar`), no extra crate.
 
 ## MCP Server
 

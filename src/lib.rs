@@ -83,6 +83,8 @@ mod strings;
 mod supply;
 mod sys;
 mod telemetry;
+#[cfg(feature = "ui")]
+mod ui;
 mod warden;
 mod zfs;
 

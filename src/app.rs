@@ -214,6 +214,11 @@ impl AppContext {
             #[cfg(feature = "mcp")]
             Commands::Mcp { listen } => commands::mcp::handle(&self.config_path, listen.as_deref()),
 
+            #[cfg(feature = "ui")]
+            Commands::Ui { listen } => {
+                commands::ui::handle(self.load_config_if_present()?.as_ref(), &listen)
+            }
+
             Commands::Bootstrap {
                 release,
                 force,
