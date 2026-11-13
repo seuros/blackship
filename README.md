@@ -649,7 +649,8 @@ the dataset, so `zfs send` carries everything needed to rebuild the jail.
 | `blackship export <jail> [-o file] [--zfs-send]` | Export to archive |
 | `blackship import <file> [-n name] [--force]` | Import from archive |
 | `blackship import <file> --from iocage\|ezjail\|rootfs\|auto [-n name]` | Import from another jail manager |
-| `blackship migrate <jail> user@host [--remote-dataset ds]` | Move a jail to another host over ssh |
+| `blackship migrate <jail> user@host [--remote-dataset ds] [--keep]` | Move a jail to another host over ssh; fences the source |
+| `blackship unfence <jail>` | Lift the fence a migration left on a jail, so it can start here again |
 
 ### Build System
 
@@ -926,6 +927,15 @@ blackship migrate web seuros@otherbox
 
 `migrate` runs as root, so the ssh connection uses root's keys and
 `known_hosts`, not yours: set those up for the target first.
+
+A migration that succeeds fences the source so the jail cannot quietly run on
+two hosts: its dataset goes read-only, gets a `blackship:migrated` property
+(`<host>/<dataset>@<unix time>`), and `up` refuses to start it, naming where it
+went. `blackship unfence web` lifts the fence if you change your mind. A
+transfer that fails fences nothing, and blackship removes the partial dataset
+it left on the target. The source is never removed: `--keep` only silences the
+hint about removing it yourself (`blackship rm web --volumes`). `gc` follows its
+usual rules for a fenced dataset, so it is only reclaimed with `--force`.
 
 ## Networking
 

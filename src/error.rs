@@ -263,6 +263,16 @@ impl Error {
         }
     }
 
+    #[must_use]
+    /// A jail whose dataset a migration fenced; `fence` is `<host>/<dataset>@<unix time>`.
+    pub fn migrated(jail: &str, fence: &str) -> Self {
+        let (destination, at) = fence.rsplit_once('@').unwrap_or((fence, "an unknown time"));
+        Self::JailOperation(format!(
+            "Jail '{jail}' was migrated to {destination} (at unix time {at}); starting it here would run it on two hosts. \
+             Run 'blackship unfence {jail}' to undo the migration"
+        ))
+    }
+
     /// Fail with [`Error::NeedsRoot`] unless the process runs as root.
     pub(crate) fn require_root(operation: &'static str) -> Result<()> {
         let euid = nix::unistd::geteuid().as_raw();

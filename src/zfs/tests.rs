@@ -49,3 +49,46 @@ fn init_leaves_a_shared_parent_mountpoint_alone() {
     let _ = std::fs::remove_dir_all(&second);
     outcome.unwrap();
 }
+
+#[test]
+#[ignore = "needs root and ZFS"]
+fn a_fence_makes_the_dataset_read_only_and_names_the_destination() {
+    let (Some(data_dir), Some(zfs_base)) = (
+        std::env::var("BLACKSHIP_E2E_DATA_DIR").ok(),
+        std::env::var("BLACKSHIP_E2E_ZFS").ok(),
+    ) else {
+        return;
+    };
+    let Some((pool, dataset)) = zfs_base.split_once('/') else {
+        return;
+    };
+    if !nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let dataset = format!("{dataset}/fence{}", std::process::id());
+    let root = PathBuf::from(&data_dir).join(format!("fence{}", std::process::id()));
+    let zfs = ZfsManager::new(pool, &dataset, &root);
+
+    let outcome = (|| -> Result<()> {
+        zfs.init()?;
+        zfs.create_jail_dataset("web")?;
+        assert_eq!(zfs.jail_migration_fence("web"), None);
+
+        zfs.fence_jail_dataset("web", "bastion/zroot/web@42")?;
+        assert_eq!(
+            zfs.jail_migration_fence("web").as_deref(),
+            Some("bastion/zroot/web@42")
+        );
+        let readonly = ZfsManager::get_property(&zfs.jail_dataset("web"), "readonly")?;
+        assert_eq!(readonly, "on");
+
+        zfs.clear_jail_migration_fence("web")?;
+        assert_eq!(zfs.jail_migration_fence("web"), None);
+        let readonly = ZfsManager::get_property(&zfs.jail_dataset("web"), "readonly")?;
+        assert_eq!(readonly, "off");
+        Ok(())
+    })();
+    let _ = zfs.destroy_dataset(&format!("{pool}/{dataset}"));
+    let _ = std::fs::remove_dir_all(&root);
+    outcome.unwrap();
+}

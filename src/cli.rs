@@ -300,9 +300,16 @@ pub enum Commands {
         #[usage(long)]
         remote_dataset: Option<String>,
 
-        /// Keep the local jail after transfer (default: keep, prints removal hint)
+        /// Keep the source jail quietly: it is never removed, and this only
+        /// silences the removal hint
         #[usage(long)]
         keep: bool,
+    },
+
+    /// Lift the fence a migration left on a jail so it can start here again
+    Unfence {
+        /// Jail whose migration fence to clear
+        jail: String,
     },
 
     /// Per-jail CPU, memory, and process statistics
@@ -864,6 +871,7 @@ impl Commands {
             | Self::Clone { .. }
             | Self::Commit { .. }
             | Self::Migrate { .. }
+            | Self::Unfence { .. }
             | Self::Supervise { .. } => true,
             Self::Armada { action, .. } => action.requires_root(),
             Self::Releases { action, .. } => {

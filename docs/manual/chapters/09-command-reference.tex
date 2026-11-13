@@ -117,7 +117,10 @@ ZFS stream. \\
 \command{import <file> [--name N] [--force] [--from manager]} & Restore native
 or foreign jail data. \\
 \command{migrate <jail> <user@host> [--remote-dataset D] [--keep]} & Send a
-stopped ZFS-backed jail over SSH. \\
+stopped ZFS-backed jail over SSH and fence the source; the source is never
+removed. \\
+\command{unfence <jail>} & Lift the migration fence so the jail can start on this
+host again. \\
 \bottomrule
 \end{shiptable}
 

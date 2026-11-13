@@ -584,6 +584,15 @@ impl Bridge {
             return Err(Error::JailAlreadyRunning(full_name));
         }
 
+        if jail_def.path.is_none()
+            && let Some(fence) = self
+                .zfs
+                .as_ref()
+                .and_then(|zfs| zfs.jail_migration_fence(&full_name))
+        {
+            return Err(Error::migrated(&full_name, &fence));
+        }
+
         let mut scope = ScopeRecord::new(&full_name);
         scope.cascade = jail_def.cascade;
         scope.ephemeral = jail_def.ephemeral.unwrap_or(false);

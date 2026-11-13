@@ -130,6 +130,14 @@ one you made, stays until you remove it by hand with
 jail. Force only after confirming that a reported resource does not belong to a
 different live workload.
 
+\section{A jail refuses to start after a migration}
+
+The error names the destination: a successful \command{migrate} fences the
+source so the jail does not run on two hosts. If the destination is where it
+should live, remove the source with \command{rm <jail> --volumes}. If the
+migration should be undone, make sure the copy there is not running and run
+\command{unfence <jail>}.
+
 \section{Automatic escalation fails}
 
 Run the command once with \command{--no-escalate} to confirm that privilege is

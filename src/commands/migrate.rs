@@ -1,7 +1,10 @@
 //! Jail migration between hosts over zfs send | ssh zfs receive.
 //!
 //! The snapshot carries the staged .blackship/ config, so the receiving
-//! host gets the jail definition along with the data.
+//! host gets the jail definition along with the data. A successful transfer
+//! fences the source: its dataset goes read-only and starts refuse, so the
+//! jail cannot silently run on two hosts. A failed transfer fences nothing and
+//! removes the partial destination dataset it created.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -58,7 +61,10 @@ pub fn handle_migrate(
 
     println!("Sending {snapshot} to {target}:{remote_dataset} ...");
     let mut send = Command::new("/sbin/zfs")
-        .args(["send", "-R", &snapshot])
+        .args(send_args(
+            &snapshot,
+            zfs.dataset_origin(&local_dataset).is_some(),
+        ))
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| Error::JailOperation(format!("Failed to run zfs send: {e}")))?;
@@ -77,20 +83,75 @@ pub fn handle_migrate(
         .map_err(|e| Error::JailOperation(format!("zfs send failed: {e}")))?;
 
     if !send_status.success() || !receive.success() {
-        return Err(Error::JailOperation(
-            "Migration transfer failed; the remote dataset may be partial".to_string(),
-        ));
+        let cleaned = discard_partial_destination(target, &remote_dataset);
+        if let Err(e) = zfs.delete_snapshot(&full_name, &snap_name) {
+            eprintln!("Warning: could not remove the migration snapshot '{snap_name}': {e}");
+        }
+        return Err(Error::JailOperation(format!(
+            "Migration transfer failed; the source is untouched and {}",
+            if cleaned {
+                "the partial remote dataset was removed"
+            } else {
+                "the remote dataset may be partial"
+            }
+        )));
     }
 
     println!("Transfer complete.");
+    let destination = fence_value(target, &remote_dataset, crate::scope::now_unix());
+    zfs.fence_jail_dataset(&full_name, &destination)?;
+    println!("Source fenced: read-only, and 'up {service_name}' refuses here.");
     println!("On {target}, finish with:");
     println!("  zfs set mountpoint=/var/blackship/jails/{full_name} {remote_dataset}");
     println!("  # jail definition travels at .blackship/jail.toml inside the dataset");
     println!("  blackship up {service_name}");
 
     if !keep {
-        println!("Source dataset kept; remove it with: blackship rm {service_name} --volumes");
+        println!("Remove the source for good with: blackship rm {service_name} --volumes");
+        println!("Undo the migration here with: blackship unfence {service_name}");
     }
 
     Ok(())
 }
+
+/// Destroy the remote dataset a failed transfer may have left; true when none remains.
+fn discard_partial_destination(target: &str, remote_dataset: &str) -> bool {
+    let ssh = |args: &[&str]| {
+        Command::new("/usr/bin/ssh")
+            .args(["-o", "BatchMode=yes", target])
+            .args(args)
+            .output()
+    };
+    // The preflight proved the dataset absent, so whatever exists now is this run's.
+    if let Err(e) = ssh(&["zfs", "destroy", "-r", remote_dataset]) {
+        eprintln!("Warning: could not ask {target} to remove the partial dataset: {e}");
+    }
+    ssh(&["zfs", "list", "-H", "-o", "name", remote_dataset])
+        .is_ok_and(|probe| !probe.status.success())
+}
+
+/// `<host>/<dataset>@<unix time>`: where a migrated jail went, and when.
+fn fence_value(target: &str, remote_dataset: &str, at: i64) -> String {
+    let host = target.rsplit('@').next().unwrap_or(target);
+    format!("{host}/{remote_dataset}@{at}")
+}
+
+/// Lift a migration fence.
+pub fn handle_unfence(config_path: &Path, jail: &str) -> Result<()> {
+    let config = manifest::load(config_path)?;
+    let zfs = super::snapshot::require_zfs(&config)?;
+    let (_, full_name) = config.require_jail_names(jail)?;
+
+    let Some(fence) = zfs.jail_migration_fence(&full_name) else {
+        return Err(Error::JailOperation(format!(
+            "Jail '{full_name}' is not fenced"
+        )));
+    };
+    zfs.clear_jail_migration_fence(&full_name)?;
+    println!("Cleared the fence on '{full_name}' (it had been migrated to {fence}).");
+    println!("It can start here again; make sure it does not also run there.");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

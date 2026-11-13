@@ -193,6 +193,10 @@ impl AppContext {
                 keep,
             ),
 
+            Commands::Unfence { jail } => {
+                commands::migrate::handle_unfence(&self.config_path, &jail)
+            }
+
             Commands::Stats { jail, json } => {
                 commands::stats::handle(&self.config_path, jail, json)
             }

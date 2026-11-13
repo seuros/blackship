@@ -354,6 +354,30 @@ impl ZfsManager {
         }
     }
 
+    const MIGRATED_PROPERTY: &'static str = "blackship:migrated";
+
+    /// Fence a jail's dataset after a successful migration: read-only, and tagged with where it went.
+    pub fn fence_jail_dataset(&self, name: &str, destination: &str) -> Result<()> {
+        let dataset = self.jail_dataset(name);
+        Self::set_property(&dataset, Self::MIGRATED_PROPERTY, destination)?;
+        Self::set_property(&dataset, "readonly", "on")
+    }
+
+    /// Where the jail was migrated to, when its dataset is fenced.
+    pub fn jail_migration_fence(&self, name: &str) -> Option<String> {
+        let value = Self::get_property(&self.jail_dataset(name), Self::MIGRATED_PROPERTY).ok()?;
+        (!value.is_empty() && value != "-").then_some(value)
+    }
+
+    /// Lift the fence: the dataset is writable again and forgets the migration.
+    pub fn clear_jail_migration_fence(&self, name: &str) -> Result<()> {
+        let dataset = self.jail_dataset(name);
+        Self::set_property(&dataset, "readonly", "off")?;
+        zfs_run(&["inherit", Self::MIGRATED_PROPERTY, &dataset], || {
+            format!("Failed to clear the migration fence on '{dataset}'")
+        })
+    }
+
     /// Destroy a jail's dataset
     ///
     /// Warning: This recursively destroys all child datasets

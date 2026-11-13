@@ -231,3 +231,39 @@ fn gc_reclaims_the_bridge_a_failed_vnet_start_created() {
     assert!(reclaimed, "gc should reclaim the stranded bridge");
     assert!(bystander_kept, "gc must not touch an untagged bridge");
 }
+
+#[test]
+#[ignore = "needs root, ZFS and a bootstrapped release"]
+fn a_migration_fence_refuses_start_until_cleared() {
+    let Some(env) = env("") else {
+        return;
+    };
+    let zfs = zfs(&env);
+    let mut first = bridge(&env);
+    first.up(Some("web")).unwrap();
+    first.down(Some("web")).unwrap();
+
+    zfs.fence_jail_dataset(
+        &env.full_name,
+        "bastion/zroot/blackship/jails/web@1794000000",
+    )
+    .unwrap();
+    let refused = bridge(&env).up(Some("web")).unwrap_err().to_string();
+    let still_down = jail_getid(&env.full_name).is_err();
+    zfs.clear_jail_migration_fence(&env.full_name).unwrap();
+    let unfenced = zfs.jail_migration_fence(&env.full_name).is_none();
+    let mut again = bridge(&env);
+    let started = again.up(Some("web")).is_ok();
+    let running = jail_getid(&env.full_name).is_ok();
+    again.down(Some("web")).unwrap();
+
+    scrub(&env);
+    assert!(
+        refused.contains("bastion/zroot/blackship/jails/web"),
+        "{refused}"
+    );
+    assert!(refused.contains("blackship unfence"), "{refused}");
+    assert!(still_down, "a fenced jail must not start");
+    assert!(unfenced);
+    assert!(started && running, "the jail starts once unfenced");
+}
