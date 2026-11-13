@@ -4,6 +4,8 @@ use crate::cli::OutputFormat;
 use crate::error::{Error, Result};
 use serde::Serialize;
 use std::fmt;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::OwnedFd;
 
 /// Current JSON contract version.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -79,6 +81,39 @@ pub fn print_success<T: Serialize>(data: &T) -> Result<()> {
         .map_err(|error| Error::JsonOutput(error.to_string()))?;
     println!("{rendered}");
     Ok(())
+}
+
+/// Run an operation with stdout captured, then restore stdout before returning.
+///
+/// Mutating commands often stream human progress from lower layers. JSON
+/// callers still need exactly one document on stdout, so the progress is
+/// returned as message lines inside the structured result instead.
+pub fn capture_stdout<T>(operation: impl FnOnce() -> Result<T>) -> Result<(T, Vec<String>)> {
+    struct RestoreStdout(OwnedFd);
+
+    impl Drop for RestoreStdout {
+        fn drop(&mut self) {
+            let _ = nix::unistd::dup2_stdout(&self.0);
+        }
+    }
+
+    let mut stdout = std::io::stdout();
+    stdout.flush()?;
+    let saved = nix::unistd::dup(&stdout).map_err(std::io::Error::from)?;
+    let restore = RestoreStdout(saved);
+    let mut captured = tempfile::tempfile()?;
+    nix::unistd::dup2_stdout(&captured).map_err(std::io::Error::from)?;
+
+    let result = operation();
+    stdout.flush()?;
+    drop(restore);
+
+    captured.seek(SeekFrom::Start(0))?;
+    let mut text = String::new();
+    captured.read_to_string(&mut text)?;
+    let value = result?;
+    let messages = text.lines().map(str::to_owned).collect();
+    Ok((value, messages))
 }
 
 #[cfg(test)]

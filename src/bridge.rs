@@ -22,3 +22,4 @@ mod usage;
 pub use self::core::Bridge;
 pub use self::plan::PlanStep;
 pub use self::qos::{ShiftOutcome, startup_deadline_secs};
+pub use self::status::CheckReport;

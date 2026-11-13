@@ -642,6 +642,15 @@ the dataset, so `zfs send` carries everything needed to rebuild the jail.
 | `blackship armada ps [--json]` | Show status of all jails |
 | `blackship armada config [--show]` | Validate and show configuration |
 
+Every Armada action supports the global `--format json` contract. The result is
+wrapped in the versioned JSON envelope used by other Blackship commands. For
+actions that normally print progress, those lines are returned in
+`data.messages` so stdout remains one valid JSON document:
+
+```sh
+blackship --format json armada -f blackship.toml up --dry-run
+```
+
 #### Config File Merging
 
 Armada supports merging multiple config files (later files override earlier):
