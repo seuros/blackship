@@ -387,7 +387,15 @@ compatibility.
 `blackship capabilities` requires neither a manifest nor root access. Its JSON
 report lets clients discover the Blackship version, output schema, compiled
 features, FreeBSD kernel capabilities, host facilities, and installed privilege
-escalators before enabling UI actions.
+escalators before enabling UI actions. The `cli.machine_output` array lists
+each exact command mode that supports the global JSON contract, using a stable
+`operation` identifier plus its privilege and mutation behavior. Clients should
+check for the operation instead of inferring support from the Blackship version:
+
+```sh
+blackship --format json capabilities \
+  | jq '.data.cli.machine_output[] | select(.operation == "armada.ps")'
+```
 
 `blackship host` returns the same best-effort planning profile as the
 `blackship:///host` MCP resource: kernel and facility capabilities, CPU and
