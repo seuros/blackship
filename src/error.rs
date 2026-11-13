@@ -203,13 +203,30 @@ pub enum Error {
 
     #[error("{0}")]
     User(String),
+
+    /// An operation that failed after printing progress that stdout capture swallowed.
+    #[error("{source}")]
+    WithOutput {
+        source: Box<Self>,
+        output: Vec<String>,
+    },
 }
 
 impl Error {
+    /// Progress lines printed before the failure, when stdout was being captured.
+    #[must_use]
+    pub fn output(&self) -> &[String] {
+        match self {
+            Self::WithOutput { output, .. } => output,
+            _ => &[],
+        }
+    }
+
     /// Stable identifier for machine-readable error handling.
     #[must_use]
-    pub const fn code(&self) -> &'static str {
+    pub fn code(&self) -> &'static str {
         match self {
+            Self::WithOutput { source, .. } => source.code(),
             Self::Io(_) => "io_error",
             Self::ConfigRead { .. } => "config_read_failed",
             Self::ConfigParse(_) => "config_parse_failed",

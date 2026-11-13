@@ -28,6 +28,8 @@ struct ErrorEnvelope<'a> {
 struct ErrorBody<'a> {
     code: &'static str,
     message: &'a str,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    output: &'a [String],
 }
 
 /// Error returned at the executable boundary, rendered for the requested format.
@@ -54,6 +56,7 @@ impl fmt::Display for CliError {
                 error: ErrorBody {
                     code: self.source.code(),
                     message: &message,
+                    output: self.source.output(),
                 },
             };
             let rendered = serde_json::to_string(&envelope).map_err(|_| fmt::Error)?;
@@ -109,11 +112,20 @@ pub fn capture_stdout<T>(operation: impl FnOnce() -> Result<T>) -> Result<(T, Ve
     drop(restore);
 
     captured.seek(SeekFrom::Start(0))?;
-    let mut text = String::new();
-    captured.read_to_string(&mut text)?;
-    let value = result?;
-    let messages = text.lines().map(str::to_owned).collect();
-    Ok((value, messages))
+    let mut bytes = Vec::new();
+    captured.read_to_end(&mut bytes)?;
+    let messages: Vec<String> = String::from_utf8_lossy(&bytes)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    match result {
+        Ok(value) => Ok((value, messages)),
+        Err(source) if messages.is_empty() => Err(source),
+        Err(source) => Err(Error::WithOutput {
+            source: Box::new(source),
+            output: messages,
+        }),
+    }
 }
 
 #[cfg(test)]
