@@ -95,10 +95,11 @@ impl ZfsManager {
 
         let jails = self.jails_dataset();
         let mountpoint = self.jails_mountpoint.display().to_string();
+        // Datasets under it carry their own mountpoint; an existing parent may serve another data_dir.
         if !self.dataset_exists(&jails)? {
             Self::create_dataset(&jails)?;
+            Self::set_property(&jails, "mountpoint", &mountpoint)?;
         }
-        Self::set_property(&jails, "mountpoint", &mountpoint)?;
 
         Ok(())
     }
@@ -314,7 +315,19 @@ impl ZfsManager {
             return Err(Error::Zfs(format!("Dataset '{dataset}' already exists")));
         }
 
-        Self::create_dataset(&dataset)?;
+        let mountpoint = format!("mountpoint={}", self.jail_path(name).display());
+        zfs_run(
+            &[
+                "create",
+                "-p",
+                "-o",
+                "compression=lz4",
+                "-o",
+                &mountpoint,
+                &dataset,
+            ],
+            || format!("Failed to create dataset '{dataset}'"),
+        )?;
         Ok(self.jail_path(name))
     }
 
