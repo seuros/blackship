@@ -98,8 +98,58 @@ pub enum ActionReport {
         valid: bool,
         check: Box<CheckReport>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        resolved: Option<Box<manifest::BlackshipConfig>>,
+        resolved: Option<Box<ResolvedConfig>>,
     },
+}
+
+/// What `armada config --show` reveals: the fields the human view prints.
+///
+/// The full config also holds secrets such as `telemetry.headers`, so it is never serialized.
+#[derive(Debug, Serialize)]
+pub struct ResolvedConfig {
+    config: ResolvedGlobal,
+    jails: Vec<ResolvedJail>,
+}
+
+#[derive(Debug, Serialize)]
+struct ResolvedGlobal {
+    project: String,
+    data_dir: String,
+    zfs_enabled: bool,
+    zpool: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ResolvedJail {
+    name: String,
+    path: Option<String>,
+    release: Option<String>,
+    build: Option<String>,
+    depends_on: Vec<String>,
+}
+
+impl From<&manifest::BlackshipConfig> for ResolvedConfig {
+    fn from(config: &manifest::BlackshipConfig) -> Self {
+        Self {
+            config: ResolvedGlobal {
+                project: config.config.project_name().to_string(),
+                data_dir: config.config.data_dir.display().to_string(),
+                zfs_enabled: config.config.zfs_enabled,
+                zpool: config.config.zpool.clone(),
+            },
+            jails: config
+                .jails
+                .iter()
+                .map(|jail| ResolvedJail {
+                    name: jail.name.clone(),
+                    path: jail.path.as_ref().map(|path| path.display().to_string()),
+                    release: jail.release.clone(),
+                    build: jail.build.as_ref().map(|path| path.display().to_string()),
+                    depends_on: jail.depends_on.clone(),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Execute an Armada action while keeping stdout as one versioned JSON
@@ -186,7 +236,7 @@ pub fn action_data(verbose: bool, files: &[PathBuf], action: ArmadaAction) -> Re
                 files: file_names,
                 valid: true,
                 check: Box::new(bridge.check_data()?),
-                resolved: show.then(|| Box::new(config)),
+                resolved: show.then(|| Box::new(ResolvedConfig::from(&config))),
             })
         }
         ArmadaAction::Ps { .. } => Err(error::Error::UnsupportedOutputFormat),
@@ -525,3 +575,6 @@ fn build_jail_from_file(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

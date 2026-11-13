@@ -684,6 +684,10 @@ the dataset, so `zfs send` carries everything needed to rebuild the jail.
 | `blackship armada ps [--json]` | Show status of all jails |
 | `blackship armada config [--show]` | Validate and show configuration |
 
+`armada config --show` prints, and returns in JSON, only the project, `data_dir`,
+ZFS settings and each jail's name, path, release, build and dependencies. It
+never echoes secrets such as `[telemetry]` headers.
+
 Every Armada action supports the global `--format json` contract. The result is
 wrapped in the versioned JSON envelope used by other Blackship commands. For
 actions that normally print progress, those lines are returned in

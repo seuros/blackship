@@ -385,3 +385,6 @@ blackship up --all --dry-run
 
 The first catches manifest and dependency errors, the second reveals merged
 Armada configuration, and the third resolves actual operational ordering.
+The \command{--show} view, in text and in JSON, lists only the project, data
+directory, ZFS settings, and each jail's name, path, release, build and
+dependencies; it never echoes secrets such as telemetry headers.
