@@ -219,6 +219,26 @@ unsafe fn bridge_drvspec(
         .map_err(|e| Error::Network(format!("Bridge ioctl {cmd} failed: {e}")))
 }
 
+/// One interface ioctl on `sock`; a failure reads `Failed to <what>: <errno>`.
+///
+/// # Safety
+/// `arg` must point to a live struct whose size and layout `request` expects.
+unsafe fn interface_ioctl<T>(
+    sock: &UdpSocket,
+    request: libc::c_ulong,
+    arg: *mut T,
+    what: &str,
+) -> Result<()> {
+    // SAFETY: the descriptor lives as long as `sock`; `arg` is valid per the contract.
+    if unsafe { libc::ioctl(sock.as_raw_fd(), request, arg) } < 0 {
+        return Err(Error::Network(format!(
+            "Failed to {what}: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(())
+}
+
 /// Create an anonymous cloned interface and return the assigned name.
 fn create_clone_interface(iftype: &str) -> Result<String> {
     let sock = create_socket()?;
@@ -229,14 +249,7 @@ fn create_clone_interface(iftype: &str) -> Result<String> {
     copy_ifname(&mut req.ifr_name, iftype)?;
 
     // SAFETY: req is ifreq-sized; kernel writes the assigned name into ifr_name.
-    let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCIFCREATE2, &mut req) };
-
-    if result < 0 {
-        return Err(Error::Network(format!(
-            "Failed to create interface: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    unsafe { interface_ioctl(&sock, SIOCIFCREATE2, &raw mut req, "create interface") }?;
 
     extract_ifname(&req.ifr_name)
 }
@@ -270,14 +283,14 @@ pub fn destroy_interface(name: &str) -> Result<()> {
     copy_ifname(&mut req.ifr_name, name)?;
 
     // SAFETY: req is ifreq-sized; SIOCIFDESTROY only reads ifr_name.
-    let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCIFDESTROY, &req) };
-
-    if result < 0 {
-        return Err(Error::Network(format!(
-            "Failed to destroy interface: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    unsafe {
+        interface_ioctl(
+            &sock,
+            SIOCIFDESTROY,
+            std::ptr::from_ref(&req).cast_mut(),
+            "destroy interface",
+        )
+    }?;
 
     Ok(())
 }
@@ -292,13 +305,7 @@ pub fn set_interface_up(name: &str, up: bool) -> Result<()> {
     copy_ifname(&mut req.ifr_name, name)?;
 
     // SAFETY: req is ifreq-sized; kernel fills ifr_flags.
-    let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCGIFFLAGS, &mut req) };
-    if result < 0 {
-        return Err(Error::Network(format!(
-            "Failed to get interface flags: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    unsafe { interface_ioctl(&sock, SIOCGIFFLAGS, &raw mut req, "get interface flags") }?;
 
     if up {
         req.ifr_flags |= IFF_UP;
@@ -307,13 +314,14 @@ pub fn set_interface_up(name: &str, up: bool) -> Result<()> {
     }
 
     // SAFETY: req is ifreq-sized; SIOCSIFFLAGS only reads it.
-    let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFFLAGS, &req) };
-    if result < 0 {
-        return Err(Error::Network(format!(
-            "Failed to set interface flags: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    unsafe {
+        interface_ioctl(
+            &sock,
+            SIOCSIFFLAGS,
+            std::ptr::from_ref(&req).cast_mut(),
+            "set interface flags",
+        )
+    }?;
 
     Ok(())
 }
@@ -332,14 +340,14 @@ pub fn rename_interface(old_name: &str, new_name: &str) -> Result<()> {
     req.ifr_data = new_cstr.as_ptr().cast_mut().cast();
 
     // SAFETY: ifr_data points at new_cstr, alive until return; kernel bounds the copyinstr.
-    let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFNAME, &req) };
-
-    if result < 0 {
-        return Err(Error::Network(format!(
-            "Failed to rename interface: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    unsafe {
+        interface_ioctl(
+            &sock,
+            SIOCSIFNAME,
+            std::ptr::from_ref(&req).cast_mut(),
+            "rename interface",
+        )
+    }?;
 
     Ok(())
 }
@@ -376,14 +384,14 @@ pub fn set_mac_address(name: &str, mac: &str) -> Result<()> {
     }
 
     // SAFETY: req is ifreq-sized; SIOCSIFLLADDR only reads it.
-    let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFLLADDR, &req) };
-
-    if result < 0 {
-        return Err(Error::Network(format!(
-            "Failed to set MAC address: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    unsafe {
+        interface_ioctl(
+            &sock,
+            SIOCSIFLLADDR,
+            std::ptr::from_ref(&req).cast_mut(),
+            "set MAC address",
+        )
+    }?;
 
     Ok(())
 }
@@ -399,14 +407,14 @@ pub fn move_to_vnet(name: &str, jid: i32) -> Result<()> {
     req.ifr_jid = jid;
 
     // SAFETY: req is ifreq-sized; SIOCSIFVNET only reads it.
-    let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFVNET, &req) };
-
-    if result < 0 {
-        return Err(Error::Network(format!(
-            "Failed to move interface to VNET: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    unsafe {
+        interface_ioctl(
+            &sock,
+            SIOCSIFVNET,
+            std::ptr::from_ref(&req).cast_mut(),
+            "move interface to VNET",
+        )
+    }?;
 
     Ok(())
 }
@@ -512,14 +520,14 @@ pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
     }
 
     // SAFETY: req matches struct ifaliasreq; SIOCAIFADDR only reads it.
-    let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCAIFADDR, &req) };
-
-    if result < 0 {
-        return Err(Error::Network(format!(
-            "Failed to set IP address: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    unsafe {
+        interface_ioctl(
+            &sock,
+            SIOCAIFADDR,
+            std::ptr::from_ref(&req).cast_mut(),
+            "set IP address",
+        )
+    }?;
 
     Ok(())
 }
@@ -536,24 +544,26 @@ pub fn disable_hwfilter(name: &str) -> Result<()> {
     copy_ifname(&mut req.ifr_name, name)?;
 
     // SAFETY: req is ifreq-sized; kernel fills ifr_curcap.
-    let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCGIFCAP, &mut req) };
-    if result < 0 {
-        return Err(Error::Network(format!(
-            "Failed to get interface capabilities: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    unsafe {
+        interface_ioctl(
+            &sock,
+            SIOCGIFCAP,
+            &raw mut req,
+            "get interface capabilities",
+        )
+    }?;
 
     req.ifr_reqcap = req.ifr_curcap & !IFCAP_VLAN_HWFILTER;
 
     // SAFETY: req is ifreq-sized; SIOCSIFCAP only reads it.
-    let result = unsafe { libc::ioctl(sock.as_raw_fd(), SIOCSIFCAP, &req) };
-    if result < 0 {
-        return Err(Error::Network(format!(
-            "Failed to disable hw VLAN filter: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    unsafe {
+        interface_ioctl(
+            &sock,
+            SIOCSIFCAP,
+            std::ptr::from_ref(&req).cast_mut(),
+            "disable hw VLAN filter",
+        )
+    }?;
 
     set_interface_up(name, true)?;
 
