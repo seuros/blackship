@@ -262,17 +262,21 @@ pub fn build_root(
     })
 }
 
-/// Copy a release directory into a target jail path using `cp -a`.
-pub fn copy_release_to(release_path: &Path, target: &Path) -> Result<()> {
-    let status = std::process::Command::new("/bin/cp")
+/// Run `cp -a <release>/. <target>`; the caller maps a spawn failure or bad status to its error.
+pub fn cp_release(release_path: &Path, target: &Path) -> std::io::Result<std::process::ExitStatus> {
+    std::process::Command::new("/bin/cp")
         .arg("-a")
         .arg(format!("{}/.", release_path.display()))
         .arg(target)
         .status()
-        .map_err(|e| Error::BuildFailed {
-            step: "FROM".to_string(),
-            message: format!("Failed to copy base release: {e}"),
-        })?;
+}
+
+/// Copy a release directory into a target jail path using `cp -a`.
+pub fn copy_release_to(release_path: &Path, target: &Path) -> Result<()> {
+    let status = cp_release(release_path, target).map_err(|e| Error::BuildFailed {
+        step: "FROM".to_string(),
+        message: format!("Failed to copy base release: {e}"),
+    })?;
     if !status.success() {
         return Err(Error::BuildFailed {
             step: "FROM".to_string(),

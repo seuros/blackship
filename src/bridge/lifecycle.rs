@@ -186,11 +186,7 @@ fn copy_release(release_path: &Path, path: &Path) -> Result<()> {
     std::fs::create_dir_all(path)
         .map_err(|e| Error::JailOperation(format!("Failed to create jail directory: {e}")))?;
 
-    let status = std::process::Command::new("/bin/cp")
-        .arg("-a")
-        .arg(format!("{}/.", release_path.display()))
-        .arg(path)
-        .status()
+    let status = crate::image::cp_release(release_path, path)
         .map_err(|e| Error::JailOperation(format!("Failed to execute cp command: {e}")))?;
     if !status.success() {
         return Err(Error::JailOperation(format!(
