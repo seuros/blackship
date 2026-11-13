@@ -455,7 +455,7 @@ release = "15.1-RELEASE"              # Base release (clone-provisioned when @pr
 path = "/jails/myapp"                 # Custom path (optional; default data_dir/jails/<name>)
 hostname = "myapp.local"              # Hostname
 depends_on = ["database"]             # Dependencies
-tags = ["web", "prod"]                # Tags for group targeting (blackship down prod)
+tags = ["autostart", "web", "prod"]  # `autostart` is reserved; others select groups
 devfs_ruleset = 4                     # devfs ruleset (default 4; 0 disables devfs)
 init = true                           # Run /etc/rc at start, /etc/rc.shutdown at stop (default)
 stop = "service nginx stop"           # Run inside the jail before teardown (overrides Jailfile STOP)
@@ -529,9 +529,43 @@ running.
 | `blackship down [target] [--all] [--dry-run]` | Stop jail(s) in reverse order |
 | `blackship restart [target] [--all] [--dry-run]` | Restart jail(s) |
 | `blackship eva [target] [--all] [--dry-run]` | Hot-update running jail(s) to match the config, no restart |
+| `blackship autostart [--dry-run]` | Reconcile the project to its `autostart` tags |
 
 Targets accept a jail name, an unambiguous prefix, a tag (from `tags = [...]`
 in the jail definition), or `ALL`.
+
+### Start at boot
+
+Add the reserved `autostart` tag to each jail that should run after boot:
+
+```toml
+[[jails]]
+name = "web"
+depends_on = ["database"]
+tags = ["autostart", "web"]
+```
+
+`blackship autostart --dry-run` previews the desired project state. Running
+`blackship autostart` stops project jails outside that state, then starts the
+tagged jails and their dependencies in dependency order. A dependency such as
+`database` therefore starts at boot without needing its own tag.
+
+`blackship supervise` keeps its existing behavior of starting and monitoring
+every configured jail. The packaged rc service uses that behavior by default.
+Enable its autostart mode to reconcile and monitor only the effective boot set:
+
+```sh
+sysrc blackship_warden_enable=YES
+sysrc blackship_warden_autostart=YES
+service blackship_warden start
+```
+
+The rc service runs `blackship setup` first, then launches
+`blackship supervise --autostart`; it does not briefly start the entire fleet.
+With no `autostart` tags, that mode starts no project jails. Leave
+`blackship_warden_autostart` at its default `NO` to retain the all-jails
+behavior. `ps` JSON reports both the raw `tags` and the effective `autostart`
+value (including dependencies).
 
 `eva` recomputes each jail's parameters from the config, diffs them against
 the live values from jls, and applies only the changes in one
@@ -625,7 +659,7 @@ the dataset, so `zfs send` carries everything needed to rebuild the jail.
 |---------|-------------|
 | `blackship health [jail] [-w] [-i interval] [--json]` | Health check status |
 | `blackship stats [jail] [--json]` | Per-jail CPU, RSS, and process counts |
-| `blackship supervise` | Start Warden supervisor for auto-restart |
+| `blackship supervise [--autostart]` | Supervise all jails; with `--autostart`, reconcile and supervise only the boot set |
 | `blackship logs <jail> [-f] [-n lines]` | Tail jail logs |
 | `blackship audit <jail> [--json]` | Durable lifecycle history, peak usage, exit reason |
 | `blackship qos <jail> [--show\|--steady\|--startup]` | Inspect or switch the QoS profile |

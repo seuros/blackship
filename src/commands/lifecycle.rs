@@ -71,6 +71,15 @@ pub fn plan(bridge: &Bridge, op: Operation, jail: Option<&str>, all: bool) -> Re
     })
 }
 
+/// The machine-readable project autostart reconciliation plan.
+pub fn autostart_plan(bridge: &Bridge) -> Result<Plan> {
+    Ok(Plan {
+        operation: "autostart",
+        dry_run: true,
+        steps: bridge.autostart_steps()?,
+    })
+}
+
 pub fn handle(
     bridge: &mut Bridge,
     op: Operation,
