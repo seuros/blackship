@@ -50,7 +50,9 @@ capabilities. \\
 optionally configure and start PF. \\
 \command{cleanup <jail> [--force]} & Remove resources after a failed lifecycle. \\
 \command{gc [jail] [--dry-run] [--force] [--prune-unreferenced]} & Find and
-reclaim orphaned resources; pruning broadens ownership beyond tracked state. \\
+reclaim orphaned resources, including datasets left by a restarted jail and
+empty bridges Blackship created; pruning broadens ownership beyond tracked
+state. \\
 \bottomrule
 \end{shiptable}
 

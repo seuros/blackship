@@ -297,6 +297,18 @@ impl BlackshipConfig {
             }
         }
 
+        if let Some(pacer) = &self.config.rate_limit.health_concurrency {
+            pacer.build()?;
+        }
+
+        for jail in &self.jails {
+            for check in &jail.healthcheck.checks {
+                if let Some(suspicion) = &check.suspicion {
+                    suspicion.build(check.interval)?;
+                }
+            }
+        }
+
         // Check ZFS configuration
         if self.config.zfs_enabled {
             if self.config.zpool.is_none() {
@@ -617,6 +629,9 @@ pub struct RateLimitConfig {
     /// Health check rate limit refill rate (tokens per second)
     #[serde(default = "default_health_refill_rate")]
     pub health_refill_rate: f64,
+
+    /// Adaptive bound on concurrent health-check runs; unset leaves them unbounded
+    pub health_concurrency: Option<crate::sickbay::pacer::PacerConfig>,
 }
 
 impl Default for RateLimitConfig {
@@ -625,6 +640,7 @@ impl Default for RateLimitConfig {
             jail_start_capacity: default_jail_start_capacity(),
             health_capacity: default_health_capacity(),
             health_refill_rate: default_health_refill_rate(),
+            health_concurrency: None,
         }
     }
 }

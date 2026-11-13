@@ -122,7 +122,11 @@ whether \command{--force} is appropriate.
 
 Run a GC dry run and compare its report with \command{mount}, \command{jls},
 \command{ifconfig -g blackship}, PF anchors, rctl rules, and ZFS datasets.
-Normal GC reclaims proven ownership. Use targeted \command{cleanup} for one
+Normal GC reclaims proven ownership: scope-tracked resources, a dataset left by
+an earlier run of the same jail (tagged \setting{blackship:ephemeral}), and an
+empty bridge Blackship created and tagged. A bridge from before the tagging, or
+one you made, stays until you remove it by hand with
+\command{ifconfig <name> destroy}. Use targeted \command{cleanup} for one
 jail. Force only after confirming that a reported resource does not belong to a
 different live workload.
 

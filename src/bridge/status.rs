@@ -2,6 +2,7 @@
 
 use crate::error::Result;
 use crate::jail::jail_getid;
+use crate::sickbay::HealthStatus;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -82,6 +83,28 @@ impl Bridge {
             .get(full_name)
             .and_then(|instance| instance.handle.as_ref())
             .and_then(crate::jail::JailHandle::descriptor_fd)
+    }
+
+    /// A handle on this bridge's audit log, for readers that outlive a borrow of it.
+    pub fn audit_log(&self) -> crate::audit::AuditLog {
+        self.audit.clone()
+    }
+
+    /// Report a health verdict into the jail's chart; ignored unless it is running.
+    pub fn record_health(&mut self, full_name: &str, status: HealthStatus) {
+        if let Some(instance) = self.instances.get_mut(full_name)
+            && instance.is_running()
+        {
+            match instance.set_health(status) {
+                Ok(()) if self.verbose => {
+                    println!("  Health chart '{full_name}': {:?}", instance.health());
+                }
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("Warning: health chart rejected '{status}' for '{full_name}': {e}");
+                }
+            }
+        }
     }
 
     /// Print jail status

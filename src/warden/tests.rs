@@ -76,3 +76,13 @@ fn test_intentional_stops_track_jids() {
     stops.clear(42);
     assert!(!stops.contains(42));
 }
+
+#[test]
+fn only_a_stop_in_flight_reads_as_an_operator_stop() {
+    use crate::audit::AuditEvent::{Created, Destroyed, Failed, Running, Terminating};
+    assert!(stop_in_progress(Terminating));
+    assert!(stop_in_progress(Destroyed));
+    for event in [Created, Running, Failed] {
+        assert!(!stop_in_progress(event));
+    }
+}

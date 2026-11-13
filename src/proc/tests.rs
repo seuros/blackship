@@ -82,3 +82,33 @@ fn test_hardening_does_not_break_successful_exec() {
         Outcome::TimedOut => panic!("should not time out"),
     }
 }
+
+#[test]
+fn test_close_dir_fds_drops_directories_and_keeps_files() {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+
+    let dir = std::fs::File::open("/").unwrap();
+    let file = std::fs::File::open("/dev/null").unwrap();
+    let (dir_fd, file_fd) = (dir.as_raw_fd(), file.as_raw_fd());
+    // Inheritable: fork copies them whether or not they are close-on-exec.
+    for fd in [dir_fd, file_fd] {
+        // SAFETY: plain integer args on fds we own.
+        unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
+    }
+
+    let mut cmd = Command::new("/usr/bin/true");
+    // SAFETY: only async-signal-safe syscalls between fork and exec.
+    unsafe {
+        cmd.pre_exec(move || {
+            close_dir_fds();
+            let dir_open = libc::fcntl(dir_fd, libc::F_GETFD) != -1;
+            let file_open = libc::fcntl(file_fd, libc::F_GETFD) != -1;
+            if dir_open || !file_open {
+                return Err(io::Error::from_raw_os_error(libc::EBADF));
+            }
+            Ok(())
+        });
+    }
+    assert!(cmd.status().unwrap().success());
+}

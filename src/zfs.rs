@@ -95,10 +95,11 @@ impl ZfsManager {
 
         let jails = self.jails_dataset();
         let mountpoint = self.jails_mountpoint.display().to_string();
+        // Datasets under it carry their own mountpoint; an existing parent may serve another data_dir.
         if !self.dataset_exists(&jails)? {
             Self::create_dataset(&jails)?;
+            Self::set_property(&jails, "mountpoint", &mountpoint)?;
         }
-        Self::set_property(&jails, "mountpoint", &mountpoint)?;
 
         Ok(())
     }
@@ -314,8 +315,43 @@ impl ZfsManager {
             return Err(Error::Zfs(format!("Dataset '{dataset}' already exists")));
         }
 
-        Self::create_dataset(&dataset)?;
+        let mountpoint = format!("mountpoint={}", self.jail_path(name).display());
+        zfs_run(
+            &[
+                "create",
+                "-p",
+                "-o",
+                "compression=lz4",
+                "-o",
+                &mountpoint,
+                &dataset,
+            ],
+            || format!("Failed to create dataset '{dataset}'"),
+        )?;
         Ok(self.jail_path(name))
+    }
+
+    const EPHEMERAL_PROPERTY: &'static str = "blackship:ephemeral";
+
+    /// Record on the dataset that blackship created it, and whether a reaper may destroy it.
+    pub fn mark_jail_dataset(&self, name: &str, ephemeral: bool) -> Result<()> {
+        Self::set_property(
+            &self.jail_dataset(name),
+            Self::EPHEMERAL_PROPERTY,
+            if ephemeral { "on" } else { "off" },
+        )
+    }
+
+    /// `Some(ephemeral)` for a dataset blackship created; `None` for one it did not.
+    pub fn jail_dataset_mark(&self, name: &str) -> Option<bool> {
+        match Self::get_property(&self.jail_dataset(name), Self::EPHEMERAL_PROPERTY)
+            .ok()?
+            .as_str()
+        {
+            "on" => Some(true),
+            "off" => Some(false),
+            _ => None,
+        }
     }
 
     /// Destroy a jail's dataset

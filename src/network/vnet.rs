@@ -134,7 +134,11 @@ impl VnetSetup {
     }
 
     fn create_epair(jail_name: &str, config: VnetConfig) -> Result<Self> {
-        let bridge = Bridge::create_or_open(&config.bridge)?;
+        let (bridge, created) = Bridge::ensure(&config.bridge)?;
+        if created && let Err(e) = crate::sys::tag_interface(&config.bridge) {
+            eprintln!("Warning: could not tag bridge {}: {e}", config.bridge);
+        }
+        crate::fault::trip(crate::fault::Point::AfterBridge)?;
         let epair = EpairInterface::create_for_jail(jail_name)?;
 
         if let Some(ref mac) = config.mac_address

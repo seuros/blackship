@@ -77,6 +77,69 @@ The main lifecycle operations are:
     leftovers.
 \end{description}
 
+\subsection*{One chart for lifecycle and health}
+
+Lifecycle and health share a single statechart, so the order in which states
+are left and entered is resolved by the chart instead of by hand:
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  leaf/.style={draw=steel,rounded corners=3pt,fill=codeback,minimum width=2.0cm,
+               minimum height=0.8cm,align=center},
+  group/.style={draw=steel,rounded corners=6pt,inner sep=0.25cm},
+  title/.style={font=\footnotesize\bfseries,text=signalred,anchor=north west},
+  move/.style={-{Latex[length=2mm]},thick,color=signalred},
+  tag/.style={font=\footnotesize\ttfamily,text=voidblack,fill=white,inner sep=1pt}
+]
+  \node[leaf] (stopped)  at (1.7,5.0) {Stopped};
+  \node[leaf] (failed)   at (1.7,1.4) {Failed};
+  \node[leaf] (starting) at (5.9,5.0) {Starting};
+  \node[leaf] (stopping) at (5.9,1.4) {Stopping};
+  \node[leaf] (draining) at (10.6,1.4) {Draining};
+  \node[leaf,fill=white] (healthy)   at (9.6,5.6) {Healthy};
+  \node[leaf,fill=white] (unhealthy) at (11.7,5.6) {Unhealthy};
+  \node[leaf,fill=white] (failing)   at (9.6,4.3) {Failing};
+  \node[leaf,fill=white] (suspended) at (11.7,4.3) {Suspended};
+  \coordinate (dtop) at (1.7,5.85);
+  \coordinate (utop) at (8.0,7.0);
+  \coordinate (jtop) at (7.0,7.6);
+  \coordinate (rtl) at (8.35,6.7);
+  \coordinate (rbr) at (12.95,3.65);
+
+  \begin{scope}[on background layer]
+    \node[group,fill=plasma!14,fit=(starting)(stopping)(draining)(utop)(rtl)(rbr)] (up) {};
+    \node[group,fill=plasma!14,fit=(stopped)(failed)(dtop)] (down) {};
+    \node[group,draw=voidblack,fit=(down)(up)(jtop),inner sep=0.3cm] (jail) {};
+    \node[group,fill=ash!55,inner sep=0pt,fit=(rtl)(rbr)] (running) {};
+  \end{scope}
+  \foreach \bx/\name in {jail/Jail,down/Down,up/Up,running/Running}
+    \node[title] at ([shift={(0.15,-0.1)}]\bx.north west) {\name};
+
+  \draw[move] (stopped) -- node[tag,above] {start} (starting);
+  \draw[move] (starting.east) -- node[tag,above] {started} (running.west |- starting.east);
+  \draw[move] (draining.north |- running.south) -- node[tag,right] {drain} (draining.north);
+  \draw[move] ($(running.south west)+(0.4,0)$) -- node[tag,above left] {stop} (stopping.north east);
+  \draw[move] (draining.west) -- node[tag,above] {stop} (stopping.east);
+  \draw[move] (stopping.north west) -- node[tag,above right,pos=0.45] {stopped} (stopped.south east);
+  \draw[move] (failed.north) -- node[tag,right] {recover} (stopped.south);
+  \draw[move] (up.west |- failed.east) -- node[tag,above] {fail} (failed.east);
+\end{tikzpicture}
+\caption{The jail chart. Arrows are the \setting{state-machines} events, with
+\texttt{fail} leaving any state inside Up. The four Running leaves move among
+themselves with supervisor health verdicts.}
+\label{fig:jail-chart}
+\end{figure}
+
+Events and guards stay in the \setting{state-machines} jail machine; the chart
+only answers which states a move exits (innermost first) and enters (outermost
+first). A \command{fail} from a healthy running jail exits Healthy, Running and
+Up, then enters Down and Failed. Health verdicts from the supervisor move the
+leaf inside Running. When a jail stops, the claims held by Up (the VNET
+interface, then the address lease) are released in the order the resolved exit
+reports.
+
 \section{Durable stores}
 
 Files beneath the configured data directory serve different purposes:

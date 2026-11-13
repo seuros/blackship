@@ -59,6 +59,7 @@ mod console;
 mod container;
 mod error;
 mod export;
+mod fault;
 mod gc;
 mod hooks;
 mod host;

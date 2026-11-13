@@ -14,6 +14,13 @@ dataset = "blackship"
 # 0 disables sampling.
 usage_sample_secs = 30
 
+# Optional: cap concurrent health-check runs under `supervise`. The limit
+# moves by AIMD; a cycle over the limit is shed, not queued. Unset = unbounded.
+# [config.rate_limit.health_concurrency]
+# initial = 4
+# min = 1
+# max = 1000
+
 # Optional OTLP telemetry export. Omit the table to disable it; lifecycle
 # events are written to <data_dir>/audit/<jail>.jsonl either way.
 # [telemetry]
@@ -48,6 +55,24 @@ hostname = "db.local"
 [jails.network]
 networks = ["backend"]
 ip = "10.0.1.10"
+
+# Health checks. Optional per-check suspicion (phi-accrual) replaces the
+# consecutive-failure count; unset keeps `retries`. A pass is a heartbeat and a
+# failure is silence. Only a failing verdict triggers `recovery`.
+# [jails.healthcheck]
+# enabled = true
+#
+# [[jails.healthcheck.checks]]
+# name = "listener"
+# command = "nc -z 127.0.0.1 5432"
+# target = "jail"
+# interval = 5
+#
+# [jails.healthcheck.checks.suspicion]
+# min_samples = 8
+# unhealthy_phi = 3.0
+# failing_phi = 8.0
+# min_std_dev_ms = 1250
 
 # Two-phase QoS. `transition` is one of "healthy" (first passing healthcheck,
 # needs `supervise`), "timer" (max_startup_secs elapses), or "manual"

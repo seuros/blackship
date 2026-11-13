@@ -9,12 +9,18 @@ use tokio::sync::Mutex;
 use crate::error::Result;
 use crate::{bridge, jail, manifest, sickbay, warden};
 
+type SharedPacer = Arc<std::sync::Mutex<sickbay::pacer::Pacer>>;
+
 pub fn handle(config_path: &Path, verbose: bool, autostart_only: bool) -> Result<()> {
     let config = manifest::load(config_path)?;
     let project_prefix = format!("{}-", config.config.project_name());
     let configured_jails = config.jails.clone();
     let rate_limit = config.config.rate_limit.clone();
     let monitor_ping_url = config.config.monitor_ping_url.clone();
+    let pacer: Option<SharedPacer> = match &config.config.rate_limit.health_concurrency {
+        Some(cfg) => Some(Arc::new(std::sync::Mutex::new(cfg.build()?))),
+        None => None,
+    };
     let usage_sample_secs = config.config.usage_sample_secs.unwrap_or(30);
 
     let bridge = bridge::Bridge::open(config, verbose)?;
@@ -80,10 +86,12 @@ pub fn handle(config_path: &Path, verbose: bool, autostart_only: bool) -> Result
             &warden_handle_for_health,
         );
         let health_stop_signals = spawn_health_monitors(
+            &bridge,
             &jails_for_health,
             &project_prefix,
             &rate_limit,
             &warden_handle_for_health,
+            pacer.as_ref(),
         );
 
         if usage_sample_secs > 0 {
@@ -160,12 +168,66 @@ fn spawn_qos_timers(
     }
 }
 
+/// Run one check cycle; with a pacer it runs on a blocking thread and is shed at the limit.
+async fn run_cycle(
+    mut checker: sickbay::HealthChecker,
+    pacer: Option<&SharedPacer>,
+) -> Option<sickbay::HealthChecker> {
+    let report = |checker: &sickbay::HealthChecker, result: &Result<sickbay::HealthStatus>| {
+        if let Err(e) = result {
+            eprintln!("Health check error for {}: {}", checker.jail_name(), e);
+        }
+    };
+    let Some(pacer) = pacer else {
+        let result = checker.run_checks();
+        report(&checker, &result);
+        return Some(checker);
+    };
+
+    let admission = lock(pacer).enter();
+    let Some(admission) = admission else {
+        println!(
+            "Health pacer: shed a check cycle for '{}' (limit {})",
+            checker.jail_name(),
+            lock(pacer).limit()
+        );
+        return Some(checker);
+    };
+
+    let timeout = checker.timeout();
+    let started = std::time::Instant::now();
+    let (checker, result) = tokio::task::spawn_blocking(move || {
+        let result = checker.run_checks();
+        (checker, result)
+    })
+    .await
+    .ok()?;
+    report(&checker, &result);
+
+    let moved = lock(pacer).leave(admission, started.elapsed(), timeout, result.is_err());
+    if let Some((before, after)) = moved {
+        println!(
+            "Health pacer: limit {before} -> {after} ({} in flight)",
+            lock(pacer).in_flight()
+        );
+    }
+    Some(checker)
+}
+
+fn lock(pacer: &SharedPacer) -> std::sync::MutexGuard<'_, sickbay::pacer::Pacer> {
+    pacer
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// One health-check loop per jail; returns their stop flags. Must run inside tokio.
 fn spawn_health_monitors(
+    bridge: &Arc<Mutex<bridge::Bridge>>,
     jails: &[manifest::JailDef],
     project_prefix: &str,
     rate_limit: &manifest::RateLimitConfig,
     warden_handle: &warden::WardenHandle,
+    pacer: Option<&SharedPacer>,
 ) -> Vec<Arc<AtomicBool>> {
     let mut health_stop_signals = Vec::new();
 
@@ -189,13 +251,22 @@ fn spawn_health_monitors(
 
         health_stop_signals.push(checker.stop_signal());
 
+        let bridge = Arc::clone(bridge);
+        let pacer = pacer.cloned();
+        let name = full_name.clone();
         tokio::spawn(async move {
-            while !checker.is_stopped() {
-                if let Err(e) = checker.run_checks() {
-                    eprintln!("Health check error for {}: {}", checker.jail_name(), e);
-                }
+            let mut current = Some(checker);
+            while let Some(checker) = current.take().filter(|c| !c.is_stopped()) {
+                let Some(checker) = run_cycle(checker, pacer.as_ref()).await else {
+                    eprintln!("Health monitor for '{name}' lost its checker");
+                    return;
+                };
 
                 let status = checker.status();
+                bridge
+                    .lock()
+                    .await
+                    .record_health(checker.jail_name(), status);
                 if status == sickbay::HealthStatus::Failing {
                     eprintln!("Health check failing for jail '{}'", checker.jail_name());
                 }
@@ -204,8 +275,9 @@ fn spawn_health_monitors(
                     checker.interval().as_secs(),
                 ))
                 .await;
+                current = Some(checker);
             }
-            println!("Health monitor stopped for jail '{}'", checker.jail_name());
+            println!("Health monitor stopped for jail '{name}'");
         });
 
         println!("Spawned health monitor for jail '{full_name}'");

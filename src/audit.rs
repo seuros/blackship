@@ -72,6 +72,7 @@ impl AuditRecord {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct AuditLog {
     root: PathBuf,
 }
@@ -135,6 +136,11 @@ impl AuditLog {
             }
         }
         Ok(records)
+    }
+
+    /// The newest event recorded for a jail, if it has any history.
+    pub fn last_event(&self, jail: &str) -> Option<AuditEvent> {
+        self.read(jail).ok()?.last().map(|record| record.event)
     }
 
     /// Remove a jail's audit log, including a rotated one.

@@ -426,7 +426,10 @@ monitor_ping_url = "https://hc-ping.com/…"  # Dead-man ping from the superviso
 ```
 
 With ZFS enabled the jails dataset is mounted at `data_dir/jails`, so jail
-roots live at the same paths whether or not they are datasets.
+roots live at the same paths whether or not they are datasets. Blackship sets
+that mountpoint only when it creates the dataset; every jail dataset carries
+its own mountpoint, so a run with a different `data_dir` no longer drags the
+shared parent along with it.
 
 Running jails are named `<project>-<name>`: jail `web` in project `orbital`
 runs as `orbital-web`, which is what `jls` and `ps` show. Commands take
@@ -1052,6 +1055,57 @@ command = "service nginx status"
 target = "jail"
 ```
 
+### Suspicion instead of retry counting
+
+By default a check is Failing after `retries` consecutive failures. For flaky
+probes you can opt in to a phi-accrual detector per check:
+
+```toml
+[[jails.healthcheck.checks]]
+name = "api"
+command = "curl -sf http://localhost:8080/health"
+target = "jail"
+interval = 5
+
+[jails.healthcheck.checks.suspicion]
+min_samples = 8        # passing checks before phi is reported (default 8, at most 64)
+unhealthy_phi = 3.0    # a failed check reports unhealthy at this phi (default 3.0)
+failing_phi = 8.0      # ... and failing at this one (default 8.0)
+# min_std_dev_ms = 1250  # deviation floor; default is a quarter of `interval`
+```
+
+A passing check is a heartbeat; a failing check is silence. The detector
+measures how long the check has been silent relative to how regular its passes
+were, and a failed check is only reported once that silence is unusual. Below
+`unhealthy_phi` a failed check stays healthy, between the two it is
+`unhealthy`, and at `failing_phi` it is `failing`. Until `min_samples` passes
+have been seen, the check falls back to plain retry counting. Only a failing
+verdict can trigger the check's `recovery` action; suspicion reports a level
+and never restarts anything by itself. Breakers and rate limits are unchanged.
+Leave the table out and nothing changes. `unhealthy_phi` and `failing_phi`
+must be positive and `unhealthy_phi <= failing_phi`; bad values are rejected
+at load.
+
+### Bounding concurrent checks
+
+Under `supervise`, every jail's monitor runs its checks on its own. To keep a
+slow host from being buried by its own probes, cap them:
+
+```toml
+[config.rate_limit.health_concurrency]
+initial = 4      # runs allowed in flight at the start (default 4)
+min = 1          # the limit never drops below this (default 1)
+max = 1000       # never grows above this (default 1000)
+```
+
+The limit moves by additive-increase, multiplicative-decrease: it grows by one
+when a run completes while the limit is saturated, and drops to three quarters
+when a run errors or takes at least half of its check `timeout`. A cycle that
+finds the limit full is shed, not queued: the monitor skips it and tries again
+on its next interval. Unset means unbounded, exactly as before. This applies
+to `supervise` health monitors only; `up` and `down` start and stop jails one
+at a time.
+
 ### Monitoring
 
 `health` runs checks inside the jail, so it escalates to root like `exec`.
@@ -1093,6 +1147,63 @@ blackship gc --force            # also release resources it cannot prove it owns
 Datasets blackship did not create, and jails marked `ephemeral = false`, are
 reported but never destroyed without `--force`. `up` and `supervise` run the
 report-and-reap-orphans half automatically.
+
+Blackship tags every jail dataset it creates with the ZFS property
+`blackship:ephemeral`. A jail that is stopped and started again reuses its
+dataset, and the tag lets the new scope record claim it again, so a supervisor
+that dies after a restart is still cleaned up by `gc`. A dataset without the
+tag (say, one from `build`) is never claimed that way.
+
+`gc` also reclaims a bridge that blackship created for a VNET jail once nothing
+uses it, no `--force` needed. It must be tagged into the `blackship` interface
+group (blackship tags a bridge only when it creates it), have no members, and
+be named by no network record, no live jail's VNET record and no
+`[config.bridge]`. Bridges that predate the tag, bridges you made yourself,
+and the `[config.bridge]` one are never touched, and `ng_bridge` is not
+handled.
+
+### Jail state as a chart
+
+Lifecycle and health live in one statechart, so the order things are left and
+entered is resolved by the chart, not by hand:
+
+```mermaid
+stateDiagram-v2
+    state Jail {
+        [*] --> Down
+        state Down {
+            [*] --> Stopped
+            Failed --> Stopped: recover
+        }
+        state Up {
+            [*] --> Starting
+            Starting --> Running: started
+            state Running {
+                [*] --> Healthy
+                Unhealthy
+                Failing
+                Suspended
+            }
+            Running --> Draining: drain
+            Running --> Stopping: stop
+            Draining --> Stopping: stop
+        }
+        Down --> Up: start (Stopped to Starting)
+        Up --> Down: stopped (Stopping to Stopped)
+        Up --> Down: fail (to Failed)
+    }
+```
+
+The arrows are the `state-machines` events. `fail` leaves any Up state for
+Failed, and `start` and `stopped` are the Stopped-to-Starting and
+Stopping-to-Stopped moves between the two groups. Supervisor health verdicts
+move the leaf among the four Running states in any direction.
+
+Events and guards stay in the `state-machines` jail machine; the chart answers
+which states a move exits and enters. `fail` from a healthy running jail exits
+Healthy, Running and Up, then enters Down and Failed. Health verdicts from
+`supervise` move the leaf inside Running, and `stop` releases what leaving Up
+held (VNET, then the address lease) in the order the chart reports.
 
 ### Two-phase QoS
 
