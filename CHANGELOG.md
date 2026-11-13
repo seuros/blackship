@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.2](https://github.com/seuros/blackship/compare/blackship-v0.4.1...blackship-v0.4.2) (2026-11-13)
+
+
+### Features
+
+* **autostart:** project autostart tag reconciliation ([#36](https://github.com/seuros/blackship/issues/36)) ([23cd1d2](https://github.com/seuros/blackship/commit/23cd1d21793ea9d90e02ff41bee2d80c7182e543))
+* **cli:** expose machine-readable command capabilities ([#35](https://github.com/seuros/blackship/issues/35)) ([55bc8bd](https://github.com/seuros/blackship/commit/55bc8bda761a8869608440c6ee8287e86f04440c))
+* **cli:** JSON output for Armada commands ([#34](https://github.com/seuros/blackship/issues/34)) ([e3817a1](https://github.com/seuros/blackship/commit/e3817a18ffe0af9b672578051cd05c4b14988077))
+* **jail:** model jail lifecycle and health as one harel-machines chart ([9ea1df5](https://github.com/seuros/blackship/commit/9ea1df5b104cbaea53f65911132ad3c95b927b45))
+* **migrate:** fence the source after a successful migration ([925e7d2](https://github.com/seuros/blackship/commit/925e7d299cff91f8792c6383f99e4dae3fda2cdb))
+* **ps:** health summaries in ps --host ([#37](https://github.com/seuros/blackship/issues/37)) ([4bddc63](https://github.com/seuros/blackship/commit/4bddc639f1542515a1ec68dd4a404edd4a141bee))
+* **sickbay:** adaptive bound on health-check concurrency via shed-machines ([ee625a0](https://github.com/seuros/blackship/commit/ee625a0eeee2e03987753828b367277fc2b80679))
+* **sickbay:** phi-accrual suspicion via suspect-machines ([907d3be](https://github.com/seuros/blackship/commit/907d3be1fc1681ec8df87434bf7415338dca9223))
+
+
+### Bug Fixes
+
+* **container:** close inherited directory fds before jail_attach ([b631641](https://github.com/seuros/blackship/commit/b6316413fb7128596f032712181223f32363a3bf))
+* **gc:** claim a dataset an earlier run left behind ([0409344](https://github.com/seuros/blackship/commit/04093444d13d014d39101f7f6e6a1962d466bc4a))
+* **gc:** reclaim a bridge blackship created once nothing uses it ([625613e](https://github.com/seuros/blackship/commit/625613e66cf0e0ed42630e71752bd0ad68556332))
+* **migrate:** send a cloned jail as a full stream ([36e4827](https://github.com/seuros/blackship/commit/36e4827ba00e499019695acb530a926479d9afff))
+* **warden:** a stop from another process is not a failure ([06a64ba](https://github.com/seuros/blackship/commit/06a64ba6e963c4a91571d857e021eacf25e9b2e4))
+* **zfs:** init no longer rewrites a shared parent mountpoint ([847f2ee](https://github.com/seuros/blackship/commit/847f2ee0a73bd96c7b142dca46706f81c39c0859))
+
 ## [0.4.1](https://github.com/seuros/blackship/compare/blackship-v0.4.0...blackship-v0.4.1) (2026-11-11)
 
 
