@@ -55,7 +55,9 @@ period; zero disables sampling. \\
 
 When ZFS is enabled, the jails dataset is mounted at the configured data
 directory's \file{jails} path. This keeps effective root paths consistent
-between directory and dataset deployments.
+between directory and dataset deployments. Blackship sets that mountpoint only
+when it creates the dataset, and every jail dataset carries its own mountpoint,
+so a run with a different data directory does not move the shared parent.
 
 Operational defaults are tunable in nested tables. The following example also
 shows bridge VLAN filtering, which requires FreeBSD 15.0 or newer:
@@ -65,6 +67,11 @@ shows bridge VLAN filtering, which requires FreeBSD 15.0 or newer:
 jail_start_capacity = 3.0
 health_capacity = 5.0
 health_refill_rate = 0.5
+
+[config.rate_limit.health_concurrency]
+initial = 4
+min = 1
+max = 1000
 
 [config.health]
 interval = 30
@@ -219,6 +226,59 @@ target = "jail"
 
 The supervisor retains failure history, applies configured recovery behavior,
 and can use health as the trigger for a QoS phase transition.
+
+\subsection*{Suspicion instead of retry counting}
+
+By default a check is failing after \setting{retries} consecutive failures. A
+check can opt in to a phi-accrual detector with an optional table:
+
+\begin{lstlisting}[language=TOML]
+[jails.healthcheck.checks.suspicion]
+min_samples = 8
+unhealthy_phi = 3.0
+failing_phi = 8.0
+min_std_dev_ms = 1250
+\end{lstlisting}
+
+\begin{shiptable}{L{0.28\textwidth}L{0.16\textwidth}L{0.40\textwidth}}
+\toprule
+Setting & Default & Meaning \\
+\midrule
+\setting{min\_samples} & 8 & Passing checks needed before phi is reported; at
+most 64. \\
+\setting{unhealthy\_phi} & 3.0 & Phi at which a failed check reports unhealthy. \\
+\setting{failing\_phi} & 8.0 & Phi at which a failed check reports failing and
+may trigger recovery. \\
+\setting{min\_std\_dev\_ms} & interval / 4 & Floor on the deviation, in
+milliseconds. \\
+\bottomrule
+\end{shiptable}
+
+A passing check is a heartbeat and a failing check is silence. The detector asks
+how unusual the current silence is given how regular the passes were. Below
+\setting{unhealthy\_phi} a failed check stays healthy; between the thresholds
+it is unhealthy; at \setting{failing\_phi} it is failing. Until
+\setting{min\_samples} passes have been seen the check uses plain retry
+counting. Only a failing verdict can trigger the check's recovery action, so
+suspicion reports a level and never decides to restart anything. Circuit
+breakers and rate limits are unchanged, and an absent table keeps today's
+behavior. Both thresholds must be positive with
+\setting{unhealthy\_phi} not above \setting{failing\_phi}; configuration
+loading rejects anything else.
+
+\subsection*{Bounding concurrent checks}
+
+Under the supervisor each jail runs its own health monitor. The
+\setting{health\_concurrency} table under \setting{rate\_limit} caps how
+many check runs may be in flight. The limit starts at \setting{initial} (default 4) and moves
+between \setting{min} (default 1) and \setting{max} (default 1000) by additive
+increase and multiplicative decrease: it grows by one when a run completes
+while the limit is saturated, and falls to three quarters when a run errors or
+takes at least half of its check timeout. A cycle that finds the limit full is
+shed rather than queued; the monitor skips it and tries again at its next
+interval. Leave the table out for unbounded runs, as before. The cap applies to
+supervisor health monitors only: \command{up} and \command{down} start and stop
+jails sequentially.
 
 \section{Hooks}
 

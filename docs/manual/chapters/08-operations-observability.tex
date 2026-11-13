@@ -77,6 +77,8 @@ part of the single-envelope global JSON contract.
 \command{blackship supervise} runs the warden loop. It monitors jail events,
 executes health checks, applies recovery/backoff behavior, samples resource
 usage, performs health-triggered QoS transitions, and can send a dead-man ping.
+Health checks can use phi-accrual suspicion in place of retry counting, and
+their concurrency can be bounded adaptively; see the configuration chapter.
 For boot operation, use the packaged rc script with the same manifest and data
 directory as interactive administration.
 
@@ -127,6 +129,20 @@ blackship gc --force
 The normal mode reclaims only resources Blackship can prove it owns. Datasets
 not created by Blackship and non-ephemeral jails are reported rather than
 destroyed. \command{--force} expands authority and demands careful review.
+
+Blackship tags each jail dataset it creates with the ZFS property
+\setting{blackship:ephemeral}. A stopped jail keeps its dataset, and when it
+starts again the tag lets the new scope record claim the dataset once more, so
+a supervisor that dies after a restart is still cleaned up. A dataset without
+the tag, such as one a build produced, is never claimed this way.
+
+GC also reclaims a bridge Blackship created for a VNET jail once nothing uses
+it, without \command{--force}. The bridge must carry the \setting{blackship}
+interface group (Blackship tags a bridge only when it creates it), have no
+members, and be named by no network record, no live jail's VNET record, and no
+\setting{[config.bridge]}. Bridges that predate the tag, bridges created by
+hand, and the \setting{[config.bridge]} bridge are never touched. Netgraph
+bridges are out of scope.
 
 \section{Telemetry}
 
