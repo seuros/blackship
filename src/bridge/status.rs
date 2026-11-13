@@ -189,7 +189,7 @@ fn managed_health_summary(
     }
 }
 
-fn unmanaged_health_summary() -> HealthSummary {
+const fn unmanaged_health_summary() -> HealthSummary {
     HealthSummary {
         configured: false,
         status: SummaryStatus::Unknown,

@@ -100,10 +100,7 @@ const CANDIDATES: &[&[&str]] = &[
 
 #[test]
 fn every_json_capable_mode_has_a_row_and_every_row_is_json_capable() {
-    let rows: HashSet<Vec<&str>> = OPERATION_SPECS
-        .iter()
-        .map(|spec| spec.args.to_vec())
-        .collect();
+    let rows: HashSet<&[&str]> = OPERATION_SPECS.iter().map(|spec| spec.args).collect();
 
     for args in CANDIDATES {
         let owned: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
@@ -111,7 +108,7 @@ fn every_json_capable_mode_has_a_row_and_every_row_is_json_capable() {
         let cli = Cli::parse_from(&refs).unwrap_or_else(|e| panic!("{args:?} must parse: {e:?}"));
         assert_eq!(
             cli.command.supports_machine_output(),
-            rows.contains(&args.to_vec()),
+            rows.contains(args),
             "{args:?}: machine output and capability row disagree"
         );
     }

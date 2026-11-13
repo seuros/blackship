@@ -58,13 +58,24 @@ fn a_failed_operation_keeps_what_it_printed() {
     .unwrap_err();
 
     assert_eq!(error.code(), "jail_not_found");
-    assert_eq!(error.output(), ["step one", "step two"]);
+    // Other threads may print to the real fd 1 while it is captured; ours must all be there.
+    let lines = error.output();
+    let one = lines
+        .iter()
+        .position(|l| l == "step one")
+        .expect("step one");
+    let two = lines
+        .iter()
+        .position(|l| l == "step two")
+        .expect("step two");
+    assert!(one < two);
     assert_eq!(stdout_identity(), before, "stdout must be restored");
 
     let rendered = CliError::new(OutputFormat::Json, error).to_string();
     let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
     assert_eq!(value["error"]["code"], "jail_not_found");
-    assert_eq!(value["error"]["output"][1], "step two");
+    let rendered_lines = value["error"]["output"].as_array().unwrap();
+    assert!(rendered_lines.iter().any(|l| l == "step two"));
 }
 
 #[test]
@@ -86,5 +97,5 @@ fn non_utf8_output_is_decoded_lossily() {
     .unwrap();
 
     assert_eq!(value, 7);
-    assert_eq!(messages, ["ok \u{fffd}\u{fffd} done"]);
+    assert!(messages.contains(&"ok \u{fffd}\u{fffd} done".to_string()));
 }
