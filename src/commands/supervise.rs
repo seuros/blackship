@@ -22,6 +22,7 @@ pub fn handle(config_path: &Path, verbose: bool, autostart_only: bool) -> Result
         None => None,
     };
     let usage_sample_secs = config.config.usage_sample_secs.unwrap_or(30);
+    let health_state_store = sickbay::HealthStateStore::from_config(Some(&config));
 
     let bridge = bridge::Bridge::open(config, verbose)?;
     let jails_for_health = if autostart_only {
@@ -92,6 +93,7 @@ pub fn handle(config_path: &Path, verbose: bool, autostart_only: bool) -> Result
             &rate_limit,
             &warden_handle_for_health,
             pacer.as_ref(),
+            &health_state_store,
         );
 
         if usage_sample_secs > 0 {
@@ -172,7 +174,7 @@ fn spawn_qos_timers(
 async fn run_cycle(
     mut checker: sickbay::HealthChecker,
     pacer: Option<&SharedPacer>,
-) -> Option<sickbay::HealthChecker> {
+) -> Option<(sickbay::HealthChecker, bool)> {
     let report = |checker: &sickbay::HealthChecker, result: &Result<sickbay::HealthStatus>| {
         if let Err(e) = result {
             eprintln!("Health check error for {}: {}", checker.jail_name(), e);
@@ -180,8 +182,9 @@ async fn run_cycle(
     };
     let Some(pacer) = pacer else {
         let result = checker.run_checks();
+        let completed = result.is_ok();
         report(&checker, &result);
-        return Some(checker);
+        return Some((checker, completed));
     };
 
     let admission = lock(pacer).enter();
@@ -191,7 +194,7 @@ async fn run_cycle(
             checker.jail_name(),
             lock(pacer).limit()
         );
-        return Some(checker);
+        return Some((checker, false));
     };
 
     let timeout = checker.timeout();
@@ -203,6 +206,7 @@ async fn run_cycle(
     .await
     .ok()?;
     report(&checker, &result);
+    let completed = result.is_ok();
 
     let moved = lock(pacer).leave(admission, started.elapsed(), timeout, result.is_err());
     if let Some((before, after)) = moved {
@@ -211,7 +215,7 @@ async fn run_cycle(
             lock(pacer).in_flight()
         );
     }
-    Some(checker)
+    Some((checker, completed))
 }
 
 fn lock(pacer: &SharedPacer) -> std::sync::MutexGuard<'_, sickbay::pacer::Pacer> {
@@ -228,6 +232,7 @@ fn spawn_health_monitors(
     rate_limit: &manifest::RateLimitConfig,
     warden_handle: &warden::WardenHandle,
     pacer: Option<&SharedPacer>,
+    state_store: &sickbay::HealthStateStore,
 ) -> Vec<Arc<AtomicBool>> {
     let mut health_stop_signals = Vec::new();
 
@@ -250,6 +255,7 @@ fn spawn_health_monitors(
         }
 
         health_stop_signals.push(checker.stop_signal());
+        let state_store = state_store.clone();
 
         let bridge = Arc::clone(bridge);
         let pacer = pacer.cloned();
@@ -257,7 +263,7 @@ fn spawn_health_monitors(
         tokio::spawn(async move {
             let mut current = Some(checker);
             while let Some(checker) = current.take().filter(|c| !c.is_stopped()) {
-                let Some(checker) = run_cycle(checker, pacer.as_ref()).await else {
+                let Some((checker, completed)) = run_cycle(checker, pacer.as_ref()).await else {
                     eprintln!("Health monitor for '{name}' lost its checker");
                     return;
                 };
@@ -267,6 +273,16 @@ fn spawn_health_monitors(
                     .lock()
                     .await
                     .record_health(checker.jail_name(), status);
+                if completed {
+                    let jid = jail::jail_getid(checker.jail_name()).ok();
+                    let record = sickbay::HealthStateRecord::from_checker(&checker, status, jid);
+                    if let Err(e) = state_store.save(&record) {
+                        eprintln!(
+                            "Warning: Failed to save health state for '{}': {e}",
+                            checker.jail_name()
+                        );
+                    }
+                }
                 if status == sickbay::HealthStatus::Failing {
                     eprintln!("Health check failing for jail '{}'", checker.jail_name());
                 }

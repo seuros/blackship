@@ -178,8 +178,11 @@ follow modes cannot fit a single response envelope.
 
 \command{ps --host} returns the selected project and config path plus ownership
 metadata for each row. It includes every manifest jail and running unmanaged
-jails. Stopped unmanaged jails are not discoverable without a known manifest
-and are omitted.
+jails. Each row also has a passive, last-known health summary refreshed by
+\command{health} or \command{supervise}; inventory itself does not execute checks
+or recovery actions. The summary carries a timestamp and an explicit reason
+when health is unknown. Stopped unmanaged jails are not discoverable without a
+known manifest and are omitted.
 
 Legacy command-local \command{--json} flags remain unenveloped for compatibility.
 New clients should prefer the global format and check

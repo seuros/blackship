@@ -56,6 +56,7 @@ escapes.
 
 \begin{lstlisting}[language=bash]
 blackship ps
+blackship ps --host
 blackship stats
 blackship stats api
 blackship health api
@@ -69,7 +70,12 @@ Statistics aggregate per-process CPU and RSS from \command{jls} and
 state. \command{health} runs checks inside the jail and escalates to root.
 The start period counts from the jail's recorded start, so a one-shot check on
 a settled jail reports real results; within the period it reports
-\setting{starting}, and a jail that is not running reports \setting{unknown}. Watch and follow modes are terminal streams; they are intentionally not
+\setting{starting}, and a jail that is not running reports \setting{unknown}.
+Each completed check pass atomically saves a compact summary under
+\path{<data_dir>/health}. \command{ps --host} reads this last-known state without
+executing a check or recovery action. It exposes the observation time and
+labels stopped, never-checked, restarted (stale JID), and unmanaged cases so a
+client does not mistake old health for current health. Watch and follow modes are terminal streams; they are intentionally not
 part of the single-envelope global JSON contract.
 
 \section{Supervisor}

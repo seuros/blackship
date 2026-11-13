@@ -408,9 +408,13 @@ whole profile.
 
 `blackship ps --host` adds running jails outside the selected manifest to the
 configured Blackship inventory. Its result identifies each row's manager and
-ownership, includes the selected project and config path, and keeps unknown
-metadata null for unmanaged jails. Stopped unmanaged jails cannot be discovered
-without a known manifest and are therefore not reported.
+ownership, includes the selected project and config path, and includes a
+passive, last-known health summary. `ps --host` never executes health checks or
+recovery actions: `health` and `supervise` atomically refresh the summary under
+`<data_dir>/health`. The summary reports why a result is unknown (for example,
+`stopped`, `not_checked`, `stale_jid`, or `unmanaged`) and includes its
+`checked_at` timestamp so clients can judge freshness. Stopped unmanaged jails
+cannot be discovered without a known manifest and are therefore not reported.
 
 Lifecycle commands support the global JSON format in dry-run mode. Their
 `data` object contains the requested operation and its ordered steps, allowing
@@ -1141,7 +1145,9 @@ at a time.
 `start_period` (default 60s) counts from when the jail started, so a one-time
 check on a jail that has been up for a while reports real results; within the
 start period it reports `starting`, and a jail that is not running reports
-`unknown`.
+`unknown`. Every completed pass saves an atomic last-known summary which
+`ps --host` can read without running checks. A saved result is accepted only
+when its JID matches the current jail instance.
 
 ```sh
 # One-time check
