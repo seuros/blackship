@@ -87,3 +87,18 @@ fn rejects_path_traversal() {
             .is_err()
     );
 }
+
+#[test]
+fn last_event_is_the_newest_one() {
+    let tmp = temp_root();
+    let log = AuditLog::new(tmp.path().to_path_buf());
+    assert_eq!(log.last_event("demo"), None);
+
+    log.append(&AuditRecord::new("demo", AuditEvent::Running))
+        .unwrap();
+    assert_eq!(log.last_event("demo"), Some(AuditEvent::Running));
+    log.append(&AuditRecord::new("demo", AuditEvent::Terminating))
+        .unwrap();
+    assert_eq!(log.last_event("demo"), Some(AuditEvent::Terminating));
+    assert_eq!(log.last_event("other"), None);
+}

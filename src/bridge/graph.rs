@@ -37,6 +37,39 @@ impl Bridge {
         Ok(order)
     }
 
+    /// Jails that should be running after project autostart reconciliation.
+    ///
+    /// The tag marks roots; their dependencies are included even when those
+    /// dependencies are not tagged themselves.
+    pub fn autostart_order(&self) -> Result<Vec<String>> {
+        let roots = self
+            .config
+            .jails
+            .iter()
+            .filter(|jail| jail.autostarts())
+            .map(|jail| jail.name.clone())
+            .collect::<Vec<_>>();
+        let desired = self.reachable(&roots, false);
+
+        Ok(self
+            .start_order()?
+            .into_iter()
+            .filter(|name| desired.contains(*name))
+            .map(String::from)
+            .collect())
+    }
+
+    /// Project jails outside the autostart dependency closure, in stop order.
+    pub(super) fn autostart_stop_order(&self) -> Result<Vec<String>> {
+        let desired = self.autostart_order()?.into_iter().collect::<HashSet<_>>();
+        Ok(self
+            .stop_order()?
+            .into_iter()
+            .filter(|name| !desired.contains(*name))
+            .map(String::from)
+            .collect())
+    }
+
     /// Nodes reachable from `roots` along dependency edges, roots included.
     fn reachable(&self, roots: &[String], dependents: bool) -> HashSet<String> {
         let mut set = HashSet::new();

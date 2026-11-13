@@ -3,7 +3,8 @@
 use crate::audit::{AuditEvent, AuditRecord};
 use crate::error::{Error, Result};
 use crate::hooks::{HookContext, HookPhase, HookRunner};
-use crate::jail::state::State as JailState;
+use crate::jail::chart::{Health, Node, Step};
+use crate::jail::state::{JailMachineState as MachineState, State as JailState};
 use crate::jail::{
     JailConfig, JailHandle, JailInstance, ParamValue, jail_create, jail_create_with_descriptor,
     jail_getid, jail_remove,
@@ -232,6 +233,32 @@ struct StartClaims {
 type PostStopHook = (HookRunner, PathBuf);
 
 impl Bridge {
+    /// Reconcile this project's running jails to the reserved `autostart` tag.
+    ///
+    /// Untagged jails are stopped exactly (without cascade expansion), then
+    /// tagged jails and their dependency closure are started in graph order.
+    pub fn reconcile_autostart(&mut self) -> Result<()> {
+        let stop = self.autostart_stop_order()?;
+        let start = self.autostart_order()?;
+
+        for name in &stop {
+            if self.is_running(name)? {
+                self.stop_jail(name)?;
+            }
+        }
+        for name in &start {
+            if !self.is_running(name)? {
+                self.start_jail(name)?;
+            }
+        }
+
+        println!(
+            "Project autostart reconciled: {} jail(s) should be running.",
+            start.len()
+        );
+        Ok(())
+    }
+
     /// Persist the in-flight scope record. Never fails the jail operation.
     pub(super) fn persist_scope(&self, scope: &mut ScopeRecord) {
         scope.touch();
@@ -618,6 +645,7 @@ impl Bridge {
                         .with("ip", ip)
                         .with("network", first_network),
                 );
+                crate::fault::trip(crate::fault::Point::AfterLease)?;
                 if self.verbose {
                     println!("  Auto-allocated IP {ip} from network '{first_network}'");
                 }
@@ -653,6 +681,7 @@ impl Bridge {
         }
 
         let (jid, jail_handle) = self.create_jail(full_name, &path, &params, scope, claims)?;
+        crate::fault::trip(crate::fault::Point::AfterJailCreate)?;
         self.apply_startup_limits(jail_def, service_name, full_name, jid, scope)?;
 
         if let Some(setup) = &claims.vnet_setup {
@@ -726,20 +755,28 @@ impl Bridge {
             jail_def.effective_path(&self.config.config, full_name)
         };
 
-        if claims.zfs_dataset
-            && let Some(zfs) = &self.zfs
-        {
-            let dataset = zfs.jail_dataset_name(full_name);
-            scope.zfs_origin = zfs.dataset_origin(&dataset);
-            scope.zfs_dataset = Some(dataset.clone());
-            scope.ephemeral = jail_def.ephemeral.unwrap_or(true);
-            self.persist_scope(scope);
-            self.audit.record(
-                &AuditRecord::new(full_name, AuditEvent::Provisioned)
-                    .with("step", "zfs")
-                    .with("dataset", dataset),
-            );
+        if let Some(zfs) = &self.zfs {
+            let ephemeral = jail_def.ephemeral.unwrap_or(true);
+            if claims.zfs_dataset {
+                zfs.mark_jail_dataset(full_name, ephemeral)?;
+            }
+            // A dataset an earlier run created and left behind is still ours.
+            let reused =
+                !claims.zfs_dataset && zfs.jail_dataset_mark(full_name) == Some(true) && ephemeral;
+            if claims.zfs_dataset || reused {
+                let dataset = zfs.jail_dataset_name(full_name);
+                scope.zfs_origin = zfs.dataset_origin(&dataset);
+                scope.zfs_dataset = Some(dataset.clone());
+                scope.ephemeral = ephemeral;
+                self.persist_scope(scope);
+                self.audit.record(
+                    &AuditRecord::new(full_name, AuditEvent::Provisioned)
+                        .with("step", "zfs")
+                        .with("dataset", dataset),
+                );
+            }
         }
+        crate::fault::trip(crate::fault::Point::AfterZfs)?;
 
         Ok(path)
     }
@@ -995,6 +1032,7 @@ impl Bridge {
     ) -> Result<()> {
         // Fail closed: never run without the configured resource limits.
         let startup_profile = jail_def.startup_resources();
+        crate::fault::trip(crate::fault::Point::BeforeRctl)?;
         if !startup_profile.is_empty() {
             crate::rctl::apply_limits(full_name, startup_profile).inspect_err(|e| {
                 eprintln!("Failed to apply resource limits for '{full_name}': {e}, stopping jail");
@@ -1304,17 +1342,7 @@ impl Bridge {
             crate::sys::unmount_jail_devfs(&path);
         }
 
-        if let Some(instance) = self.instances.get_mut(&full_name) {
-            // The jail is gone either way; a rejected transition is harmless.
-            instance.stop().ok();
-            instance.stopped().ok(); // see above
-            instance.jid = None;
-            instance.handle = None;
-        }
-
-        let leaked_resources = self.release_vnet_on_stop(&full_name);
-
-        self.release_ip_on_stop(&full_name);
+        let leaked_resources = self.settle_stopped(&full_name);
 
         // The scope record is the GC work-list: a leak keeps it alive in `Failed`.
         let peaks = self.peak_details(&full_name);
@@ -1382,6 +1410,40 @@ impl Bridge {
         }
 
         Ok((Some((hook_runner, path)), drain_anchor))
+    }
+
+    /// Move the instance to `Stopped`, then release what leaving `Up` held.
+    /// Returns whether a claim leaked.
+    fn settle_stopped(&mut self, full_name: &str) -> bool {
+        let mut step = None;
+        if let Some(instance) = self.instances.get_mut(full_name) {
+            // The jail is gone either way; a rejected transition is harmless.
+            instance.stop().ok();
+            instance.stopped().ok(); // see above
+            instance.jid = None;
+            instance.handle = None;
+            if instance.state() == JailState::Stopped {
+                step = instance.last_step().copied();
+            }
+        }
+
+        // Not tracked by this process: the jail was mid-stop by construction.
+        let step = step.or_else(|| {
+            Step::phase(
+                MachineState::Stopping,
+                Health::default(),
+                MachineState::Stopped,
+            )
+            .ok()
+        });
+        let mut leaked_resources = false;
+        for node in step.iter().flat_map(Step::exit) {
+            if node == Node::Up {
+                leaked_resources = self.release_vnet_on_stop(full_name);
+                self.release_ip_on_stop(full_name);
+            }
+        }
+        leaked_resources
     }
 
     /// Tear down the jail's VNET pair; returns whether anything leaked.
@@ -1525,3 +1587,6 @@ impl Bridge {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

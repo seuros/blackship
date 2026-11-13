@@ -93,8 +93,12 @@ mcp-host = { version = "0.23.0", features = ["http", "macros"], optional = true 
 schemars = { version = "1.2.2", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+harel-machines = { version = "0.2.1", default-features = false }
+suspect-machines = "0.2.0"
+shed-machines = "0.2.1"
 
 [dev-dependencies]
+rogue-machines = "0.2.1"
 state-machines = { version = "0.34.1", features = ["dynamic", "runtime-send", "serde", "inspect"] }
 
 [lints.rust]

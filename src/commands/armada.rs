@@ -2,9 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
+use crate::bridge::CheckReport;
 use crate::cli::ArmadaAction;
 use crate::error::Result;
 use crate::image::copy_release_to;
+use crate::output::capture_stdout;
 use crate::{blueprint, bridge, error, manifest, provision};
 
 pub fn handle(
@@ -59,6 +63,136 @@ pub fn handle(
     }
 }
 
+/// Structured result for every Armada action other than `ps`, whose existing
+/// status payload remains unchanged for compatibility.
+#[derive(Debug, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ActionReport {
+    Init {
+        file: String,
+        created: bool,
+        messages: Vec<String>,
+    },
+    Up {
+        files: Vec<String>,
+        jails: Vec<String>,
+        dry_run: bool,
+        build: &'static str,
+        detach: bool,
+        messages: Vec<String>,
+    },
+    Down {
+        files: Vec<String>,
+        jails: Vec<String>,
+        dry_run: bool,
+        messages: Vec<String>,
+    },
+    Build {
+        files: Vec<String>,
+        jails: Vec<String>,
+        dry_run: bool,
+        messages: Vec<String>,
+    },
+    Config {
+        files: Vec<String>,
+        valid: bool,
+        check: Box<CheckReport>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        resolved: Option<Box<manifest::BlackshipConfig>>,
+    },
+}
+
+/// Execute an Armada action while keeping stdout as one versioned JSON
+/// envelope. Human progress emitted by existing lower layers is captured in
+/// `messages`; warnings continue to use stderr.
+pub fn action_data(verbose: bool, files: &[PathBuf], action: ArmadaAction) -> Result<ActionReport> {
+    let file_names = files
+        .iter()
+        .map(|file| file.display().to_string())
+        .collect::<Vec<_>>();
+
+    match action {
+        ArmadaAction::Init { file, force } => {
+            let shown = file.display().to_string();
+            let ((), messages) = capture_stdout(|| init(&file, force))?;
+            Ok(ActionReport::Init {
+                file: shown,
+                created: true,
+                messages,
+            })
+        }
+        ArmadaAction::Up {
+            detach,
+            jails,
+            build,
+            no_build,
+            dry_run,
+        } => {
+            let config = manifest::load_merged(files)?;
+            let selected = selected_jail_names(&config, &jails)?;
+            let (mode, build_name) = if no_build {
+                (None, "none")
+            } else if build {
+                (Some(BuildMode::Force), "force")
+            } else {
+                (Some(BuildMode::IfMissing), "if_missing")
+            };
+            let ((), messages) =
+                capture_stdout(|| up(files, verbose, &jails, mode, dry_run, detach))?;
+            Ok(ActionReport::Up {
+                files: file_names,
+                jails: selected,
+                dry_run,
+                build: build_name,
+                detach,
+                messages,
+            })
+        }
+        ArmadaAction::Down { jails, dry_run } => {
+            let config = manifest::load_merged(files)?;
+            let selected = selected_jail_names(&config, &jails)?;
+            let ((), messages) = capture_stdout(|| down(files, verbose, &jails, dry_run))?;
+            Ok(ActionReport::Down {
+                files: file_names,
+                jails: selected,
+                dry_run,
+                messages,
+            })
+        }
+        ArmadaAction::Build { jails, dry_run } => {
+            let config = manifest::load_merged(files)?;
+            let selected = select_jails(&config, &jails)?;
+            let selected_names = selected
+                .iter()
+                .map(|jail| config.jail_name(&jail.name))
+                .collect();
+            let ((), messages) = capture_stdout(|| {
+                if dry_run {
+                    println!("=== DRY RUN - No changes will be made ===\n");
+                }
+                build_jails(&config, &selected, BuildMode::Force, dry_run, verbose)
+            })?;
+            Ok(ActionReport::Build {
+                files: file_names,
+                jails: selected_names,
+                dry_run,
+                messages,
+            })
+        }
+        ArmadaAction::Config { show } => {
+            let config = manifest::load_merged(files)?;
+            let bridge = bridge::Bridge::open(config.clone(), verbose)?;
+            Ok(ActionReport::Config {
+                files: file_names,
+                valid: true,
+                check: Box::new(bridge.check_data()?),
+                resolved: show.then(|| Box::new(config)),
+            })
+        }
+        ArmadaAction::Ps { .. } => Err(error::Error::UnsupportedOutputFormat),
+    }
+}
+
 /// Return Armada jail status without writing terminal output.
 pub fn ps_data(files: &[PathBuf], verbose: bool) -> Result<serde_json::Value> {
     let config = manifest::load_merged(files)?;
@@ -101,11 +235,10 @@ const ARMADA_TEMPLATE: &str = r#"# Blackship Armada Configuration
 /// `armada init`: write a starter blackship.toml
 fn init(file: &Path, force: bool) -> Result<()> {
     if file.exists() && !force {
-        eprintln!(
-            "Error: {} already exists. Use -y/--force to overwrite.",
+        return Err(error::Error::User(format!(
+            "{} already exists. Use -y/--force to overwrite.",
             file.display()
-        );
-        std::process::exit(1);
+        )));
     }
 
     std::fs::write(file, ARMADA_TEMPLATE)?;
@@ -253,6 +386,16 @@ fn select_jails<'a>(
         .jails
         .iter()
         .filter(|j| service_names.contains(&j.name))
+        .collect())
+}
+
+fn selected_jail_names(
+    config: &manifest::BlackshipConfig,
+    jails: &[String],
+) -> Result<Vec<String>> {
+    Ok(select_jails(config, jails)?
+        .iter()
+        .map(|jail| config.jail_name(&jail.name))
         .collect())
 }
 

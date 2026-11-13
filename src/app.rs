@@ -203,7 +203,9 @@ impl AppContext {
                 lines,
             } => commands::logs::handle(&self.config_path, &jail, follow, lines),
 
-            Commands::Supervise => commands::supervise::handle(&self.config_path, self.verbose),
+            Commands::Supervise { autostart } => {
+                commands::supervise::handle(&self.config_path, self.verbose, autostart)
+            }
 
             #[cfg(feature = "mcp")]
             Commands::Mcp { listen } => commands::mcp::handle(&self.config_path, listen.as_deref()),
@@ -387,6 +389,8 @@ impl AppContext {
             }
 
             Commands::Setup { enable_pf } => self.setup(enable_pf),
+            Commands::Autostart { dry_run: true } => self.verbose_bridge()?.autostart_dry_run(),
+            Commands::Autostart { dry_run: false } => self.verbose_bridge()?.reconcile_autostart(),
         }
     }
 
@@ -426,6 +430,11 @@ impl AppContext {
                 files,
                 action: ArmadaAction::Ps { .. },
             } => emit(&commands::armada::ps_data(&files, self.verbose)?),
+            Commands::Armada { files, action } => emit(&commands::armada::action_data(
+                self.verbose,
+                &files,
+                action,
+            )?),
             Commands::Up {
                 jail,
                 all,
@@ -446,6 +455,9 @@ impl AppContext {
                 all,
                 dry_run: true,
             } => self.emit_plan(Operation::Eva, jail.as_deref(), all),
+            Commands::Autostart { dry_run: true } => emit(&commands::lifecycle::autostart_plan(
+                &self.verbose_bridge()?,
+            )?),
             _ => Err(Error::UnsupportedOutputFormat),
         }
     }

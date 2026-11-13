@@ -12,6 +12,9 @@ use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
+/// Reserved jail tag used to declare that a jail should be running after boot.
+pub const AUTOSTART_TAG: &str = "autostart";
+
 /// Validate a jail/project/network name: these reach paths, ZFS datasets and netgraph nodes.
 pub fn validate_name(kind: &str, name: &str) -> Result<()> {
     if name.is_empty() {
@@ -290,6 +293,18 @@ impl BlackshipConfig {
                 }
                 for net_ref in &net.networks {
                     validate_name("network reference", net_ref)?;
+                }
+            }
+        }
+
+        if let Some(pacer) = &self.config.rate_limit.health_concurrency {
+            pacer.build()?;
+        }
+
+        for jail in &self.jails {
+            for check in &jail.healthcheck.checks {
+                if let Some(suspicion) = &check.suspicion {
+                    suspicion.build(check.interval)?;
                 }
             }
         }
@@ -614,6 +629,9 @@ pub struct RateLimitConfig {
     /// Health check rate limit refill rate (tokens per second)
     #[serde(default = "default_health_refill_rate")]
     pub health_refill_rate: f64,
+
+    /// Adaptive bound on concurrent health-check runs; unset leaves them unbounded
+    pub health_concurrency: Option<crate::sickbay::pacer::PacerConfig>,
 }
 
 impl Default for RateLimitConfig {
@@ -622,6 +640,7 @@ impl Default for RateLimitConfig {
             jail_start_capacity: default_jail_start_capacity(),
             health_capacity: default_health_capacity(),
             health_refill_rate: default_health_refill_rate(),
+            health_concurrency: None,
         }
     }
 }
@@ -857,6 +876,14 @@ pub struct JailDef {
 }
 
 impl JailDef {
+    /// Whether this jail is an explicit project autostart target.
+    ///
+    /// Dependencies do not need the tag themselves: project reconciliation
+    /// includes the full dependency closure of every tagged jail.
+    pub fn autostarts(&self) -> bool {
+        self.tags.iter().any(|tag| tag == AUTOSTART_TAG)
+    }
+
     /// Get the effective path for this jail
     ///
     /// If ZFS is enabled and no path is specified, returns the ZFS mountpoint.

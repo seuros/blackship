@@ -7,8 +7,10 @@
 //! - CLI status display
 
 pub mod checker;
+pub mod pacer;
 pub mod recovery;
 pub mod state;
+pub mod suspicion;
 
 pub use checker::{HealthChecker, HealthStatus};
 pub use state::{HealthStateRecord, HealthStateStore};

@@ -158,35 +158,54 @@ impl PlanStep {
 }
 
 impl Bridge {
+    fn start_step(&self, name: &str) -> Result<PlanStep> {
+        let (service_name, full_name) = self.resolve_jail_names(name)?;
+        let jail_def = self
+            .config
+            .get_jail(&service_name)
+            .ok_or_else(|| Error::JailNotFound(service_name.clone()))?;
+        Ok(PlanStep::Start {
+            path: jail_def
+                .effective_path(&self.config.config, &full_name)
+                .display()
+                .to_string(),
+            ip: jail_def
+                .network
+                .as_ref()
+                .and_then(crate::manifest::JailNetworkConfig::static_ip)
+                .map(|ip| ip.to_string()),
+            currently_running: jail_getid(&full_name).is_ok(),
+            create_zfs_dataset: self.zfs.is_some() && jail_def.path.is_none(),
+            hooks: StartHooks {
+                pre_start: hook_count(jail_def, HookPhase::PreStart),
+                post_start: hook_count(jail_def, HookPhase::PostStart),
+            },
+            jail: full_name,
+        })
+    }
+
+    fn stop_step(&self, name: &str) -> Result<PlanStep> {
+        let (service_name, full_name) = self.resolve_jail_names(name)?;
+        let hooks = self
+            .config
+            .get_jail(&service_name)
+            .map(|def| StopHooks {
+                pre_stop: hook_count(def, HookPhase::PreStop),
+                post_stop: hook_count(def, HookPhase::PostStop),
+            })
+            .unwrap_or_default();
+        Ok(PlanStep::Stop {
+            currently_running: jail_getid(&full_name).is_ok(),
+            jail: full_name,
+            hooks,
+        })
+    }
+
     /// What `up` would do, in start order.
     pub(crate) fn start_steps(&self, jail: Option<&str>) -> Result<Vec<PlanStep>> {
         self.jails_for_up(jail)?
             .iter()
-            .map(|name| {
-                let (service_name, full_name) = self.resolve_jail_names(name)?;
-                let jail_def = self
-                    .config
-                    .get_jail(&service_name)
-                    .ok_or_else(|| Error::JailNotFound(service_name.clone()))?;
-                Ok(PlanStep::Start {
-                    path: jail_def
-                        .effective_path(&self.config.config, &full_name)
-                        .display()
-                        .to_string(),
-                    ip: jail_def
-                        .network
-                        .as_ref()
-                        .and_then(crate::manifest::JailNetworkConfig::static_ip)
-                        .map(|ip| ip.to_string()),
-                    currently_running: jail_getid(&full_name).is_ok(),
-                    create_zfs_dataset: self.zfs.is_some() && jail_def.path.is_none(),
-                    hooks: StartHooks {
-                        pre_start: hook_count(jail_def, HookPhase::PreStart),
-                        post_start: hook_count(jail_def, HookPhase::PostStart),
-                    },
-                    jail: full_name,
-                })
-            })
+            .map(|name| self.start_step(name))
             .collect()
     }
 
@@ -194,23 +213,24 @@ impl Bridge {
     pub(crate) fn stop_steps(&self, jail: Option<&str>) -> Result<Vec<PlanStep>> {
         self.jails_for_down(jail)?
             .iter()
-            .map(|name| {
-                let (service_name, full_name) = self.resolve_jail_names(name)?;
-                let hooks = self
-                    .config
-                    .get_jail(&service_name)
-                    .map(|def| StopHooks {
-                        pre_stop: hook_count(def, HookPhase::PreStop),
-                        post_stop: hook_count(def, HookPhase::PostStop),
-                    })
-                    .unwrap_or_default();
-                Ok(PlanStep::Stop {
-                    currently_running: jail_getid(&full_name).is_ok(),
-                    jail: full_name,
-                    hooks,
-                })
-            })
+            .map(|name| self.stop_step(name))
             .collect()
+    }
+
+    /// What project autostart reconciliation would do.
+    pub(crate) fn autostart_steps(&self) -> Result<Vec<PlanStep>> {
+        let mut steps = self
+            .autostart_stop_order()?
+            .iter()
+            .map(|name| self.stop_step(name))
+            .collect::<Result<Vec<_>>>()?;
+        steps.extend(
+            self.autostart_order()?
+                .iter()
+                .map(|name| self.start_step(name))
+                .collect::<Result<Vec<_>>>()?,
+        );
+        Ok(steps)
     }
 
     /// Dry run: show what `up` would do without making changes.
@@ -229,6 +249,18 @@ impl Bridge {
         println!("Would stop {} jail(s):\n", steps.len());
         steps.iter().for_each(PlanStep::print);
         println!();
+        Ok(())
+    }
+
+    /// Dry run for project autostart reconciliation.
+    pub fn autostart_dry_run(&self) -> Result<()> {
+        let steps = self.autostart_steps()?;
+        println!("=== AUTOSTART DRY RUN - No changes will be made ===\n");
+        if steps.is_empty() {
+            println!("This project has no configured jails.");
+        } else {
+            steps.iter().for_each(PlanStep::print);
+        }
         Ok(())
     }
 }

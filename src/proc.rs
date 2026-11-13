@@ -114,6 +114,36 @@ pub fn run_supervised(cmd: &mut Command, timeout: Duration) -> io::Result<Outcom
     }
 }
 
+/// Consecutive closed descriptors after which [`close_dir_fds`] stops looking.
+const FD_GAP: libc::c_int = 1024;
+
+/// Close every directory fd above stderr; pre-exec safe.
+///
+/// `jail_attach(2)` refuses with EPERM while the process holds a directory fd, and a
+/// fork taken while another thread has one open inherits it, close-on-exec or not.
+/// FreeBSD has no cheap "highest open fd", so the scan ends after [`FD_GAP`]
+/// consecutive closed descriptors; descriptors are allocated lowest-first, so a
+/// wider gap does not occur in practice.
+pub fn close_dir_fds() {
+    let mut fd = 3;
+    let mut closed_run = 0;
+    while closed_run < FD_GAP {
+        // SAFETY: zeroed `stat` is a valid out-parameter; fstat and close take integers.
+        unsafe {
+            let mut st: libc::stat = std::mem::zeroed();
+            if libc::fstat(fd, &raw mut st) == 0 {
+                closed_run = 0;
+                if st.st_mode & libc::S_IFMT == libc::S_IFDIR {
+                    libc::close(fd);
+                }
+            } else {
+                closed_run += 1;
+            }
+        }
+        fd += 1;
+    }
+}
+
 /// Mark every fd above stderr close-on-exec; pre-exec safe.
 ///
 /// Not `closefrom(3)`: that closes std's exec-failure pipe, turning `NotFound` into SIGABRT.

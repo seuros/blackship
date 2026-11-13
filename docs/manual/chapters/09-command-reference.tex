@@ -38,6 +38,8 @@ dependencies. \\
 order. \\
 \command{restart [target] [--all] [--dry-run]} & Compose stop and start plans. \\
 \command{eva [target] [--all] [--dry-run]} & Apply live-safe manifest drift. \\
+\command{autostart [--dry-run]} & Reconcile running project jails to the
+reserved \setting{autostart} tag and its dependency closure. \\
 \command{ps [--host] [--json]} & List configured jail state and JID. With
 \command{--host}, also include running jails outside the selected manifest. \\
 \command{check} & Validate and resolve configuration; warn on releases not bootstrapped. \\
@@ -48,7 +50,9 @@ capabilities. \\
 optionally configure and start PF. \\
 \command{cleanup <jail> [--force]} & Remove resources after a failed lifecycle. \\
 \command{gc [jail] [--dry-run] [--force] [--prune-unreferenced]} & Find and
-reclaim orphaned resources; pruning broadens ownership beyond tracked state. \\
+reclaim orphaned resources, including datasets left by a restarted jail and
+empty bridges Blackship created; pruning broadens ownership beyond tracked
+state. \\
 \bottomrule
 \end{shiptable}
 
@@ -126,7 +130,8 @@ Command & Purpose \\
 \command{health [jail] [--watch] [--interval N] [--json]} & Run configured
 checks. \\
 \command{stats [jail] [--json]} & Aggregate CPU, RSS, and process counts. \\
-\command{supervise} & Run the warden health/restart/usage loop. \\
+\command{supervise [--autostart]} & Run the warden for all configured jails;
+the option reconciles and supervises only the effective boot set. \\
 \command{qos <jail> --show|--startup|--steady} & Inspect or change a QoS phase. \\
 \command{audit <jail> [--json]} & Render durable lifecycle history. \\
 \command{armada init|up|down|build|ps|config} & Compose multi-jail workflows and

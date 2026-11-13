@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 use crate::jail::jail_getid;
-use crate::sickbay::{HealthStateRecord, HealthStateStore};
+use crate::sickbay::{HealthStateRecord, HealthStateStore, HealthStatus};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -20,6 +20,8 @@ pub struct JailStatus {
     pub ip: Option<String>,
     pub ips: Vec<String>,
     pub path: String,
+    pub tags: Vec<String>,
+    pub autostart: bool,
 }
 
 /// Host inventory for one manifest plus running jails it does not manage.
@@ -32,6 +34,10 @@ pub struct InventoryReport {
 
 /// One jail in the host inventory.
 #[derive(Debug, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "stable JSON uses explicit ownership and lifecycle flags"
+)]
 pub struct InventoryJail {
     pub service_name: Option<String>,
     pub full_name: String,
@@ -48,6 +54,8 @@ pub struct InventoryJail {
     pub path: Option<String>,
     pub networks: Vec<String>,
     pub depends_on: Vec<String>,
+    pub tags: Vec<String>,
+    pub autostart: bool,
     pub health: HealthSummary,
 }
 
@@ -160,6 +168,28 @@ impl Bridge {
             .and_then(crate::jail::JailHandle::descriptor_fd)
     }
 
+    /// A handle on this bridge's audit log, for readers that outlive a borrow of it.
+    pub fn audit_log(&self) -> crate::audit::AuditLog {
+        self.audit.clone()
+    }
+
+    /// Report a health verdict into the jail's chart; ignored unless it is running.
+    pub fn record_health(&mut self, full_name: &str, status: HealthStatus) {
+        if let Some(instance) = self.instances.get_mut(full_name)
+            && instance.is_running()
+        {
+            match instance.set_health(status) {
+                Ok(()) if self.verbose => {
+                    println!("  Health chart '{full_name}': {:?}", instance.health());
+                }
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("Warning: health chart rejected '{status}' for '{full_name}': {e}");
+                }
+            }
+        }
+    }
+
     /// Print jail status
     pub fn ps(&self, json: bool) {
         let jails = self.ps_data();
@@ -205,6 +235,11 @@ impl Bridge {
 
     /// Return jail status without writing terminal output.
     pub fn ps_data(&self) -> Vec<JailStatus> {
+        let autostart = self
+            .autostart_order()
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
         self.config
             .jails
             .iter()
@@ -262,6 +297,8 @@ impl Bridge {
                     ip,
                     ips,
                     path: path.to_string_lossy().into_owned(),
+                    tags: jail_def.tags.clone(),
+                    autostart: autostart.contains(&jail_def.name),
                 }
             })
             .collect()
@@ -312,6 +349,8 @@ impl Bridge {
                         .as_ref()
                         .map_or_else(Vec::new, |network| network.networks.clone()),
                     depends_on: definition.depends_on.clone(),
+                    tags: status.tags,
+                    autostart: status.autostart,
                     health,
                 }
             })
@@ -338,6 +377,8 @@ impl Bridge {
                 path: None,
                 networks: Vec::new(),
                 depends_on: Vec::new(),
+                tags: Vec::new(),
+                autostart: false,
                 health: unmanaged_health_summary(),
             })
         }));

@@ -5,6 +5,7 @@
 //! - Type-safe parameter handling
 //! - State machine for jail lifecycle management
 
+pub mod chart;
 pub mod ffi;
 pub mod jexec;
 pub mod kqueue;

@@ -10,3 +10,42 @@ fn test_dataset_paths() {
         PathBuf::from("/var/blackship/jails/test")
     );
 }
+
+#[test]
+#[ignore = "needs root and ZFS"]
+fn init_leaves_a_shared_parent_mountpoint_alone() {
+    let (Some(data_dir), Some(zfs_base)) = (
+        std::env::var("BLACKSHIP_E2E_DATA_DIR").ok(),
+        std::env::var("BLACKSHIP_E2E_ZFS").ok(),
+    ) else {
+        return;
+    };
+    let Some((pool, dataset)) = zfs_base.split_once('/') else {
+        return;
+    };
+    if !nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let dataset = format!("{dataset}/mp{}", std::process::id());
+    let first = PathBuf::from(&data_dir).join(format!("mp{}-a", std::process::id()));
+    let second = PathBuf::from(&data_dir).join(format!("mp{}-b", std::process::id()));
+    let a = ZfsManager::new(pool, &dataset, &first);
+    let b = ZfsManager::new(pool, &dataset, &second);
+
+    let outcome = (|| -> Result<()> {
+        a.init()?;
+        b.init()?;
+        let parent = ZfsManager::get_property(&b.jails_dataset(), "mountpoint")?;
+        assert_eq!(parent, first.display().to_string());
+        let path = b.create_jail_dataset("web")?;
+        let child = ZfsManager::get_property(&b.jail_dataset("web"), "mountpoint")?;
+        assert_eq!(child, path.display().to_string());
+        assert_eq!(path, second.join("web"));
+        Ok(())
+    })();
+    let base = format!("{pool}/{dataset}");
+    let _ = a.destroy_dataset(&base);
+    let _ = std::fs::remove_dir_all(&first);
+    let _ = std::fs::remove_dir_all(&second);
+    outcome.unwrap();
+}

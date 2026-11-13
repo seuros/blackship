@@ -7,6 +7,10 @@ use std::path::PathBuf;
 
 use state_machines::state_machine;
 
+use crate::sickbay::HealthStatus;
+
+use super::chart::{self, Health, Step};
+
 state_machine! {
     name: JailMachine,
     dynamic: true,  // Enable runtime dispatch for event-driven jail management
@@ -121,6 +125,8 @@ pub struct JailInstance {
     pub jid: Option<i32>,
     /// Jail handle (descriptor or JID)
     pub handle: Option<JailHandle>,
+    health: Health,
+    last_step: Option<Step>,
 }
 
 impl JailInstance {
@@ -132,7 +138,38 @@ impl JailInstance {
             config,
             jid: None,
             handle: None,
+            health: Health::default(),
+            last_step: None,
         }
+    }
+}
+
+impl JailInstance {
+    /// Exit/entry resolved for the last successful event or health change
+    pub const fn last_step(&self) -> Option<&Step> {
+        self.last_step.as_ref()
+    }
+
+    /// Current health leaf of the chart
+    pub const fn health(&self) -> Health {
+        self.health
+    }
+
+    /// Record a health change; only meaningful while `Running`
+    pub fn set_health(&mut self, status: HealthStatus) -> Result<(), chart::Error> {
+        let to = Health::from(status);
+        if !self.is_running() {
+            return Err(chart::Error::Illegal {
+                from: self.machine.current_state(),
+                to: JailMachineState::Running,
+            });
+        }
+        if to == self.health {
+            return Ok(());
+        }
+        self.last_step = Some(Step::health(self.health, to)?);
+        self.health = to;
+        Ok(())
     }
 
     /// Get current state as enum
@@ -154,7 +191,11 @@ impl JailInstance {
 
     /// Dispatch a jail machine event
     fn send(&mut self, event: JailMachineEvent) -> Result<(), state_machines::DynamicError> {
-        self.machine.handle(event)
+        let from = self.machine.current_state();
+        self.machine.handle(event)?;
+        self.last_step = Step::phase(from, self.health, self.machine.current_state()).ok();
+        self.health = Health::default();
+        Ok(())
     }
 
     /// Trigger start event

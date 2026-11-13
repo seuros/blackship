@@ -15,6 +15,38 @@ fn test_json_output_format_parses_globally() {
 }
 
 #[test]
+fn test_json_output_format_parses_after_command() {
+    let argv = [
+        OsStr::new("capabilities"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert_eq!(cli.format, OutputFormat::Json);
+    assert!(matches!(cli.command, Commands::Capabilities));
+}
+
+#[test]
+fn test_output_format_is_inherited_by_nested_commands() {
+    let argv = [
+        OsStr::new("armada"),
+        OsStr::new("ps"),
+        OsStr::new("--format=json"),
+    ];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert_eq!(cli.format, OutputFormat::Json);
+    assert!(matches!(
+        cli.command,
+        Commands::Armada {
+            action: ArmadaAction::Ps { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
 fn test_ps_host_parses() {
     let argv = [OsStr::new("ps"), OsStr::new("--host")];
     let cli = Cli::parse_from(&argv).unwrap();
@@ -32,6 +64,29 @@ fn test_text_output_format_is_default() {
     let cli = Cli::parse_from(&argv).unwrap();
 
     assert_eq!(cli.format, OutputFormat::Text);
+}
+
+#[test]
+fn test_autostart_dry_run_parses() {
+    let argv = [OsStr::new("autostart"), OsStr::new("--dry-run")];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert!(matches!(cli.command, Commands::Autostart { dry_run: true }));
+}
+
+#[test]
+fn test_supervise_autostart_is_opt_in() {
+    let default = Cli::parse_from(&[OsStr::new("supervise")]).unwrap();
+    let filtered = Cli::parse_from(&[OsStr::new("supervise"), OsStr::new("--autostart")]).unwrap();
+
+    assert!(matches!(
+        default.command,
+        Commands::Supervise { autostart: false }
+    ));
+    assert!(matches!(
+        filtered.command,
+        Commands::Supervise { autostart: true }
+    ));
 }
 
 #[test]
@@ -151,6 +206,23 @@ fn test_machine_output_support_is_explicit() {
 }
 
 #[test]
+fn test_armada_mutations_support_machine_output() {
+    assert!(
+        Commands::Armada {
+            files: vec!["blackship.toml".into()],
+            action: ArmadaAction::Up {
+                detach: false,
+                jails: Vec::new(),
+                build: false,
+                no_build: false,
+                dry_run: false,
+            },
+        }
+        .supports_machine_output()
+    );
+}
+
+#[test]
 fn test_network_create_requires_root() {
     let command = Commands::Network {
         action: NetworkAction::Create {
@@ -200,6 +272,14 @@ fn test_up_dry_run_does_not_require_root() {
     };
 
     assert!(!command.requires_root());
+}
+
+#[test]
+fn test_autostart_privilege_tracks_dry_run() {
+    assert!(Commands::Autostart { dry_run: false }.requires_root());
+    assert!(!Commands::Autostart { dry_run: true }.requires_root());
+    assert!(Commands::Autostart { dry_run: true }.supports_machine_output());
+    assert!(!Commands::Autostart { dry_run: false }.supports_machine_output());
 }
 
 #[test]

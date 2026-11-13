@@ -62,6 +62,15 @@ impl Bridge {
         }
     }
 
+    /// Create or open a bridge; the flag is true when this call created it.
+    pub fn ensure(name: &str) -> Result<(Self, bool)> {
+        if Self::exists(name)? {
+            Ok((Self::open(name)?, false))
+        } else {
+            Ok((Self::create(name)?, true))
+        }
+    }
+
     /// Check if a bridge exists
     pub fn exists(name: &str) -> Result<bool> {
         // Use native ioctl to check if interface exists

@@ -230,6 +230,14 @@ impl Supervision {
     }
 }
 
+/// Terminating and Destroyed are the events a stop records before and after removal.
+const fn stop_in_progress(event: crate::audit::AuditEvent) -> bool {
+    matches!(
+        event,
+        crate::audit::AuditEvent::Terminating | crate::audit::AuditEvent::Destroyed
+    )
+}
+
 /// The Warden supervises all jails with one-for-one restart strategy
 pub struct Warden {
     /// Channel to receive events
@@ -246,6 +254,8 @@ pub struct Warden {
     kqueue: Option<JailEventSource>,
     /// Map of registered kqueue identity -> jail, for event resolution
     monitored: HashMap<JailIdent, MonitoredJail>,
+    /// Where an operator's `down` from another process leaves its mark.
+    audit: Option<crate::audit::AuditLog>,
     /// Shared tracking for intentional stop requests
     intentional_stops: IntentionalStops,
 }
@@ -274,6 +284,7 @@ impl Warden {
         };
 
         let intentional_stops = IntentionalStops::default();
+        let audit = bridge.try_lock().ok().map(|bridge| bridge.audit_log());
 
         Self {
             rx,
@@ -284,6 +295,7 @@ impl Warden {
             kqueue,
             monitored: HashMap::new(),
             intentional_stops,
+            audit,
         }
     }
 
@@ -409,6 +421,15 @@ impl Warden {
         println!("Warden: Supervisor stopped");
     }
 
+    /// Whether the jail's last audit event says a stop was under way, which a
+    /// `down` run from another process records before it removes the jail.
+    fn stopped_by_operator(&self, name: &str) -> bool {
+        self.audit
+            .as_ref()
+            .and_then(|audit| audit.last_event(name))
+            .is_some_and(stop_in_progress)
+    }
+
     /// Resolve pending kernel jail events (no-op without kqueue)
     fn drain_kqueue(&mut self) {
         for (jail, event) in self.process_kqueue_events() {
@@ -419,6 +440,10 @@ impl Warden {
                     if self.intentional_stops.contains(jid) {
                         println!(
                             "Warden: Kernel reports jail '{name}' ({ident}) removed after requested stop"
+                        );
+                    } else if self.stopped_by_operator(&name) {
+                        println!(
+                            "Warden: Kernel reports jail '{name}' ({ident}) removed by a stop from another process"
                         );
                     } else {
                         println!("Warden: Kernel reports jail '{name}' ({ident}) removed");
