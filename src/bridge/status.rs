@@ -77,6 +77,11 @@ impl Bridge {
             .and_then(crate::jail::JailHandle::descriptor_fd)
     }
 
+    /// A handle on this bridge's audit log, for readers that outlive a borrow of it.
+    pub fn audit_log(&self) -> crate::audit::AuditLog {
+        self.audit.clone()
+    }
+
     /// Report a health verdict into the jail's chart; ignored unless it is running.
     pub fn record_health(&mut self, full_name: &str, status: HealthStatus) {
         if let Some(instance) = self.instances.get_mut(full_name)
