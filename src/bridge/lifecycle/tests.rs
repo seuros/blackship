@@ -1,5 +1,6 @@
 use super::*;
 use crate::fault::{self, Point};
+use crate::gc::{Reaper, classify};
 use crate::network::store::NetworkLeaseStore;
 use crate::scope::ScopeStore;
 use crate::zfs::ZfsManager;
@@ -103,6 +104,7 @@ fn scrub(env: &Env) {
     let _ = zfs(env).destroy_jail_dataset(&env.full_name);
     let _ = NetworkLeaseStore::from_config(Some(&env.config)).release_owner(&env.full_name);
     let _ = ScopeStore::from_config(Some(&env.config)).delete(&env.full_name);
+    let _ = crate::audit::AuditLog::from_config(Some(&env.config)).delete(&env.full_name);
 }
 
 fn failed_start_leaks_nothing(extra: &str, point: Point) {
@@ -141,4 +143,36 @@ fn fault_after_jail_create_removes_the_jail() {
 #[ignore = "needs root, ZFS and a bootstrapped release"]
 fn fault_before_rctl_removes_the_jail() {
     failed_start_leaks_nothing("[jails.resources]\nmemory = \"64m\"", Point::BeforeRctl);
+}
+
+#[test]
+#[ignore = "needs root, ZFS and a bootstrapped release"]
+fn gc_reclaims_a_restarted_jail_after_the_supervisor_dies() {
+    let Some(env) = env(leased()) else {
+        return;
+    };
+    let mut first = bridge(&env);
+    first.up(Some("web")).unwrap();
+    first.down(Some("web")).unwrap();
+    first.up(Some("web")).unwrap();
+    drop(first);
+    scrub_live_jail(&env);
+
+    let reaper = Reaper::new(&env.config, false).unwrap();
+    let survey = reaper.survey().unwrap();
+    for orphan in classify(&survey)
+        .iter()
+        .filter(|orphan| orphan.jail == env.full_name)
+    {
+        reaper.reap(orphan, false, false).unwrap();
+    }
+    let found = leaks(&env);
+    scrub(&env);
+    assert!(found.is_empty(), "gc left {found:?}");
+}
+
+fn scrub_live_jail(env: &Env) {
+    if let Ok(jid) = jail_getid(&env.full_name) {
+        jail_remove(jid).unwrap();
+    }
 }

@@ -318,6 +318,29 @@ impl ZfsManager {
         Ok(self.jail_path(name))
     }
 
+    const EPHEMERAL_PROPERTY: &'static str = "blackship:ephemeral";
+
+    /// Record on the dataset that blackship created it, and whether a reaper may destroy it.
+    pub fn mark_jail_dataset(&self, name: &str, ephemeral: bool) -> Result<()> {
+        Self::set_property(
+            &self.jail_dataset(name),
+            Self::EPHEMERAL_PROPERTY,
+            if ephemeral { "on" } else { "off" },
+        )
+    }
+
+    /// `Some(ephemeral)` for a dataset blackship created; `None` for one it did not.
+    pub fn jail_dataset_mark(&self, name: &str) -> Option<bool> {
+        match Self::get_property(&self.jail_dataset(name), Self::EPHEMERAL_PROPERTY)
+            .ok()?
+            .as_str()
+        {
+            "on" => Some(true),
+            "off" => Some(false),
+            _ => None,
+        }
+    }
+
     /// Destroy a jail's dataset
     ///
     /// Warning: This recursively destroys all child datasets

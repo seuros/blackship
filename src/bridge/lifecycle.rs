@@ -729,19 +729,26 @@ impl Bridge {
             jail_def.effective_path(&self.config.config, full_name)
         };
 
-        if claims.zfs_dataset
-            && let Some(zfs) = &self.zfs
-        {
-            let dataset = zfs.jail_dataset_name(full_name);
-            scope.zfs_origin = zfs.dataset_origin(&dataset);
-            scope.zfs_dataset = Some(dataset.clone());
-            scope.ephemeral = jail_def.ephemeral.unwrap_or(true);
-            self.persist_scope(scope);
-            self.audit.record(
-                &AuditRecord::new(full_name, AuditEvent::Provisioned)
-                    .with("step", "zfs")
-                    .with("dataset", dataset),
-            );
+        if let Some(zfs) = &self.zfs {
+            let ephemeral = jail_def.ephemeral.unwrap_or(true);
+            if claims.zfs_dataset {
+                zfs.mark_jail_dataset(full_name, ephemeral)?;
+            }
+            // A dataset an earlier run created and left behind is still ours.
+            let reused =
+                !claims.zfs_dataset && zfs.jail_dataset_mark(full_name) == Some(true) && ephemeral;
+            if claims.zfs_dataset || reused {
+                let dataset = zfs.jail_dataset_name(full_name);
+                scope.zfs_origin = zfs.dataset_origin(&dataset);
+                scope.zfs_dataset = Some(dataset.clone());
+                scope.ephemeral = ephemeral;
+                self.persist_scope(scope);
+                self.audit.record(
+                    &AuditRecord::new(full_name, AuditEvent::Provisioned)
+                        .with("step", "zfs")
+                        .with("dataset", dataset),
+                );
+            }
         }
         crate::fault::trip(crate::fault::Point::AfterZfs)?;
 
