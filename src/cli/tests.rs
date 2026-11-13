@@ -15,6 +15,38 @@ fn test_json_output_format_parses_globally() {
 }
 
 #[test]
+fn test_json_output_format_parses_after_command() {
+    let argv = [
+        OsStr::new("capabilities"),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert_eq!(cli.format, OutputFormat::Json);
+    assert!(matches!(cli.command, Commands::Capabilities));
+}
+
+#[test]
+fn test_output_format_is_inherited_by_nested_commands() {
+    let argv = [
+        OsStr::new("armada"),
+        OsStr::new("ps"),
+        OsStr::new("--format=json"),
+    ];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert_eq!(cli.format, OutputFormat::Json);
+    assert!(matches!(
+        cli.command,
+        Commands::Armada {
+            action: ArmadaAction::Ps { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
 fn test_ps_host_parses() {
     let argv = [OsStr::new("ps"), OsStr::new("--host")];
     let cli = Cli::parse_from(&argv).unwrap();

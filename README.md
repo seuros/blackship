@@ -326,8 +326,10 @@ sudo env BLACKSHIP_E2E_DATA_DIR=/var/tmp/bw BLACKSHIP_E2E_ZFS=zroot/blackship-e2
 ## Machine-readable CLI
 
 Automation can opt into a versioned JSON contract with the global
-`--format json` option. The first contract version covers the read-only
-commands most useful to management UIs:
+`--format json` option. As an inherited global, it works before or after the
+selected command (`blackship --format json capabilities` and
+`blackship capabilities --format json` are equivalent). The first contract
+version covers the read-only commands most useful to management UIs:
 
 ```sh
 blackship --format json ps
@@ -387,7 +389,15 @@ compatibility.
 `blackship capabilities` requires neither a manifest nor root access. Its JSON
 report lets clients discover the Blackship version, output schema, compiled
 features, FreeBSD kernel capabilities, host facilities, and installed privilege
-escalators before enabling UI actions.
+escalators before enabling UI actions. The `cli.machine_output` array lists
+each exact command mode that supports the global JSON contract, using a stable
+`operation` identifier plus its privilege and mutation behavior. Clients should
+check for the operation instead of inferring support from the Blackship version:
+
+```sh
+blackship --format json capabilities \
+  | jq '.data.cli.machine_output[] | select(.operation == "armada.ps")'
+```
 
 `blackship host` returns the same best-effort planning profile as the
 `blackship:///host` MCP resource: kernel and facility capabilities, CPU and
