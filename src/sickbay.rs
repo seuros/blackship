@@ -7,6 +7,7 @@
 //! - CLI status display
 
 pub mod checker;
+pub mod pacer;
 pub mod recovery;
 pub mod suspicion;
 

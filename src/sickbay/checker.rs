@@ -428,6 +428,12 @@ impl HealthChecker {
         self.stop_signal.load(Ordering::SeqCst)
     }
 
+    /// The shortest check timeout, the budget a run is judged against
+    pub fn timeout(&self) -> Duration {
+        let secs = self.config.checks.iter().map(|c| c.timeout).min();
+        Duration::from_secs(secs.unwrap_or_else(default_timeout))
+    }
+
     /// Get the check interval
     pub const fn interval(&self) -> Duration {
         self.check_interval
