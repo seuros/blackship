@@ -222,6 +222,7 @@ dependencies = [
  "byteorder",
  "chrono-machines",
  "deadline-machines",
+ "harel-machines",
  "hex",
  "ipnet",
  "jiff",

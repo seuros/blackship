@@ -3,7 +3,8 @@
 use crate::audit::{AuditEvent, AuditRecord};
 use crate::error::{Error, Result};
 use crate::hooks::{HookContext, HookPhase, HookRunner};
-use crate::jail::state::State as JailState;
+use crate::jail::chart::{Health, Node, Step};
+use crate::jail::state::{JailMachineState as MachineState, State as JailState};
 use crate::jail::{
     JailConfig, JailHandle, JailInstance, ParamValue, jail_create, jail_create_with_descriptor,
     jail_getid, jail_remove,
@@ -1304,17 +1305,7 @@ impl Bridge {
             crate::sys::unmount_jail_devfs(&path);
         }
 
-        if let Some(instance) = self.instances.get_mut(&full_name) {
-            // The jail is gone either way; a rejected transition is harmless.
-            instance.stop().ok();
-            instance.stopped().ok(); // see above
-            instance.jid = None;
-            instance.handle = None;
-        }
-
-        let leaked_resources = self.release_vnet_on_stop(&full_name);
-
-        self.release_ip_on_stop(&full_name);
+        let leaked_resources = self.settle_stopped(&full_name);
 
         // The scope record is the GC work-list: a leak keeps it alive in `Failed`.
         let peaks = self.peak_details(&full_name);
@@ -1382,6 +1373,40 @@ impl Bridge {
         }
 
         Ok((Some((hook_runner, path)), drain_anchor))
+    }
+
+    /// Move the instance to `Stopped`, then release what leaving `Up` held.
+    /// Returns whether a claim leaked.
+    fn settle_stopped(&mut self, full_name: &str) -> bool {
+        let mut step = None;
+        if let Some(instance) = self.instances.get_mut(full_name) {
+            // The jail is gone either way; a rejected transition is harmless.
+            instance.stop().ok();
+            instance.stopped().ok(); // see above
+            instance.jid = None;
+            instance.handle = None;
+            if instance.state() == JailState::Stopped {
+                step = instance.last_step().copied();
+            }
+        }
+
+        // Not tracked by this process: the jail was mid-stop by construction.
+        let step = step.or_else(|| {
+            Step::phase(
+                MachineState::Stopping,
+                Health::default(),
+                MachineState::Stopped,
+            )
+            .ok()
+        });
+        let mut leaked_resources = false;
+        for node in step.iter().flat_map(Step::exit) {
+            if node == Node::Up {
+                leaked_resources = self.release_vnet_on_stop(full_name);
+                self.release_ip_on_stop(full_name);
+            }
+        }
+        leaked_resources
     }
 
     /// Tear down the jail's VNET pair; returns whether anything leaked.

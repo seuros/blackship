@@ -62,6 +62,7 @@ pub fn handle(config_path: &Path, verbose: bool) -> Result<()> {
             &warden_handle_for_health,
         );
         let health_stop_signals = spawn_health_monitors(
+            &bridge,
             &jails_for_health,
             &project_prefix,
             &rate_limit,
@@ -144,6 +145,7 @@ fn spawn_qos_timers(
 
 /// One health-check loop per jail; returns their stop flags. Must run inside tokio.
 fn spawn_health_monitors(
+    bridge: &Arc<Mutex<bridge::Bridge>>,
     jails: &[manifest::JailDef],
     project_prefix: &str,
     rate_limit: &manifest::RateLimitConfig,
@@ -171,6 +173,7 @@ fn spawn_health_monitors(
 
         health_stop_signals.push(checker.stop_signal());
 
+        let bridge = Arc::clone(bridge);
         tokio::spawn(async move {
             while !checker.is_stopped() {
                 if let Err(e) = checker.run_checks() {
@@ -178,6 +181,10 @@ fn spawn_health_monitors(
                 }
 
                 let status = checker.status();
+                bridge
+                    .lock()
+                    .await
+                    .record_health(checker.jail_name(), status);
                 if status == sickbay::HealthStatus::Failing {
                     eprintln!("Health check failing for jail '{}'", checker.jail_name());
                 }
