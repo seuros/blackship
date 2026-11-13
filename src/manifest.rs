@@ -325,16 +325,18 @@ impl BlackshipConfig {
         Ok(())
     }
 
+    /// The jail whose service name is `name`, else the one whose full name is.
+    fn exact_jail(&self, name: &str) -> Option<&JailDef> {
+        self.jails.iter().find(|j| j.name == name).or_else(|| {
+            self.jails
+                .iter()
+                .find(|j| self.full_name_matches(&j.name, name))
+        })
+    }
+
     /// Get a jail definition by name (can match either service name or full name)
     pub fn get_jail(&self, name: &str) -> Option<&JailDef> {
-        // First try exact match on service name
-        if let Some(jail) = self.jails.iter().find(|j| j.name == name) {
-            return Some(jail);
-        }
-        // Then try matching the full prefixed name
-        self.jails
-            .iter()
-            .find(|j| self.full_name_matches(&j.name, name))
+        self.exact_jail(name)
     }
 
     /// [`Self::resolve_jail_names`], failing with [`Error::JailNotFound`].
@@ -347,14 +349,7 @@ impl BlackshipConfig {
     pub fn resolve_jail_names(&self, name: &str) -> Option<(String, String)> {
         let names_of = |jail: &JailDef| (jail.name.clone(), self.jail_name(&jail.name));
 
-        if let Some(jail) = self.jails.iter().find(|j| j.name == name) {
-            return Some(names_of(jail));
-        }
-        if let Some(jail) = self
-            .jails
-            .iter()
-            .find(|j| self.full_name_matches(&j.name, name))
-        {
+        if let Some(jail) = self.exact_jail(name) {
             return Some(names_of(jail));
         }
 
