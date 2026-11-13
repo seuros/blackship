@@ -5,7 +5,7 @@ use crate::error::{Error, Result};
 use serde::Serialize;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 
 /// Current JSON contract version.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -92,23 +92,55 @@ pub fn print_success<T: Serialize>(data: &T) -> Result<()> {
 /// callers still need exactly one document on stdout, so the progress is
 /// returned as message lines inside the structured result instead.
 pub fn capture_stdout<T>(operation: impl FnOnce() -> Result<T>) -> Result<(T, Vec<String>)> {
-    struct RestoreStdout(OwnedFd);
+    capture_fd(&Stdout, operation)
+}
 
-    impl Drop for RestoreStdout {
+/// The descriptor a capture redirects.
+trait Captured {
+    /// Flush whatever is buffered in front of the descriptor.
+    fn flush(&self) -> std::io::Result<()>;
+    /// A duplicate of where the descriptor points now.
+    fn save(&self) -> std::io::Result<OwnedFd>;
+    /// Make the descriptor point at `to`.
+    fn point_at(&self, to: &impl AsFd) -> std::io::Result<()>;
+}
+
+/// fd 1.
+struct Stdout;
+
+impl Captured for Stdout {
+    fn flush(&self) -> std::io::Result<()> {
+        std::io::stdout().flush()
+    }
+
+    fn save(&self) -> std::io::Result<OwnedFd> {
+        nix::unistd::dup(std::io::stdout()).map_err(std::io::Error::from)
+    }
+
+    fn point_at(&self, to: &impl AsFd) -> std::io::Result<()> {
+        nix::unistd::dup2_stdout(to).map_err(std::io::Error::from)
+    }
+}
+
+fn capture_fd<T>(
+    target: &impl Captured,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<(T, Vec<String>)> {
+    struct Restore<'a, C: Captured>(&'a C, OwnedFd);
+
+    impl<C: Captured> Drop for Restore<'_, C> {
         fn drop(&mut self) {
-            let _ = nix::unistd::dup2_stdout(&self.0);
+            let _ = self.0.point_at(&self.1);
         }
     }
 
-    let mut stdout = std::io::stdout();
-    stdout.flush()?;
-    let saved = nix::unistd::dup(&stdout).map_err(std::io::Error::from)?;
-    let restore = RestoreStdout(saved);
+    target.flush()?;
+    let restore = Restore(target, target.save()?);
     let mut captured = tempfile::tempfile()?;
-    nix::unistd::dup2_stdout(&captured).map_err(std::io::Error::from)?;
+    target.point_at(&captured)?;
 
     let result = operation();
-    stdout.flush()?;
+    target.flush()?;
     drop(restore);
 
     captured.seek(SeekFrom::Start(0))?;
