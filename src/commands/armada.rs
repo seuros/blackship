@@ -7,9 +7,10 @@ use serde::Serialize;
 use crate::bridge::CheckReport;
 use crate::cli::ArmadaAction;
 use crate::error::Result;
-use crate::image::copy_release_to;
+use crate::host::Host;
+use crate::image;
 use crate::output::capture_stdout;
-use crate::{blueprint, bridge, error, manifest, provision};
+use crate::{bridge, error, manifest};
 
 pub fn handle(
     _config_path: &Path,
@@ -464,6 +465,7 @@ fn build_jails(
     dry_run: bool,
     verbose: bool,
 ) -> Result<()> {
+    let host = Host::from_config(Some(config.clone()));
     for jail_def in jails {
         let Some(build_path) = &jail_def.build else {
             continue;
@@ -474,6 +476,7 @@ fn build_jails(
         let jailfile_path = build_path.join("Jailfile");
         if jailfile_path.exists() {
             build_jail_from_file(
+                &host,
                 config,
                 &jailfile_path,
                 &jail_def.name,
@@ -487,6 +490,7 @@ fn build_jails(
                     .parent()
                     .unwrap_or_else(|| std::path::Path::new("."));
                 build_jail_from_file(
+                    &host,
                     config,
                     jailfile_explicit,
                     &jail_def.name,
@@ -507,17 +511,16 @@ fn build_jails(
     Ok(())
 }
 
-/// Build a jail from a Jailfile, bootstrapping the base release if needed
+/// Build a jail from a Jailfile through the shared image path, which creates the ZFS dataset first
 fn build_jail_from_file(
+    host: &Host,
     config: &manifest::BlackshipConfig,
-    jailfile_path: &std::path::Path,
+    jailfile_path: &Path,
     service_name: &str,
-    context_dir: Option<&std::path::PathBuf>,
+    context_dir: Option<&PathBuf>,
     dry_run: bool,
     verbose: bool,
 ) -> Result<()> {
-    use blueprint::{BuildContext, TemplateExecutor, parse_jailfile};
-
     let full_name = config.jail_name(service_name);
     println!(
         "Building jail '{}' from {}",
@@ -525,54 +528,19 @@ fn build_jail_from_file(
         jailfile_path.display()
     );
 
-    let content = std::fs::read_to_string(jailfile_path).map_err(|e| {
-        error::Error::TemplateParseFailed(format!(
-            "Failed to read {}: {}",
-            jailfile_path.display(),
-            e
-        ))
-    })?;
-    let jailfile = parse_jailfile(&content)?;
-
-    let target_path = config.config.jail_root(&full_name);
-
-    crate::blueprint::context::reject_symlink_ancestors(&config.config.data_dir, &target_path)?;
-    crate::blueprint::context::reject_symlink_target(&target_path)?;
-
-    if let Some(release) = &jailfile.from {
-        crate::manifest::validate_name("release", release)?;
-        let bs = provision::Provisioner::from_config(&config.config)?;
-        let release_path = config.config.releases_dir.join(release);
-
-        if !release_path.exists() {
-            println!("  Base release '{release}' not found. Bootstrapping...");
-            if !dry_run {
-                bs.bootstrap(release, false)?;
-            }
-        }
-
-        if !dry_run && !target_path.exists() {
-            println!("  Creating jail root from {release}...");
-            std::fs::create_dir_all(&target_path)?;
-            copy_release_to(&release_path, &target_path)?;
-        }
-    }
-
-    let ctx_dir = context_dir.map_or_else(
-        || {
-            jailfile_path
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-        },
-        std::path::PathBuf::as_path,
-    );
-
-    let ctx = BuildContext::new(ctx_dir, &target_path, &full_name).verbose(verbose);
-    let mut executor = TemplateExecutor::new(ctx).dry_run(dry_run);
-    executor.execute(&jailfile)?;
+    let jailfile = image::read_jailfile(jailfile_path)?;
+    let ctx_dir = context_dir
+        .cloned()
+        .unwrap_or_else(|| image::context_of(jailfile_path));
+    let mode = if dry_run {
+        image::BuildMode::DryRun
+    } else {
+        image::BuildMode::Real { verbose }
+    };
+    let built = image::build_root(host, &jailfile, &ctx_dir, &full_name, Vec::new(), mode)?;
 
     if !dry_run {
-        println!("  Build complete: {}\n", target_path.display());
+        println!("  Build complete: {}\n", built.root.display());
     }
 
     Ok(())
