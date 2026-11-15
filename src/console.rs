@@ -155,8 +155,11 @@ pub fn console(jail: &str, user: &str) -> Result<ExitStatus> {
         ..Default::default()
     };
 
-    // Use login shell
-    exec_in_jail(jail, &["-".to_string()], &opts)
+    exec_in_jail(jail, &console_command(), &opts)
+}
+
+fn console_command() -> Vec<String> {
+    vec!["/bin/sh".to_string(), "-l".to_string()]
 }
 
 #[cfg(test)]

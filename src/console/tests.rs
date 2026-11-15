@@ -49,3 +49,8 @@ fn test_shell_quote_special_chars() {
     assert_eq!(shell_quote("foo&bar"), "'foo&bar'");
     assert_eq!(shell_quote("foo\nbar"), "'foo\nbar'");
 }
+
+#[test]
+fn test_console_uses_login_shell() {
+    assert_eq!(console_command(), ["/bin/sh", "-l"]);
+}
