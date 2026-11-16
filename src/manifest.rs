@@ -295,6 +295,18 @@ impl BlackshipConfig {
                     validate_name("network reference", net_ref)?;
                 }
             }
+            if let Some(mount) = &jail.mount {
+                let mut targets = std::collections::HashSet::new();
+                for volume in mount.parsed_volumes()? {
+                    if !targets.insert(volume.jail_path().to_path_buf()) {
+                        return Err(Error::ConfigValidation(format!(
+                            "Jail '{}' mounts more than one volume at '{}'",
+                            jail.name,
+                            volume.jail_path().display()
+                        )));
+                    }
+                }
+            }
         }
 
         if let Some(pacer) = &self.config.rate_limit.health_concurrency {
@@ -826,7 +838,7 @@ pub struct JailDef {
     /// Network configuration
     pub network: Option<JailNetworkConfig>,
 
-    /// Mount configuration (_unused: future feature)
+    /// Host directories exposed in the jail through read-only nullfs mounts.
     pub mount: Option<JailMountConfig>,
 
     /// Lifecycle hooks
@@ -1076,12 +1088,57 @@ impl DnsConfig {
     }
 }
 
-/// Jail mount configuration (_unused: future feature)
+/// Jail nullfs mount configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JailMountConfig {
-    /// Volume mounts in "host:jail" format (_unused: future feature)
+    /// Read-only volume mounts in `host:jail[:ro]` format.
     #[serde(default)]
     pub volumes: Vec<String>,
+}
+
+impl JailMountConfig {
+    pub(crate) fn parsed_volumes(&self) -> Result<Vec<crate::container::Mount>> {
+        self.volumes
+            .iter()
+            .map(|volume| Self::parse_volume(volume))
+            .collect()
+    }
+
+    fn parse_volume(volume: &str) -> Result<crate::container::Mount> {
+        let fields: Vec<&str> = volume.split(':').collect();
+        if !(2..=3).contains(&fields.len()) || fields[0].is_empty() || fields[1].is_empty() {
+            return Err(Error::ConfigValidation(format!(
+                "Invalid volume '{volume}'; expected host:jail[:ro]"
+            )));
+        }
+        if let Some(options) = fields.get(2) {
+            for option in options.split(',') {
+                if !matches!(option, "ro" | "nosuid" | "noexec") {
+                    return Err(Error::ConfigValidation(format!(
+                        "Invalid volume '{volume}'; manifest volumes are read-only, nosuid, and noexec"
+                    )));
+                }
+            }
+        }
+
+        let mount = crate::container::Mount::read_only(fields[0], fields[1])
+            .nosuid()
+            .noexec();
+        mount.validate().map_err(|error| {
+            Error::ConfigValidation(format!("Invalid volume '{volume}': {error}"))
+        })?;
+        if mount.jail_path().starts_with("/dev") {
+            return Err(Error::ConfigValidation(format!(
+                "Invalid volume '{volume}': targets below /dev are reserved for the jail devfs"
+            )));
+        }
+        if fields[1].chars().any(char::is_whitespace) {
+            return Err(Error::ConfigValidation(format!(
+                "Invalid volume '{volume}': jail targets cannot contain whitespace"
+            )));
+        }
+        Ok(mount)
+    }
 }
 
 #[cfg(test)]

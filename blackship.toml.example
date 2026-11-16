@@ -140,4 +140,5 @@ networks = ["frontend"]
 ip = "10.0.2.10"
 
 [jails.mount]
+# Manifest volumes are always read-only, nosuid, and noexec.
 volumes = ["/data/static:/usr/local/www/static:ro"]

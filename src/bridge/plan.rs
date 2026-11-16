@@ -19,11 +19,13 @@ pub enum PlanStep {
         ip: Option<String>,
         currently_running: bool,
         create_zfs_dataset: bool,
+        volumes: Vec<String>,
         hooks: StartHooks,
     },
     Stop {
         jail: String,
         currently_running: bool,
+        volumes: Vec<String>,
         hooks: StopHooks,
     },
     Update {
@@ -77,6 +79,7 @@ impl PlanStep {
                 path,
                 ip,
                 create_zfs_dataset,
+                volumes,
                 hooks,
                 ..
             } => {
@@ -86,6 +89,9 @@ impl PlanStep {
                 println!("{IND}IP: {}", ip.as_deref().unwrap_or("none"));
                 if *create_zfs_dataset {
                     println!("{IND}ZFS: would create dataset");
+                }
+                for volume in volumes {
+                    println!("{IND}Volume: {volume} (read-only, nosuid, noexec)");
                 }
                 print_hooks(
                     IND,
@@ -99,6 +105,7 @@ impl PlanStep {
             Self::Stop {
                 jail,
                 currently_running,
+                volumes,
                 hooks,
             } => {
                 let status = if *currently_running {
@@ -107,6 +114,9 @@ impl PlanStep {
                     "stopped"
                 };
                 println!("  [STOP] {jail} (currently {status})");
+                for volume in volumes {
+                    println!("         Detach volume: {volume}");
+                }
                 print_hooks(
                     "         ",
                     [(hooks.pre_stop, "pre_stop"), (hooks.post_stop, "post_stop")],
@@ -176,6 +186,11 @@ impl Bridge {
                 .map(|ip| ip.to_string()),
             currently_running: jail_getid(&full_name).is_ok(),
             create_zfs_dataset: self.zfs.is_some() && jail_def.path.is_none(),
+            volumes: jail_def
+                .mount
+                .as_ref()
+                .map(|mount| mount.volumes.clone())
+                .unwrap_or_default(),
             hooks: StartHooks {
                 pre_start: hook_count(jail_def, HookPhase::PreStart),
                 post_start: hook_count(jail_def, HookPhase::PostStart),
@@ -186,9 +201,8 @@ impl Bridge {
 
     fn stop_step(&self, name: &str) -> Result<PlanStep> {
         let (service_name, full_name) = self.resolve_jail_names(name)?;
-        let hooks = self
-            .config
-            .get_jail(&service_name)
+        let jail_def = self.config.get_jail(&service_name);
+        let hooks = jail_def
             .map(|def| StopHooks {
                 pre_stop: hook_count(def, HookPhase::PreStop),
                 post_stop: hook_count(def, HookPhase::PostStop),
@@ -197,6 +211,10 @@ impl Bridge {
         Ok(PlanStep::Stop {
             currently_running: jail_getid(&full_name).is_ok(),
             jail: full_name,
+            volumes: jail_def
+                .and_then(|def| def.mount.as_ref())
+                .map(|mount| mount.volumes.clone())
+                .unwrap_or_default(),
             hooks,
         })
     }

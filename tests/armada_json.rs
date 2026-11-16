@@ -29,6 +29,8 @@ fn write_manifest(root: &Path) -> std::path::PathBuf {
     let manifest = root.join("blackship.toml");
     let data_dir = root.join("data");
     let jail_path = data_dir.join("jails/json-test-web");
+    let source_path = root.join("source");
+    std::fs::create_dir(&source_path).expect("create volume source");
     std::fs::write(
         &manifest,
         format!(
@@ -41,9 +43,13 @@ zfs_enabled = false
 name = "web"
 release = "15.1-RELEASE"
 path = "{}"
+
+[jails.mount]
+volumes = ["{}:/workspace/source:ro"]
 "#,
             data_dir.display(),
-            jail_path.display()
+            jail_path.display(),
+            source_path.display()
         ),
     )
     .expect("write manifest");
@@ -120,5 +126,22 @@ fn armada_dry_runs_keep_progress_inside_json() {
                 .any(|line| line.contains("DRY RUN")),
             "missing dry-run progress in {value}"
         );
+        if action == "up" {
+            assert!(
+                messages
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|line| line.contains("Volume:") && line.contains("read-only")),
+                "missing volume attach plan in {value}"
+            );
+        } else if action == "down" {
+            assert!(
+                messages
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|line| line.contains("Detach volume:")),
+                "missing volume detach plan in {value}"
+            );
+        }
     }
 }

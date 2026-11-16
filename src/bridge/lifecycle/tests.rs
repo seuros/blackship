@@ -135,6 +135,17 @@ fn fault_after_lease_releases_lease_and_dataset() {
 
 #[test]
 #[ignore = "needs root, ZFS and a bootstrapped release"]
+fn fault_after_mount_releases_the_mount_and_dataset() {
+    let source = tempfile::tempdir().unwrap();
+    let volume = format!(
+        "[jails.mount]\nvolumes = [\"{}:/workspace/source:ro\"]",
+        source.path().display()
+    );
+    failed_start_leaks_nothing(&volume, Point::AfterMount);
+}
+
+#[test]
+#[ignore = "needs root, ZFS and a bootstrapped release"]
 fn fault_after_jail_create_removes_the_jail() {
     failed_start_leaks_nothing(leased(), Point::AfterJailCreate);
 }
@@ -143,6 +154,51 @@ fn fault_after_jail_create_removes_the_jail() {
 #[ignore = "needs root, ZFS and a bootstrapped release"]
 fn fault_before_rctl_removes_the_jail() {
     failed_start_leaks_nothing("[jails.resources]\nmemory = \"64m\"", Point::BeforeRctl);
+}
+
+#[test]
+#[ignore = "needs root, ZFS and a bootstrapped release"]
+fn manifest_volume_mounts_on_start_and_detaches_on_stop() {
+    let source = tempfile::tempdir().unwrap();
+    std::fs::write(source.path().join("marker"), "visible from jail\n").unwrap();
+    let volume = format!(
+        "[jails.mount]\nvolumes = [\"{}:/workspace/source:ro\"]",
+        source.path().display()
+    );
+    let Some(env) = env(&volume) else {
+        return;
+    };
+    let root = env.config.jails[0].effective_path(&env.config.config, &env.full_name);
+    let target = root.join("workspace/source");
+    let mut bridge = bridge(&env);
+    bridge.up(Some("web")).unwrap();
+
+    let table = crate::sys::mount_table().unwrap();
+    let mounted = crate::sys::mounted_paths_under(&target, &table);
+    let line = table
+        .lines()
+        .find(|line| line.split_whitespace().nth(1) == target.to_str())
+        .unwrap();
+    let options = line.split_whitespace().nth(3).unwrap();
+    assert_eq!(mounted, vec![target.clone()]);
+    assert!(target.join("marker").exists());
+    assert!(options.split(',').any(|option| option == "ro"));
+    assert!(options.split(',').any(|option| option == "nosuid"));
+    assert!(options.split(',').any(|option| option == "noexec"));
+    assert_eq!(
+        ScopeStore::from_config(Some(&env.config))
+            .get(&env.full_name)
+            .unwrap()
+            .unwrap()
+            .mounts,
+        vec![target.clone()]
+    );
+
+    bridge.down(Some("web")).unwrap();
+    let table = crate::sys::mount_table().unwrap();
+    let detached = crate::sys::mounted_paths_under(&target, &table).is_empty();
+    scrub(&env);
+    assert!(detached, "volume remained mounted after stop");
 }
 
 #[test]

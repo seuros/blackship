@@ -1,13 +1,13 @@
 //! Building a container: claim, provision, mount, network, jail, limits.
 
 use super::registry::{self, Record};
-use super::{Container, ContainerSpec, Mount, Network, teardown, validate_container_name};
+use super::{Container, ContainerSpec, Network, mount_nullfs, teardown, validate_container_name};
 use crate::error::{Error, Result};
 use crate::host::Layout;
 use crate::manifest::validate_name;
 use crate::network;
 use std::net::IpAddr;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -88,22 +88,7 @@ fn validate(spec: &ContainerSpec) -> Result<()> {
         )));
     }
     for mount in &spec.mounts {
-        if !mount.host.is_absolute() || !mount.host.is_dir() {
-            return Err(Error::InvalidArgument(format!(
-                "mount source '{}' must be an existing absolute directory",
-                mount.host.display()
-            )));
-        }
-        let clean = mount
-            .jail
-            .components()
-            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
-        if !mount.jail.is_absolute() || !clean || mount.jail == Path::new("/") {
-            return Err(Error::InvalidArgument(format!(
-                "mount target '{}' must be an absolute path below / with no '..'",
-                mount.jail.display()
-            )));
-        }
+        mount.validate()?;
     }
     for param in &spec.params {
         if param.is_empty() || param.starts_with('-') {
@@ -206,36 +191,6 @@ fn free_space(path: &Path) -> Option<u64> {
     u64::try_from(stat.blocks_available())
         .ok()
         .map(|blocks| blocks * stat.block_size())
-}
-
-/// nullfs-mount `mount` inside `root`, creating the target.
-fn mount_nullfs(root: &Path, mount: &Mount) -> Result<()> {
-    let (host, jail) = (&mount.host, &mount.jail);
-    let target = root.join(jail.strip_prefix("/").unwrap_or(jail));
-    crate::blueprint::context::reject_symlink_ancestors(root, &target)?;
-    std::fs::create_dir_all(&target)?;
-    let canonical_root = root.canonicalize()?;
-    let canonical_target: PathBuf = target.canonicalize()?;
-    if !canonical_target.starts_with(&canonical_root) {
-        return Err(Error::InvalidArgument(format!(
-            "mount target '{}' escapes the container root",
-            jail.display()
-        )));
-    }
-    let mut command = Command::new("/sbin/mount_nullfs");
-    for option in mount.options() {
-        command.args(["-o", option]);
-    }
-    let output = command.arg(host).arg(&canonical_target).output()?;
-    if !output.status.success() {
-        return Err(Error::JailCreationFailed(format!(
-            "mount_nullfs {} {}: {}",
-            host.display(),
-            canonical_target.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
 }
 
 /// Write the container's `/etc/resolv.conf` (see [`resolv_conf`]). The

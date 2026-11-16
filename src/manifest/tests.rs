@@ -158,6 +158,95 @@ fn test_xdg_paths() {
 }
 
 #[test]
+fn manifest_volumes_are_read_only_nosuid_and_noexec() {
+    let source = tempfile::tempdir().unwrap();
+    let toml = format!(
+        r#"
+[config]
+project = "demo"
+
+[[jails]]
+name = "web"
+
+[jails.mount]
+volumes = ["{}:/workspace/source:ro"]
+"#,
+        source.path().display()
+    );
+    let config: BlackshipConfig = toml::from_str(&toml).unwrap();
+    config.validate().unwrap();
+
+    let volumes = config.jails[0]
+        .mount
+        .as_ref()
+        .unwrap()
+        .parsed_volumes()
+        .unwrap();
+    assert_eq!(volumes.len(), 1);
+    assert_eq!(volumes[0].host_path(), source.path());
+    assert_eq!(volumes[0].jail_path(), Path::new("/workspace/source"));
+    assert!(!volumes[0].is_writable());
+    assert!(volumes[0].is_nosuid());
+    assert!(volumes[0].is_noexec());
+}
+
+#[test]
+fn manifest_volumes_reject_host_write_access_and_unsafe_targets() {
+    let source = tempfile::tempdir().unwrap();
+    for volume in [
+        format!("{}:/workspace/source:rw", source.path().display()),
+        format!("{}:/workspace/../etc:ro", source.path().display()),
+        format!("{}:/dev/source:ro", source.path().display()),
+        format!("{}:/workspace/my source:ro", source.path().display()),
+        "relative:/workspace/source:ro".to_string(),
+    ] {
+        let toml = format!(
+            r#"
+[config]
+project = "demo"
+
+[[jails]]
+name = "web"
+
+[jails.mount]
+volumes = ["{volume}"]
+"#
+        );
+        let config: BlackshipConfig = toml::from_str(&toml).unwrap();
+        assert!(
+            config.validate().is_err(),
+            "accepted unsafe volume {volume}"
+        );
+    }
+}
+
+#[test]
+fn manifest_volumes_reject_duplicate_jail_targets() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let toml = format!(
+        r#"
+[config]
+project = "demo"
+
+[[jails]]
+name = "web"
+
+[jails.mount]
+volumes = [
+  "{}:/workspace/source:ro",
+  "{}:/workspace/source:ro",
+]
+"#,
+        first.path().display(),
+        second.path().display()
+    );
+    let config: BlackshipConfig = toml::from_str(&toml).unwrap();
+    let error = config.validate().unwrap_err().to_string();
+    assert!(error.contains("more than one volume"), "{error}");
+}
+
+#[test]
 fn test_jail_lookup_matches_prefixed_and_unprefixed_names() {
     let toml = r#"
 [config]

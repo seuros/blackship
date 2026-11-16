@@ -479,6 +479,11 @@ devfs_ruleset = 4                     # devfs ruleset (default 4; 0 disables dev
 init = true                           # Run /etc/rc at start, /etc/rc.shutdown at stop (default)
 stop = "service nginx stop"           # Run inside the jail before teardown (overrides Jailfile STOP)
 
+[jails.mount]
+# Host directory mounted below the jail root through nullfs. Manifest volumes
+# are always read-only, nosuid and noexec; they attach on start and detach on stop.
+volumes = ["/home/me/src/myapp:/workspace/myapp:ro"]
+
 [jails.resources]
 memory = "1g"                         # rctl memoryuse:deny
 cpu = "150"                           # rctl pcpu:deny (percent)

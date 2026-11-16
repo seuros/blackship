@@ -6,6 +6,7 @@ pub enum Point {
     AfterBridge,
     AfterZfs,
     AfterLease,
+    AfterMount,
     AfterJailCreate,
     BeforeRctl,
 }
