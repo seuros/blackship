@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use throttle_machines::TokenBucketPolicy;
 use tokio::sync::Mutex;
 
 use crate::error::Result;
@@ -18,7 +19,7 @@ pub fn handle(
     let config = manifest::load(config_path)?;
     let project_prefix = format!("{}-", config.config.project_name());
     let configured_jails = config.jails.clone();
-    let rate_limit = config.config.rate_limit.clone();
+    let health_policy = config.config.rate_limit.health_policy()?;
     let monitor_ping_url = config.config.monitor_ping_url.clone();
     let pacer: Option<SharedPacer> = match &config.config.rate_limit.health_concurrency {
         Some(cfg) => Some(Arc::new(std::sync::Mutex::new(cfg.build()?))),
@@ -93,7 +94,7 @@ pub fn handle(
             &bridge,
             &jails_for_health,
             &project_prefix,
-            &rate_limit,
+            health_policy,
             &warden_handle_for_health,
             pacer.as_ref(),
             &health_state_store,
@@ -255,7 +256,7 @@ fn spawn_health_monitors(
     bridge: &Arc<Mutex<bridge::Bridge>>,
     jails: &[manifest::JailDef],
     project_prefix: &str,
-    rate_limit: &manifest::RateLimitConfig,
+    health_policy: TokenBucketPolicy,
     warden_handle: &warden::WardenHandle,
     pacer: Option<&SharedPacer>,
     state_store: &sickbay::HealthStateStore,
@@ -271,8 +272,7 @@ fn spawn_health_monitors(
         let mut checker = sickbay::HealthChecker::with_rate_limit(
             &full_name,
             jail_def.healthcheck.clone(),
-            rate_limit.health_capacity,
-            rate_limit.health_refill_rate,
+            health_policy,
         )
         .with_warden_handle(warden_handle.clone());
 

@@ -47,7 +47,7 @@ fn supervise_streams_both_pipes_in_order() {
     let waited = supervise(
         &mut child,
         NO_JAIL,
-        &SystemClock::new(),
+        &crate::sys::MonotonicClock::new(),
         Deadline::never(),
         &mut |s, b| {
             seen.push((s, b.to_vec()));
@@ -77,12 +77,12 @@ fn supervise_times_out_and_kills_the_group() {
     let mut child = spawn("echo started; sleep 30 & sleep 30");
     let started = Instant::now();
     let mut out = Vec::new();
-    let clock = SystemClock::new();
+    let clock = crate::sys::MonotonicClock::new();
     let waited = supervise(
         &mut child,
         NO_JAIL,
         &clock,
-        Deadline::after(clock.now(), 300_000_000),
+        Deadline::after(clock.now(), Duration::from_millis(300)),
         &mut |_, b| out.extend_from_slice(b),
     )
     .unwrap();
@@ -101,7 +101,7 @@ fn a_background_process_holding_the_pipe_does_not_hang_supervise() {
     let waited = supervise(
         &mut child,
         NO_JAIL,
-        &SystemClock::new(),
+        &crate::sys::MonotonicClock::new(),
         Deadline::never(),
         &mut |_, _| {},
     )

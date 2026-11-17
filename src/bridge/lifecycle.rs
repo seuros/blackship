@@ -15,8 +15,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use throttle_machines::gate::Gate;
-use throttle_machines::token_bucket::{TokenBucket, TokenBucketParams, TokenBucketState};
+use throttle_machines::Gate;
 
 use super::Bridge;
 
@@ -592,43 +591,22 @@ impl Bridge {
 
     /// Start a single jail with cleanup on failure
     pub(super) fn start_jail(&mut self, name: &str) -> Result<()> {
-        const REFILL_RATE: f64 = 1.0;
-
         self.prepare_runtime()?;
 
         // Rate limiting to prevent thundering herd on `up --all`
-        let capacity = self.jail_start_capacity;
-
         loop {
             let mut state = self
                 .rate_limiter
                 .lock()
                 .expect("rate limiter mutex poisoned");
-            let (tokens, last_refill) = *state;
-            let now = Instant::now();
-            let now_secs = now.duration_since(self.rate_limiter_epoch).as_secs_f64();
-            let last_refill_secs = last_refill
-                .duration_since(self.rate_limiter_epoch)
-                .as_secs_f64();
-
-            let tb_state = TokenBucketState {
-                tokens,
-                last_refill: last_refill_secs,
-            };
-            let tb_params = TokenBucketParams {
-                capacity,
-                refill_rate: REFILL_RATE,
-            };
-            let result = TokenBucket::check(tb_state, now_secs, tb_params);
-
-            if result.allowed {
-                *state = (result.state.tokens, now);
+            let now = self.rate_limiter_epoch.elapsed();
+            if state.check(now).is_ok() {
                 break;
             }
 
-            let retry_after = result.retry_after;
+            let retry_after = state.retry_after(now);
             drop(state);
-            std::thread::sleep(std::time::Duration::from_secs_f64(retry_after));
+            std::thread::sleep(retry_after);
         }
 
         let (service_name, full_name) = self.resolve_jail_names(name)?;

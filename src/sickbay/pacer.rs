@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use shed_machines::{Aimd, Bounds, Controller, DEFAULT_CEILING, Sample};
+use shed_machines::{Aimd, Backoff, Bounds, Controller, DEFAULT_CEILING, Outcome, Sample};
 
 use crate::error::{Error, Result};
 
@@ -48,13 +48,13 @@ pub struct Pacer {
 
 impl PacerConfig {
     pub fn build(&self) -> Result<Pacer> {
-        if self.min == 0 || self.min > self.max {
-            return Err(Error::ConfigValidation(
-                "health_concurrency: need 1 <= min <= max".to_string(),
-            ));
-        }
+        let invalid =
+            || Error::ConfigValidation("health_concurrency: need 1 <= min <= max".to_string());
+        let bounds = Bounds::new(self.min, self.max).ok_or_else(invalid)?;
+        let control = Aimd::new(bounds, bounds.clamp(self.initial), Backoff::default())
+            .ok_or_else(invalid)?;
         Ok(Pacer {
-            control: Aimd::new(Bounds::new(self.min, self.max), self.initial),
+            control,
             in_flight: 0,
         })
     }
@@ -91,13 +91,15 @@ impl Pacer {
     ) -> Option<(u32, u32)> {
         self.in_flight = self.in_flight.saturating_sub(1);
         let before = self.control.limit();
-        let rtt_ns = crate::sys::nanos(rtt);
-        let sample = if failed || rtt.saturating_mul(2) >= timeout {
-            Sample::overload(rtt_ns, admission.in_flight)
+        let outcome = if failed || rtt.saturating_mul(2) >= timeout {
+            Outcome::Overload
         } else {
-            Sample::ok(rtt_ns, admission.in_flight)
+            Outcome::Ok
         };
-        self.control.observe(sample);
+        // An admission always counts itself, so `in_flight` is never zero.
+        if let Some(sample) = Sample::new(rtt, admission.in_flight, outcome) {
+            self.control.observe(sample);
+        }
         let after = self.control.limit();
         (before != after).then_some((before, after))
     }

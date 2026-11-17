@@ -77,12 +77,12 @@ ipnet = "2.12"
 nom = "8.0"
 
 # State machine and resilience (seuros crates)
-state-machines = { version = "0.34.1", features = ["dynamic", "runtime-send", "serde"] }
+state-machines = { version = "0.35.0", features = ["dynamic", "runtime-send", "serde"] }
 breaker-machines = "0.24.0"
-chrono-machines = "0.11.1"
-throttle-machines = "0.5.0"
-supervisor-machines = "0.4.0"
-deadline-machines = "0.4.0"
+chrono-machines = "0.13.0"
+throttle-machines = "0.6.0"
+supervisor-machines = "0.7.0"
+deadline-machines = "0.5.0"
 rand = "0.10"
 
 # Async runtime for Warden
@@ -95,13 +95,13 @@ mcp-host = { version = "0.23.0", features = ["http", "macros"], optional = true 
 schemars = { version = "1.2.2", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
-harel-machines = { version = "0.2.1", default-features = false }
-suspect-machines = "0.2.0"
-shed-machines = "0.2.1"
+harel-machines = { version = "0.3.0", default-features = false }
+suspect-machines = "0.7.0"
+shed-machines = "0.5.0"
 
 [dev-dependencies]
-rogue-machines = "0.2.1"
-state-machines = { version = "0.34.1", features = ["dynamic", "runtime-send", "serde", "inspect"] }
+rogue-machines = "0.5.0"
+state-machines = { version = "0.35.0", features = ["dynamic", "runtime-send", "serde", "inspect"] }
 
 [lints.rust]
 # FFI lives in the modules that opt in with #![allow(unsafe_code)]; anything

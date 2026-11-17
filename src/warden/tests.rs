@@ -2,14 +2,19 @@ use super::*;
 
 #[test]
 fn a_jail_gets_five_restarts_in_five_minutes() {
-    let mut policy = RestartPolicy::new(Strategy::OneForOne, RESTART_INTENSITY);
+    let mut policy = restart_policy().expect("restart policy shape is valid");
     let failure = |policy: &mut RestartPolicy, at_secs: u64| {
-        policy.stopped(0, Policy::Permanent, Exit::Abnormal, at_secs * NS_PER_SEC)
+        policy.stopped(
+            0,
+            Policy::Permanent,
+            Exit::Abnormal,
+            Duration::from_secs(at_secs),
+        )
     };
     for minute in 0..5 {
-        assert_ne!(failure(&mut policy, minute * 50), Decision::Escalate);
+        assert_ne!(failure(&mut policy, minute * 50), Ok(Decision::Escalate));
     }
-    assert_eq!(failure(&mut policy, 290), Decision::Escalate);
+    assert_eq!(failure(&mut policy, 290), Ok(Decision::Escalate));
 }
 
 #[test]

@@ -16,8 +16,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use throttle_machines::gate::Gate;
-use throttle_machines::token_bucket::{TokenBucket, TokenBucketParams, TokenBucketState};
+use throttle_machines::{Gate, TokenBucket, TokenBucketPolicy};
 
 /// Health status of a jail
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -111,18 +110,6 @@ const fn default_start_period() -> u64 {
 
 const fn default_retries() -> u32 {
     3
-}
-
-/// Try to take a rate-limit token for one check; refills are tracked either way.
-fn take_rate_token(state: &mut CheckState, params: TokenBucketParams, now_secs: f64) -> bool {
-    let tb_state = TokenBucketState {
-        tokens: state.rate_limit_tokens,
-        last_refill: state.rate_limit_last_refill,
-    };
-    let rate_result = TokenBucket::check(tb_state, now_secs, params);
-    state.rate_limit_tokens = rate_result.state.tokens;
-    state.rate_limit_last_refill = now_secs;
-    rate_result.allowed
 }
 
 #[cfg(test)]
@@ -252,24 +239,20 @@ struct CheckState {
     recovery_attempts: u32,
     /// When recovery was last attempted, for cooldown enforcement
     last_recovery_at: Option<Instant>,
-    /// Rate limiter tokens available
-    rate_limit_tokens: f64,
-    /// Rate limiter last refill time (seconds since UNIX epoch)
-    rate_limit_last_refill: f64,
+    /// Rate limiter, timed from the checker's start
+    rate_limit: TokenBucket,
     /// Suspicion detector, when the check configures one
     accrual: Option<Accrual>,
 }
 
 impl CheckState {
-    fn new(capacity: f64) -> Self {
-        let now_secs = jiff::Timestamp::now().as_duration().as_secs_f64();
+    const fn new(rate_limit: TokenBucketPolicy) -> Self {
         Self {
             failures: 0,
             last_result: None,
             recovery_attempts: 0,
             last_recovery_at: None,
-            rate_limit_tokens: capacity,
-            rate_limit_last_refill: now_secs,
+            rate_limit: TokenBucket::new(rate_limit),
             accrual: None,
         }
     }
@@ -298,12 +281,6 @@ impl CheckState {
     }
 }
 
-impl Default for CheckState {
-    fn default() -> Self {
-        Self::new(5.0) // Default capacity
-    }
-}
-
 /// Health checker for a single jail
 pub struct HealthChecker {
     /// Jail name
@@ -324,10 +301,6 @@ pub struct HealthChecker {
     check_interval: Duration,
     /// Circuit breakers per health check (keyed by check name)
     circuit_breakers: HashMap<String, CircuitBreaker>,
-    /// Rate limiter capacity (burst size)
-    rate_limit_capacity: f64,
-    /// Rate limiter refill rate (tokens per second)
-    rate_limit_refill_rate: f64,
     /// Optional Warden handle for notifications
     warden_handle: Option<WardenHandle>,
 }
@@ -337,14 +310,13 @@ impl HealthChecker {
     pub fn with_rate_limit(
         jail_name: &str,
         config: HealthCheckConfig,
-        rate_limit_capacity: f64,
-        rate_limit_refill_rate: f64,
+        rate_limit: TokenBucketPolicy,
     ) -> Self {
         let check_states: Vec<CheckState> = config
             .checks
             .iter()
             .map(|check| {
-                let mut state = CheckState::new(rate_limit_capacity);
+                let mut state = CheckState::new(rate_limit);
                 // Manifest validation already rejected unusable thresholds.
                 state.accrual = check
                     .suspicion
@@ -380,8 +352,6 @@ impl HealthChecker {
             stop_signal: Arc::new(AtomicBool::new(false)),
             check_interval: Duration::from_secs(interval),
             circuit_breakers,
-            rate_limit_capacity,
-            rate_limit_refill_rate,
             warden_handle: None,
         }
     }
@@ -472,8 +442,6 @@ impl HealthChecker {
         let mut recovery_needed: Vec<(usize, RecoveryConfig)> = Vec::new();
         let mut breaker_updates: Vec<(usize, bool, f64)> = Vec::new();
 
-        // Get current time for rate limiting
-        let now_secs = jiff::Timestamp::now().as_duration().as_secs_f64();
         let since_start = self.started_at.elapsed();
 
         for (idx, check) in self.config.checks.iter().enumerate() {
@@ -498,11 +466,11 @@ impl HealthChecker {
             }
 
             // Check rate limit before executing
-            let tb_params = TokenBucketParams {
-                capacity: self.rate_limit_capacity,
-                refill_rate: self.rate_limit_refill_rate,
-            };
-            if !take_rate_token(&mut self.check_states[idx], tb_params, now_secs) {
+            if self.check_states[idx]
+                .rate_limit
+                .check(since_start)
+                .is_err()
+            {
                 // Rate limited - keep the previous result by pushing None (handled below)
                 results.push(None);
                 continue;
@@ -832,7 +800,12 @@ impl HealthChecker {
 impl HealthChecker {
     /// Create a new health checker with default rate limit settings
     pub fn new(jail_name: &str, config: HealthCheckConfig) -> Self {
-        Self::with_rate_limit(jail_name, config, 5.0, 0.5)
+        let policy = TokenBucketPolicy::new(
+            std::num::NonZeroU64::new(5).expect("nonzero"),
+            Duration::from_secs(2),
+        )
+        .expect("valid policy");
+        Self::with_rate_limit(jail_name, config, policy)
     }
 }
 

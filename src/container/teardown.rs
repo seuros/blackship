@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::host::Layout;
 use crate::manifest::BlackshipConfig;
 use crate::network;
-use deadline_machines::{Clock, Deadline, SystemClock};
+use deadline_machines::Deadline;
 use std::path::Path;
 use std::time::Duration;
 
@@ -79,8 +79,8 @@ fn remove_jail(name: &str) -> Result<()> {
             "failed to remove jail '{name}' (jid {jid})"
         )));
     }
-    let clock = SystemClock::new();
-    let deadline = Deadline::after(clock.now(), crate::sys::nanos(JAIL_GONE_TIMEOUT));
+    let clock = crate::sys::MonotonicClock::new();
+    let deadline = Deadline::after(clock.now(), JAIL_GONE_TIMEOUT);
     while crate::jail::jail_getid(name).is_ok() {
         if deadline.is_expired(clock.now()) {
             return Err(Error::JailOperation(format!(

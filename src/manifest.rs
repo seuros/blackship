@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::net::IpAddr;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use throttle_machines::TokenBucketPolicy;
 
 /// A source of manifest configuration.
 ///
@@ -459,6 +461,9 @@ impl BlackshipConfig {
             }
         }
 
+        self.config.rate_limit.jail_start_policy()?;
+        self.config.rate_limit.health_policy()?;
+
         if let Some(pacer) = &self.config.rate_limit.health_concurrency {
             pacer.build()?;
         }
@@ -789,6 +794,36 @@ pub struct RateLimitConfig {
 
     /// Adaptive bound on concurrent health-check runs; unset leaves them unbounded
     pub health_concurrency: Option<crate::sickbay::pacer::PacerConfig>,
+}
+
+/// Token bucket of `capacity` whole tokens refilled at `refill_rate` per second.
+fn token_bucket_policy(what: &str, capacity: f64, refill_rate: f64) -> Result<TokenBucketPolicy> {
+    let invalid = |reason: &str| Error::ConfigValidation(format!("rate limit {what}: {reason}"));
+    if !capacity.is_finite() || capacity < 1.0 {
+        return Err(invalid("capacity must be at least 1"));
+    }
+    if !refill_rate.is_finite() || refill_rate <= 0.0 {
+        return Err(invalid("refill rate must be positive"));
+    }
+    // Saturating float cast: a bucket holds whole tokens.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let capacity = NonZeroU64::new(capacity.floor() as u64).ok_or_else(|| invalid("capacity"))?;
+    let refill_every = std::time::Duration::try_from_secs_f64(refill_rate.recip())
+        .map_err(|_| invalid("refill rate is too small"))?;
+    TokenBucketPolicy::new(capacity, refill_every)
+        .ok_or_else(|| invalid("refill rate is too large"))
+}
+
+impl RateLimitConfig {
+    /// Bucket gating jail starts, refilled at one start per second.
+    pub fn jail_start_policy(&self) -> Result<TokenBucketPolicy> {
+        token_bucket_policy("jail_start_capacity", self.jail_start_capacity, 1.0)
+    }
+
+    /// Bucket gating each health check.
+    pub fn health_policy(&self) -> Result<TokenBucketPolicy> {
+        token_bucket_policy("health", self.health_capacity, self.health_refill_rate)
+    }
 }
 
 impl Default for RateLimitConfig {

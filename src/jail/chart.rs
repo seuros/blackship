@@ -1,6 +1,7 @@
 //! Jail lifecycle and health as one statechart.
 
-use harel_machines::{Chart, Configuration, State, StateId, Transition, TransitionKind};
+use harel_machines::{Chart, ChartError, Refusal, State, StateId, Transition, TransitionKind};
+use std::sync::LazyLock;
 use thiserror::Error;
 
 use super::state::JailMachineState;
@@ -93,33 +94,37 @@ pub enum Error {
         to: JailMachineState,
     },
     #[error("malformed jail chart: {0}")]
-    Chart(harel_machines::Error),
+    Chart(ChartError),
+    #[error("jail chart refused the move: {0}")]
+    Refused(Refusal),
 }
 
-impl From<harel_machines::Error> for Error {
-    fn from(error: harel_machines::Error) -> Self {
-        Self::Chart(error)
+impl From<Refusal> for Error {
+    fn from(refusal: Refusal) -> Self {
+        Self::Refused(refusal)
     }
 }
 
 const STATES: usize = 13;
 
 /// The jail chart.
-pub const CHART: Chart<STATES> = Chart::new([
-    State::compound(None, Node::Down.id()),
-    State::compound(Some(Node::Jail.id()), Node::Stopped.id()),
-    State::atomic(Some(Node::Down.id())),
-    State::atomic(Some(Node::Down.id())),
-    State::compound(Some(Node::Jail.id()), Node::Starting.id()),
-    State::atomic(Some(Node::Up.id())),
-    State::compound(Some(Node::Up.id()), Node::Healthy.id()),
-    State::atomic(Some(Node::Running.id())),
-    State::atomic(Some(Node::Running.id())),
-    State::atomic(Some(Node::Running.id())),
-    State::atomic(Some(Node::Running.id())),
-    State::atomic(Some(Node::Up.id())),
-    State::atomic(Some(Node::Up.id())),
-]);
+static CHART: LazyLock<Result<Chart<STATES>, ChartError>> = LazyLock::new(|| {
+    Chart::new(&[
+        State::compound(None, Node::Down.id()),
+        State::compound(Some(Node::Jail.id()), Node::Stopped.id()),
+        State::atomic(Some(Node::Down.id())),
+        State::atomic(Some(Node::Down.id())),
+        State::compound(Some(Node::Jail.id()), Node::Starting.id()),
+        State::atomic(Some(Node::Up.id())),
+        State::compound(Some(Node::Up.id()), Node::Healthy.id()),
+        State::atomic(Some(Node::Running.id())),
+        State::atomic(Some(Node::Running.id())),
+        State::atomic(Some(Node::Running.id())),
+        State::atomic(Some(Node::Running.id())),
+        State::atomic(Some(Node::Up.id())),
+        State::atomic(Some(Node::Up.id())),
+    ])
+});
 
 /// Whether the lifecycle allows moving from one phase to the next.
 #[must_use]
@@ -153,9 +158,9 @@ pub struct Step(Transition<STATES>);
 
 impl Step {
     fn resolve(from: Node, to: Node) -> Result<Self, Error> {
-        let mut active = Configuration::new();
-        active.insert(from.id());
-        let transition = CHART.resolve(&active, from.id(), to.id(), TransitionKind::External)?;
+        let chart = CHART.as_ref().map_err(|error| Error::Chart(*error))?;
+        let active = chart.configuration(&[from.id()])?;
+        let transition = chart.resolve(&active, from.id(), to.id(), TransitionKind::External)?;
         Ok(Self(transition))
     }
 

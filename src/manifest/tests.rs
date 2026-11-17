@@ -563,3 +563,33 @@ fn test_static_ip_reads_ip_cidr_and_ip() {
     let none: JailNetworkConfig = toml::from_str("vnet = true").unwrap();
     assert_eq!(none.static_ip(), None);
 }
+
+#[test]
+fn health_bucket_refills_one_token_per_interval() {
+    use throttle_machines::{Gate, TokenBucket};
+    let policy = RateLimitConfig::default().health_policy().unwrap();
+    assert_eq!(policy.capacity().get(), 5);
+    assert_eq!(policy.refill_every(), std::time::Duration::from_secs(2));
+    let mut bucket = TokenBucket::new(policy);
+    let now = std::time::Duration::ZERO;
+    for _ in 0..5 {
+        assert!(bucket.check(now).is_ok());
+    }
+    assert!(bucket.check(now).is_err());
+    assert!(bucket.check(std::time::Duration::from_secs(2)).is_ok());
+}
+
+#[test]
+fn rate_limits_that_cannot_hold_a_token_are_refused() {
+    let config = RateLimitConfig {
+        health_capacity: 0.5,
+        ..RateLimitConfig::default()
+    };
+    assert!(config.health_policy().is_err());
+    let config = RateLimitConfig {
+        health_refill_rate: 0.0,
+        ..RateLimitConfig::default()
+    };
+    assert!(config.health_policy().is_err());
+    assert!(RateLimitConfig::default().jail_start_policy().is_ok());
+}

@@ -38,3 +38,37 @@ fn test_non_status_errors_are_retried() {
     // Transport-level failures (DNS, connect, TLS) are transient.
     assert!(is_retryable(&ureq::Error::HostNotFound));
 }
+
+#[test]
+fn default_retry_config_allows_four_retries_in_five_attempts() {
+    let mut retry = backoff_from_config(&RetryConfig::default()).unwrap();
+    for _ in 0..4 {
+        assert!(retry.failed(0).is_ok());
+    }
+    assert!(retry.failed(0).is_err());
+}
+
+#[test]
+fn zero_max_attempts_means_no_retries() {
+    let config = RetryConfig {
+        max_attempts: 0,
+        ..RetryConfig::default()
+    };
+    assert!(backoff_from_config(&config).unwrap().failed(0).is_err());
+}
+
+#[test]
+fn retry_delays_double_and_stop_at_the_cap() {
+    let config = RetryConfig {
+        base_delay_ms: 100,
+        max_delay_ms: 250,
+        multiplier: 2.0,
+        max_attempts: 5,
+        jitter_factor: 0.0,
+    };
+    let mut retry = backoff_from_config(&config).unwrap();
+    let delays: Vec<_> = (0..4)
+        .map(|_| retry.failed(0).unwrap().as_millis())
+        .collect();
+    assert_eq!(delays, [100, 200, 250, 250]);
+}

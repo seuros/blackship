@@ -23,7 +23,7 @@ fn prepare_checkers(
     };
 
     let no_jails = jails.is_empty();
-    let rate_limit = &config.config.rate_limit;
+    let health_policy = config.config.rate_limit.health_policy()?;
     let audit = crate::audit::AuditLog::from_config(Some(&config));
     let checkers = jails
         .iter()
@@ -33,8 +33,7 @@ fn prepare_checkers(
             let mut checker = HealthChecker::with_rate_limit(
                 &full_name,
                 jail_def.healthcheck.clone(),
-                rate_limit.health_capacity,
-                rate_limit.health_refill_rate,
+                health_policy,
             );
             if let Ok(jid) = jail::jail_getid(&full_name) {
                 checker = checker.with_jid(jid);

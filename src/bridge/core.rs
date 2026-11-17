@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::Instant;
+use throttle_machines::TokenBucket;
 
 /// Bridge for managing jails
 pub struct Bridge {
@@ -61,14 +62,11 @@ pub struct Bridge {
     /// Verbose output mode
     pub(super) verbose: bool,
 
-    /// Rate limiter state for jail starts (tokens, `last_refill`)
-    pub(super) rate_limiter: Mutex<(f64, Instant)>,
+    /// Rate limiter for jail starts, timed from `rate_limiter_epoch`
+    pub(super) rate_limiter: Mutex<TokenBucket>,
 
     /// Rate limiter start time for consistent timing
     pub(super) rate_limiter_epoch: Instant,
-
-    /// Rate limiter capacity for jail starts
-    pub(super) jail_start_capacity: f64,
 
     /// Optional handle to notify the Warden of jail events
     pub(super) warden_handle: Option<WardenHandle>,
@@ -140,7 +138,7 @@ impl Bridge {
         let scope_store = ScopeStore::from_config(Some(&config));
         let audit = AuditLog::from_config(Some(&config));
 
-        let jail_start_capacity = config.config.rate_limit.jail_start_capacity;
+        let rate_limiter = TokenBucket::new(config.config.rate_limit.jail_start_policy()?);
         let now = Instant::now();
         Ok(Self {
             config,
@@ -156,9 +154,8 @@ impl Bridge {
             allocated_ips: HashMap::new(),
             instances: HashMap::new(),
             verbose: false,
-            rate_limiter: Mutex::new((jail_start_capacity, now)),
+            rate_limiter: Mutex::new(rate_limiter),
             rate_limiter_epoch: now,
-            jail_start_capacity,
             warden_handle: None,
             vnet_setups: HashMap::new(),
             os_version,

@@ -5,7 +5,7 @@
 #![allow(unsafe_code)]
 
 use crate::error::{Error, Result};
-use deadline_machines::{Clock, Deadline, SystemClock};
+use deadline_machines::Deadline;
 use std::ffi::CString;
 use std::fmt;
 use std::io::{self, Read};
@@ -261,15 +261,14 @@ pub fn run(jid: i32, exec: Exec<'_>) -> Result<ExecOutput> {
         });
     }
 
-    let clock = SystemClock::new();
+    let clock = crate::sys::MonotonicClock::new();
     let started = Instant::now();
     let deadline = match limit {
         None => Deadline::never(),
-        Some(Limit::Timeout(timeout)) => Deadline::after(clock.now(), crate::sys::nanos(timeout)),
-        Some(Limit::Deadline(at)) => Deadline::after(
-            clock.now(),
-            crate::sys::nanos(at.saturating_duration_since(started)),
-        ),
+        Some(Limit::Timeout(timeout)) => Deadline::after(clock.now(), timeout),
+        Some(Limit::Deadline(at)) => {
+            Deadline::after(clock.now(), at.saturating_duration_since(started))
+        }
     };
     let mut child = cmd
         .spawn()
@@ -315,7 +314,7 @@ enum Waited {
 fn supervise(
     child: &mut Child,
     jid: i32,
-    clock: &SystemClock,
+    clock: &crate::sys::MonotonicClock,
     deadline: Deadline,
     sink: &mut dyn FnMut(Stream, &[u8]),
 ) -> Result<Waited> {
@@ -331,7 +330,7 @@ fn supervise(
         if exited.is_none() {
             if let Some(status) = child.try_wait()? {
                 exited = Some(status);
-                drain = Deadline::after(now, crate::sys::nanos(DRAIN_GRACE));
+                drain = Deadline::after(now, DRAIN_GRACE);
             } else if deadline.is_expired(now) {
                 kill_everything(child, || kill_jail_processes(jid));
                 return Ok(Waited::TimedOut);
@@ -342,8 +341,8 @@ fn supervise(
         }
 
         let budget = if exited.is_none() { deadline } else { drain };
-        let wake = budget.clamp_sleep_ns(now, crate::sys::nanos(TICK));
-        pipes.pump(Duration::from_nanos(wake), sink)?;
+        let wake = budget.clamp_sleep(now, TICK);
+        pipes.pump(wake, sink)?;
     }
     drop(pipes);
 
@@ -354,7 +353,12 @@ fn supervise(
 }
 
 /// Wait for the command alone, honouring the deadline.
-fn wait(child: &mut Child, jid: i32, clock: &SystemClock, deadline: Deadline) -> Result<Waited> {
+fn wait(
+    child: &mut Child,
+    jid: i32,
+    clock: &crate::sys::MonotonicClock,
+    deadline: Deadline,
+) -> Result<Waited> {
     if deadline.expires_at().is_none() {
         return Ok(Waited::Exited(child.wait()?));
     }
@@ -367,8 +371,8 @@ fn wait(child: &mut Child, jid: i32, clock: &SystemClock, deadline: Deadline) ->
             kill_everything(child, || kill_jail_processes(jid));
             return Ok(Waited::TimedOut);
         }
-        let nap = deadline.clamp_sleep_ns(now, crate::sys::nanos(TICK));
-        std::thread::sleep(Duration::from_nanos(nap));
+        let nap = deadline.clamp_sleep(now, TICK);
+        std::thread::sleep(nap);
     }
 }
 

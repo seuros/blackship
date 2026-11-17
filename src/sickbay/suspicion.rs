@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use suspect_machines::{
-    Config, ConfigError, Detector, Distribution, Refusal, Suspicion, Threshold,
+    Config, ConfigError, Detector, Distribution, Normal, Refusal, Suspicion, Threshold,
 };
 
 use crate::error::{Error, Result};
@@ -75,9 +75,9 @@ impl SuspicionConfig {
             .min_std_dev_ms
             .unwrap_or_else(|| interval_secs.saturating_mul(250));
         let config = Config::new(
-            Distribution::Normal {
-                min_std_dev: Duration::from_millis(floor_ms),
-            },
+            Distribution::Normal(
+                Normal::new(Duration::from_millis(floor_ms)).map_err(config_error)?,
+            ),
             self.min_samples,
         )
         .map_err(config_error)?;

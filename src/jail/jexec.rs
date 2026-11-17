@@ -4,7 +4,7 @@
 #![allow(unsafe_code)]
 
 use crate::error::{Error, Result};
-use deadline_machines::{Clock, Deadline, NS_PER_SECOND, SystemClock};
+use deadline_machines::Deadline;
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{ForkResult, Pid, fork, pipe};
 use std::ffi::CString;
@@ -445,11 +445,11 @@ pub fn jexec_with_timeout(
 
             let readers = OutputReaders::spawn(stdout_read, stderr_read);
 
-            let clock = SystemClock::new();
+            let clock = crate::sys::MonotonicClock::new();
             let deadline = if timeout_secs == 0 {
                 Deadline::never()
             } else {
-                Deadline::after(clock.now(), timeout_secs.saturating_mul(NS_PER_SECOND))
+                Deadline::after(clock.now(), Duration::from_secs(timeout_secs))
             };
 
             while crate::proc::wait_exited(child, false) == Ok(false) {

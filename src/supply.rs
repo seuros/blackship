@@ -7,23 +7,34 @@
 
 use crate::error::{Error, Result};
 use crate::manifest::RetryConfig;
-use chrono_machines::{BackoffStrategy, ExponentialBackoff};
-use rand::rng;
+use chrono_machines::{Exponential, Retry};
+use rand::{RngExt, rng};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
+use std::num::NonZeroU8;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-/// Create backoff strategy from `RetryConfig`
-pub const fn backoff_from_config(config: &RetryConfig) -> ExponentialBackoff {
-    ExponentialBackoff::new()
-        .base_delay_ms(config.base_delay_ms)
-        .max_delay_ms(config.max_delay_ms)
-        .multiplier(config.multiplier)
-        .max_attempts(config.max_attempts)
-        .jitter_factor(config.jitter_factor)
+/// Create a retry streak from `RetryConfig`.
+///
+/// Out-of-range values are normalised the way the old builder did: a base
+/// above the cap is capped, jitter is clamped to `0.0..=1.0`, and zero
+/// attempts means no retries.
+pub fn backoff_from_config(config: &RetryConfig) -> Result<Retry> {
+    let max = Duration::from_millis(config.max_delay_ms);
+    let base = Duration::from_millis(config.base_delay_ms).min(max);
+    let jitter = if config.jitter_factor.is_nan() {
+        0.0
+    } else {
+        config.jitter_factor.clamp(0.0, 1.0)
+    };
+    let multiplier = config.multiplier.clamp(1.0, f64::MAX);
+    let shape = Exponential::new(base, multiplier, max, jitter)
+        .ok_or_else(|| Error::ConfigValidation("invalid retry backoff configuration".into()))?;
+    let attempts = NonZeroU8::new(config.max_attempts).unwrap_or(NonZeroU8::MIN);
+    Ok(Retry::new(shape.into(), Some(attempts)))
 }
 
 /// Whether a failed request is worth retrying.
@@ -47,7 +58,7 @@ fn retry_call<T>(
     what: &str,
     mut call: impl FnMut() -> std::result::Result<T, ureq::Error>,
 ) -> Result<T> {
-    let backoff = backoff_from_config(retry_config);
+    let mut backoff = backoff_from_config(retry_config)?;
     let mut rng = rng();
     let mut attempt: u8 = 0;
 
@@ -61,9 +72,12 @@ fn retry_call<T>(
                 )));
             }
             Err(e) => {
-                if let Some(delay_ms) = backoff.delay(attempt, &mut rng) {
-                    eprintln!("{what} attempt {attempt} failed, retrying in {delay_ms}ms...");
-                    thread::sleep(Duration::from_millis(delay_ms));
+                if let Ok(delay) = backoff.failed(rng.random()) {
+                    eprintln!(
+                        "{what} attempt {attempt} failed, retrying in {}ms...",
+                        delay.as_millis()
+                    );
+                    thread::sleep(delay);
                 } else {
                     return Err(Error::DownloadFailed(format!(
                         "{what} failed for {url} after {attempt} attempts: {e}"

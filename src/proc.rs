@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use deadline_machines::{Clock, Deadline, SystemClock};
+use deadline_machines::Deadline;
 
 /// Whether `pid` has exited, without reaping it, so its group id stays
 /// reserved for a following `kill(-pid)`. `block` waits instead of polling.
@@ -78,8 +78,8 @@ pub fn run_supervised(cmd: &mut Command, timeout: Duration) -> io::Result<Outcom
     let mut stderr_thread = child.stderr.take().map(spawn_reader);
 
     let pid = child.id() as libc::pid_t;
-    let clock = SystemClock::new();
-    let deadline = Deadline::after(clock.now(), crate::sys::nanos(timeout));
+    let clock = crate::sys::MonotonicClock::new();
+    let deadline = Deadline::after(clock.now(), timeout);
 
     loop {
         match wait_exited(nix::unistd::Pid::from_raw(pid), false) {

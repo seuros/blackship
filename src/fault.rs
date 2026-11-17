@@ -27,13 +27,14 @@ pub use armed::{arm, disarm, trip};
 #[cfg(test)]
 mod armed {
     use std::cell::RefCell;
+    use std::time::Duration;
 
-    use rogue_machines::{Decision, Experiment, Fault, Fraction, Rogue, Slot};
+    use rogue_machines::{Decision, Draw, Experiment, Fault, Fraction, Rogue, Slot};
 
     use super::Point;
     use crate::error::{Error, Result};
 
-    const HOUR_NS: u64 = 3_600_000_000_000;
+    const HOUR: Duration = Duration::from_secs(3600);
 
     thread_local! {
         static ROGUE: RefCell<Rogue> = const { RefCell::new(Rogue::new()) };
@@ -47,7 +48,7 @@ mod armed {
     pub fn arm(point: Point) {
         if let Some(slot) = slot(point) {
             ROGUE.with_borrow_mut(|rogue| {
-                rogue.arm(slot, Experiment::new(Fault::Raise, Fraction::ALL, HOUR_NS));
+                rogue.arm(slot, Experiment::new(Fault::Raise, Fraction::ALL, HOUR));
             });
         }
     }
@@ -58,8 +59,10 @@ mod armed {
     }
 
     pub fn trip(point: Point) -> Result<()> {
-        let injected = slot(point).is_some_and(|slot| {
-            ROGUE.with_borrow(|rogue| rogue.decide(slot, 0, 0) == Decision::Inject(Fault::Raise))
+        let injected = slot(point).zip(Draw::new(0)).is_some_and(|(slot, draw)| {
+            ROGUE.with_borrow(|rogue| {
+                rogue.decide(slot, Duration::ZERO, draw) == Decision::Inject(Fault::Raise)
+            })
         });
         if injected {
             return Err(Error::JailOperation(format!("injected fault at {point:?}")));

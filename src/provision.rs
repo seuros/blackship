@@ -9,14 +9,12 @@
 use crate::error::{Error, Result};
 use crate::manifest::{RetryConfig, validate_name};
 use crate::supply::{backoff_from_config, download_file, fetch_text, url_exists};
-use chrono_machines::BackoffStrategy;
-use rand::rng;
+use rand::{RngExt, rng};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
 use tar::Archive;
 use xz2::read::XzDecoder;
 
@@ -343,7 +341,7 @@ impl Provisioner {
             let expected_sha256 = checksums.get(archive.as_str());
 
             // Retry loop for download and extract
-            let backoff = backoff_from_config(&self.retry_config);
+            let mut backoff = backoff_from_config(&self.retry_config)?;
             let mut rng = rng();
             let mut attempt: u8 = 0;
 
@@ -386,13 +384,14 @@ impl Provisioner {
                 match result {
                     Ok(()) => break,
                     Err(e) => {
-                        if let Some(delay_ms) = backoff.delay(attempt, &mut rng) {
+                        if let Ok(delay) = backoff.failed(rng.random()) {
                             eprintln!(
-                                "Archive {archive} attempt {attempt} failed, retrying in {delay_ms}ms..."
+                                "Archive {archive} attempt {attempt} failed, retrying in {}ms...",
+                                delay.as_millis()
                             );
                             // Remove potentially corrupt cached file before retry
                             let _ = fs::remove_file(&cache_file);
-                            thread::sleep(Duration::from_millis(delay_ms));
+                            thread::sleep(delay);
                         } else {
                             return Err(e);
                         }

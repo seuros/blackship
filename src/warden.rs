@@ -122,14 +122,17 @@ struct MonitoredJail {
 }
 
 /// Restarts tolerated per jail before supervision gives up on it.
-const RESTART_INTENSITY: Intensity = Intensity::new(5, 300 * NS_PER_SEC);
+const RESTART_INTENSITY: Option<Intensity> = Intensity::new(5, Duration::from_secs(300));
 /// First restart delay, doubled per recent restart up to the ceiling.
-const RESTART_DELAY_BASE_NS: u64 = NS_PER_SEC;
-const RESTART_DELAY_CEILING_NS: u64 = 60 * NS_PER_SEC;
-const NS_PER_SEC: u64 = 1_000_000_000;
+const RESTART_DELAY_BASE: Duration = Duration::from_secs(1);
+const RESTART_DELAY_CEILING: Duration = Duration::from_secs(60);
 
 /// One jail is one child under its own one-for-one supervisor.
 type RestartPolicy = Supervisor<1, 8>;
+
+fn restart_policy() -> Option<RestartPolicy> {
+    RestartPolicy::new(Strategy::OneForOne, RESTART_INTENSITY?)
+}
 
 /// Monotonic millisecond ticks for the supervision runners.
 struct MillisClock {
@@ -145,8 +148,8 @@ impl MillisClock {
 }
 
 impl MillisClock {
-    fn now_ns(&self) -> u64 {
-        u64::try_from(self.origin.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    fn elapsed(&self) -> Duration {
+        self.origin.elapsed()
     }
 }
 
@@ -160,7 +163,7 @@ impl Clock for MillisClock {
 /// that decides whether and when it comes back.
 struct Supervision {
     runner: Runner<DynamicSupervisor>,
-    policy: RestartPolicy,
+    policy: Option<RestartPolicy>,
 }
 
 impl Supervision {
@@ -179,7 +182,7 @@ impl Supervision {
 
         Self {
             runner,
-            policy: RestartPolicy::new(Strategy::OneForOne, RESTART_INTENSITY),
+            policy: restart_policy(),
         }
     }
 
@@ -193,25 +196,24 @@ impl Supervision {
             return;
         }
 
-        let now = clock.now_ns();
-        if self
-            .policy
-            .stopped(0, Policy::Permanent, Exit::Abnormal, now)
-            == Decision::Escalate
-        {
+        let now = clock.elapsed();
+        let Some(policy) = self.policy.as_mut() else {
+            eprintln!("Warden: Not restarting jail '{name}' (no restart policy)");
+            self.enqueue(name, SupervisorEvent::Exhausted);
+            return;
+        };
+        if policy.stopped(0, Policy::Permanent, Exit::Abnormal, now) == Ok(Decision::Escalate) {
             eprintln!("Warden: Not restarting jail '{name}' (restart intensity exceeded)");
             self.enqueue(name, SupervisorEvent::Exhausted);
             return;
         }
 
-        let delay_ns =
-            self.policy
-                .restart_delay_ns(RESTART_DELAY_BASE_NS, RESTART_DELAY_CEILING_NS, now);
+        let delay = policy.restart_delay(RESTART_DELAY_BASE, RESTART_DELAY_CEILING, now);
         // Up to half off, so jails that failed together do not restart in lockstep.
-        let delay = Duration::from_nanos(delay_ns).mul_f64(rng().random_range(0.5..=1.0));
+        let delay = delay.mul_f64(rng().random_range(0.5..=1.0));
         println!(
             "Warden: Restarting jail '{name}' in {delay:?} (restart {} in window)",
-            self.policy.recent_restarts(now)
+            policy.recent_restarts(now)
         );
 
         let ticks = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);

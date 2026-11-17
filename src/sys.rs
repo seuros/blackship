@@ -340,9 +340,22 @@ pub fn list_tagged_interfaces() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// `d` in nanoseconds, saturating at `u64::MAX` (584 years).
-pub fn nanos(d: std::time::Duration) -> u64 {
-    u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
+/// Monotonic time since construction, the clock `Deadline` arithmetic is fed.
+#[derive(Debug, Clone, Copy)]
+pub struct MonotonicClock {
+    origin: std::time::Instant,
+}
+
+impl MonotonicClock {
+    pub fn new() -> Self {
+        Self {
+            origin: std::time::Instant::now(),
+        }
+    }
+
+    pub fn now(&self) -> std::time::Duration {
+        self.origin.elapsed()
+    }
 }
 
 /// Run a libxo-capable base utility and parse its JSON output.
