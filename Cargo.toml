@@ -78,7 +78,6 @@ nom = "8.0"
 
 # State machine and resilience (seuros crates)
 state-machines = { version = "0.35.0", features = ["dynamic", "runtime-send", "serde"] }
-breaker-machines = "0.24.0"
 chrono-machines = "0.13.0"
 throttle-machines = "0.6.0"
 supervisor-machines = "0.7.0"

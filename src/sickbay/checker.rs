@@ -9,9 +9,7 @@ use crate::proc::{Outcome, run_supervised};
 use crate::sickbay::recovery::{RecoveryAction, RecoveryConfig};
 use crate::sickbay::suspicion::{Accrual, SuspicionConfig, Verdict};
 use crate::warden::WardenHandle;
-use breaker_machines::{CircuitBreaker, CircuitBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,7 +28,7 @@ pub enum HealthStatus {
     Unhealthy,
     /// Checks consistently failing, recovery may be triggered
     Failing,
-    /// Circuit breaker is open, checks suspended
+    /// Checks suspended by the operator
     Suspended,
     /// Unknown status (not yet checked)
     Unknown,
@@ -299,8 +297,6 @@ pub struct HealthChecker {
     stop_signal: Arc<AtomicBool>,
     /// Interval between check cycles (from first check's interval)
     check_interval: Duration,
-    /// Circuit breakers per health check (keyed by check name)
-    circuit_breakers: HashMap<String, CircuitBreaker>,
     /// Optional Warden handle for notifications
     warden_handle: Option<WardenHandle>,
 }
@@ -328,20 +324,6 @@ impl HealthChecker {
 
         let interval = config.checks.first().map_or(30, |c| c.interval);
 
-        // Initialize circuit breakers for each health check
-        let circuit_breakers = config
-            .checks
-            .iter()
-            .map(|check| {
-                let breaker = CircuitBuilder::new(format!("health_{}_{}", jail_name, check.name))
-                    .failure_threshold(check.retries as usize)
-                    .success_threshold(2)
-                    .half_open_timeout_secs(60.0)
-                    .build();
-                (check.name.clone(), breaker)
-            })
-            .collect();
-
         Self {
             jail_name: jail_name.to_string(),
             jid: None,
@@ -351,7 +333,6 @@ impl HealthChecker {
             check_states,
             stop_signal: Arc::new(AtomicBool::new(false)),
             check_interval: Duration::from_secs(interval),
-            circuit_breakers,
             warden_handle: None,
         }
     }
@@ -434,37 +415,15 @@ impl HealthChecker {
         let previous_status = self.status;
         let mut any_failing = false;
         let mut all_healthy = true;
-        let mut any_suspended = false;
 
         // Collect results and recovery actions to avoid borrow issues
         let check_count = self.config.checks.len();
         let mut results: Vec<Option<CheckResult>> = Vec::with_capacity(check_count);
         let mut recovery_needed: Vec<(usize, RecoveryConfig)> = Vec::new();
-        let mut breaker_updates: Vec<(usize, bool, f64)> = Vec::new();
 
         let since_start = self.started_at.elapsed();
 
         for (idx, check) in self.config.checks.iter().enumerate() {
-            // Check if circuit breaker is open for this check
-            let breaker_closed = self
-                .circuit_breakers
-                .get(&check.name)
-                .is_none_or(breaker_machines::CircuitBreaker::is_closed);
-
-            if !breaker_closed {
-                // Circuit is open, return suspended result without executing
-                any_suspended = true;
-                all_healthy = false;
-                results.push(Some(CheckResult {
-                    name: check.name.clone(),
-                    passed: false,
-                    duration: Duration::ZERO,
-                    output: "Circuit breaker open - check suspended".to_string(),
-                    timestamp: Instant::now(),
-                }));
-                continue;
-            }
-
             // Check rate limit before executing
             if self.check_states[idx]
                 .rate_limit
@@ -477,15 +436,12 @@ impl HealthChecker {
             }
 
             let result = self.execute_check(check)?;
-            let duration_secs = result.duration.as_secs_f64();
 
             let state = &mut self.check_states[idx];
             if result.passed {
                 state.record_pass(&check.name, since_start);
-                breaker_updates.push((idx, true, duration_secs));
             } else {
                 state.failures += 1;
-                breaker_updates.push((idx, false, duration_secs));
 
                 let (unhealthy, failing) = state.failure_reading(check.retries, since_start);
                 if unhealthy {
@@ -504,8 +460,6 @@ impl HealthChecker {
             results.push(Some(result));
         }
 
-        self.record_breaker_outcomes(breaker_updates);
-
         // Store results (only update if we have a new result, otherwise keep previous)
         for (idx, result) in results.into_iter().enumerate() {
             if result.is_some() {
@@ -520,9 +474,7 @@ impl HealthChecker {
         }
 
         // Update overall status
-        self.status = if any_suspended && !any_failing {
-            HealthStatus::Suspended
-        } else if any_failing {
+        self.status = if any_failing {
             HealthStatus::Failing
         } else if all_healthy {
             HealthStatus::Healthy
@@ -571,19 +523,6 @@ impl HealthChecker {
                 "Warning: Failed to re-register jail '{}' with Warden: {}",
                 self.jail_name, e
             );
-        }
-    }
-
-    /// Feed each executed check's outcome to its circuit breaker.
-    fn record_breaker_outcomes(&mut self, outcomes: Vec<(usize, bool, f64)>) {
-        for (idx, success, duration) in outcomes {
-            if let Some(breaker) = self.circuit_breakers.get_mut(&self.config.checks[idx].name) {
-                if success {
-                    breaker.record_success(duration);
-                } else {
-                    breaker.record_failure(duration);
-                }
-            }
         }
     }
 

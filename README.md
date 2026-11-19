@@ -1200,7 +1200,7 @@ were, and a failed check is only reported once that silence is unusual. Below
 `unhealthy`, and at `failing_phi` it is `failing`. Until `min_samples` passes
 have been seen, the check falls back to plain retry counting. Only a failing
 verdict can trigger the check's `recovery` action; suspicion reports a level
-and never restarts anything by itself. Breakers and rate limits are unchanged.
+and never restarts anything by itself. Rate limits are unchanged.
 Leave the table out and nothing changes. `unhealthy_phi` and `failing_phi`
 must be positive and `unhealthy_phi <= failing_phi`; bad values are rejected
 at load.

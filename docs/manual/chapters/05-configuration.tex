@@ -309,9 +309,8 @@ how unusual the current silence is given how regular the passes were. Below
 it is unhealthy; at \setting{failing\_phi} it is failing. Until
 \setting{min\_samples} passes have been seen the check uses plain retry
 counting. Only a failing verdict can trigger the check's recovery action, so
-suspicion reports a level and never decides to restart anything. Circuit
-breakers and rate limits are unchanged, and an absent table keeps today's
-behavior. Both thresholds must be positive with
+suspicion reports a level and never decides to restart anything. Rate
+limits are unchanged, and an absent table keeps today's behavior. Both thresholds must be positive with
 \setting{unhealthy\_phi} not above \setting{failing\_phi}; configuration
 loading rejects anything else.
 

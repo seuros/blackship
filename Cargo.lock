@@ -218,7 +218,6 @@ name = "blackship"
 version = "0.5.1"
 dependencies = [
  "bitflags 2.13.2",
- "breaker-machines",
  "byteorder",
  "chrono-machines 0.13.0",
  "deadline-machines 0.5.0",
