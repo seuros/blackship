@@ -1,14 +1,12 @@
 //! Health check command
 
-use std::fmt::Write as _;
-use std::path::Path;
-
 use crate::error::Result;
 use crate::{jail, manifest, sickbay};
 use sickbay::{HealthChecker, HealthStateRecord, HealthStateStore, HealthStatus};
+use std::fmt::Write as _;
 
 fn prepare_checkers(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     jail_name: Option<&str>,
 ) -> Result<(Vec<HealthChecker>, bool, HealthStateStore)> {
     let config = manifest::load(config_path)?;
@@ -108,7 +106,10 @@ fn pass_and_record(checker: &mut HealthChecker, store: &HealthStateStore) -> Res
 }
 
 /// Run one health-check pass without writing terminal output.
-pub fn data(config_path: &Path, jail: Option<&str>) -> Result<Vec<serde_json::Value>> {
+pub fn data(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: Option<&str>,
+) -> Result<Vec<serde_json::Value>> {
     let (mut checkers, _, state_store) = prepare_checkers(config_path, jail)?;
     checkers
         .iter_mut()
@@ -120,7 +121,7 @@ pub fn data(config_path: &Path, jail: Option<&str>) -> Result<Vec<serde_json::Va
 }
 
 pub fn handle(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     jail: Option<String>,
     watch: bool,
     interval: u64,

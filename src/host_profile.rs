@@ -7,17 +7,15 @@
 //! Every section is best effort and unprivileged: a probe that fails reports
 //! an error object in place, never fails the whole profile.
 
-use std::collections::BTreeSet;
-use std::net::IpAddr;
-use std::path::Path;
-
 use ipnet::IpNet;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
+use std::net::IpAddr;
 
-use crate::manifest::BlackshipConfig;
+use crate::manifest::{BlackshipConfig, ConfigSource};
 
 /// The full host profile, as JSON.
-pub(crate) fn collect(config_path: &Path) -> Value {
+pub fn collect(config_path: &(impl ConfigSource + ?Sized)) -> Value {
     let config = crate::manifest::load_or_default(config_path);
     let config_error = config.as_ref().err().map(ToString::to_string);
     let config = config.ok();
@@ -25,8 +23,9 @@ pub(crate) fn collect(config_path: &Path) -> Value {
 
     json!({
         "config": {
-            "path": config_path.display().to_string(),
-            "source": if config_path.exists() { "file" } else { "defaults" },
+            "path": config_path.primary_path().display().to_string(),
+            "paths": config_path.paths().iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
+            "source": if config_path.paths().iter().all(|path| path.exists()) { "file" } else { "defaults" },
             "error": config_error,
         },
         "system": system_facts(),

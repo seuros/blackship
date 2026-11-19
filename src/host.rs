@@ -42,7 +42,11 @@ impl Host {
     ///
     /// The manifest exists but cannot be read, parsed or validated.
     pub fn from_manifest(path: &Path) -> Result<Self> {
-        Ok(Self::from_config(Some(manifest::load_or_default(path)?)))
+        Self::from_source(path)
+    }
+
+    pub(crate) fn from_source(source: &(impl manifest::ConfigSource + ?Sized)) -> Result<Self> {
+        Ok(Self::from_config(Some(manifest::load_or_default(source)?)))
     }
 
     /// Back releases and containers with datasets under `pool/dataset`;

@@ -44,7 +44,7 @@ fn detect_format(file: &Path) -> ForeignFormat {
 }
 
 pub fn handle_foreign_import(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     file: &Path,
     name: Option<String>,
     from: Option<&str>,

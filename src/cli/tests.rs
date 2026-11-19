@@ -2,6 +2,36 @@ use super::*;
 use std::ffi::OsStr;
 
 #[test]
+fn test_config_files_can_be_repeated_in_merge_order() {
+    let argv = [
+        OsStr::new("-c"),
+        OsStr::new("project.toml"),
+        OsStr::new("--config"),
+        OsStr::new("jails/database.toml"),
+        OsStr::new("--config=jails/web.toml"),
+        OsStr::new("check"),
+    ];
+    let cli = Cli::parse_from(&argv).unwrap();
+
+    assert_eq!(
+        cli.config,
+        [
+            PathBuf::from("project.toml"),
+            PathBuf::from("jails/database.toml"),
+            PathBuf::from("jails/web.toml"),
+        ]
+    );
+    assert!(matches!(cli.command, Commands::Check));
+}
+
+#[test]
+fn test_config_defaults_to_blackship_toml() {
+    let cli = Cli::parse_from(&[OsStr::new("check")]).unwrap();
+
+    assert_eq!(cli.config, [PathBuf::from("blackship.toml")]);
+}
+
+#[test]
 fn test_json_output_format_parses_globally() {
     let argv = [OsStr::new("--format"), OsStr::new("json"), OsStr::new("ps")];
     let cli = Cli::parse_from(&argv).unwrap();

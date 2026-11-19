@@ -16,7 +16,7 @@ fn read_jailfile_source(path: &std::path::Path) -> Result<String> {
 }
 
 pub fn handle_build(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     verbose: bool,
     file: &Path,
     name: Option<String>,
@@ -139,7 +139,10 @@ FROM {base_release}
     Ok(())
 }
 
-pub fn handle_template(config_path: &Path, action: TemplateAction) -> Result<()> {
+pub fn handle_template(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    action: TemplateAction,
+) -> Result<()> {
     match action {
         TemplateAction::List => list_templates(config_path),
         TemplateAction::Inspect { template } => inspect_template(&template)?,
@@ -203,7 +206,7 @@ fn scan_directory(dir: &Path, templates: &mut Vec<TemplateInfo>) {
 }
 
 /// `template list`: templates in ., ./templates and the data dir
-fn list_templates(config_path: &Path) {
+fn list_templates(config_path: &(impl manifest::ConfigSource + ?Sized)) {
     let mut templates: Vec<TemplateInfo> = Vec::new();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 

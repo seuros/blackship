@@ -61,7 +61,11 @@ pub fn stage_config_in_dataset(config: &BlackshipConfig, service_name: &str, ful
 }
 
 /// Freeze a jail into a reusable release via snapshot + clone + promote.
-pub fn handle_commit(config_path: &Path, jail: &str, release: &str) -> Result<()> {
+pub fn handle_commit(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+    release: &str,
+) -> Result<()> {
     let config = manifest::load(config_path)?;
     let zfs = require_zfs(&config)?;
     let (service_name, full_name) = config.require_jail_names(jail)?;
@@ -84,7 +88,10 @@ pub fn handle_commit(config_path: &Path, jail: &str, release: &str) -> Result<()
     Ok(())
 }
 
-pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()> {
+pub fn handle_snapshot(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    action: SnapshotAction,
+) -> Result<()> {
     let config = manifest::load(config_path)?;
     let zfs = require_zfs(&config)?;
 
@@ -163,7 +170,10 @@ pub fn handle_snapshot(config_path: &Path, action: SnapshotAction) -> Result<()>
 }
 
 /// Return a jail's snapshots without writing terminal output.
-pub fn snapshot_list_data(config_path: &Path, jail: &str) -> Result<Vec<serde_json::Value>> {
+pub fn snapshot_list_data(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+) -> Result<Vec<serde_json::Value>> {
     let config = manifest::load(config_path)?;
     let zfs = require_zfs(&config)?;
     let (_service_name, full_name) = config.require_jail_names(jail)?;
@@ -181,7 +191,11 @@ pub fn snapshot_list_data(config_path: &Path, jail: &str) -> Result<Vec<serde_js
         .collect())
 }
 
-pub fn handle_clone(config_path: &Path, source: &str, name: &str) -> Result<()> {
+pub fn handle_clone(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    source: &str,
+    name: &str,
+) -> Result<()> {
     let config = manifest::load(config_path)?;
     let zfs = require_zfs(&config)?;
 
@@ -217,7 +231,7 @@ pub fn handle_clone(config_path: &Path, source: &str, name: &str) -> Result<()> 
 }
 
 pub fn handle_export(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     jail: &str,
     output: Option<std::path::PathBuf>,
     zfs_send: bool,
@@ -264,7 +278,7 @@ pub fn handle_export(
 }
 
 pub fn handle_import(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     file: &Path,
     name: Option<&str>,
     force: bool,

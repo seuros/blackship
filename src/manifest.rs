@@ -12,6 +12,97 @@ use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
+/// A source of manifest configuration.
+///
+/// Library callers can continue to pass a single [`Path`]. The CLI uses
+/// [`ConfigPaths`] so repeated `--config` arguments are merged with the same
+/// semantics as Armada's repeated `--file` arguments.
+pub trait ConfigSource {
+    /// The first file names the project when `[config].project` is omitted and
+    /// remains the canonical path reported by compatibility surfaces.
+    fn primary_path(&self) -> &Path;
+
+    /// Every contributing file in merge order.
+    fn paths(&self) -> Vec<&Path> {
+        vec![self.primary_path()]
+    }
+
+    /// Load and validate this source.
+    fn load_config(&self) -> Result<BlackshipConfig>;
+
+    /// Load this source, falling back to defaults when its only file is absent.
+    fn load_config_or_default(&self) -> Result<BlackshipConfig>;
+}
+
+/// Ordered manifest paths supplied by the CLI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigPaths {
+    paths: Vec<PathBuf>,
+}
+
+impl ConfigPaths {
+    /// Build an ordered source. CLI parsing always supplies at least the
+    /// default `blackship.toml` path.
+    pub fn new(paths: Vec<PathBuf>) -> Result<Self> {
+        if paths.is_empty() {
+            return Err(Error::ConfigValidation(
+                "At least one configuration file is required".into(),
+            ));
+        }
+        Ok(Self { paths })
+    }
+}
+
+impl ConfigSource for ConfigPaths {
+    fn primary_path(&self) -> &Path {
+        &self.paths[0]
+    }
+
+    fn paths(&self) -> Vec<&Path> {
+        self.paths.iter().map(PathBuf::as_path).collect()
+    }
+
+    fn load_config(&self) -> Result<BlackshipConfig> {
+        load_merged(&self.paths)
+    }
+
+    fn load_config_or_default(&self) -> Result<BlackshipConfig> {
+        if self.paths.len() == 1 {
+            load_file_or_default(self.primary_path())
+        } else {
+            load_merged(&self.paths)
+        }
+    }
+}
+
+impl ConfigSource for Path {
+    fn primary_path(&self) -> &Path {
+        self
+    }
+
+    fn load_config(&self) -> Result<BlackshipConfig> {
+        load_file(self)
+    }
+
+    fn load_config_or_default(&self) -> Result<BlackshipConfig> {
+        load_file_or_default(self)
+    }
+}
+
+impl ConfigSource for PathBuf {
+    fn primary_path(&self) -> &Path {
+        self.as_path()
+    }
+
+    fn load_config(&self) -> Result<BlackshipConfig> {
+        load_file(self)
+    }
+
+    fn load_config_or_default(&self) -> Result<BlackshipConfig> {
+        load_file_or_default(self)
+    }
+}
+
 /// Reserved jail tag used to declare that a jail should be running after boot.
 pub const AUTOSTART_TAG: &str = "autostart";
 
@@ -118,8 +209,12 @@ fn project_name_from_path(path: &Path) -> String {
         .map_or_else(|| black_ship_name_from_path(path), ToString::to_string)
 }
 
-/// Load configuration from a file
-pub fn load(path: &Path) -> Result<BlackshipConfig> {
+/// Load configuration from one file or an ordered collection of files.
+pub fn load(source: &(impl ConfigSource + ?Sized)) -> Result<BlackshipConfig> {
+    source.load_config()
+}
+
+fn load_file(path: &Path) -> Result<BlackshipConfig> {
     let content = read_config_file(path)?;
 
     let mut config: BlackshipConfig = toml::from_str(&content)?;
@@ -137,9 +232,13 @@ pub fn load(path: &Path) -> Result<BlackshipConfig> {
 ///
 /// System-level commands (bootstrap, releases, setup) work against the
 /// default paths and should not demand a blackship.toml.
-pub fn load_or_default(path: &Path) -> Result<BlackshipConfig> {
+pub fn load_or_default(source: &(impl ConfigSource + ?Sized)) -> Result<BlackshipConfig> {
+    source.load_config_or_default()
+}
+
+fn load_file_or_default(path: &Path) -> Result<BlackshipConfig> {
     if path.exists() {
-        load(path)
+        load_file(path)
     } else {
         let mut config: BlackshipConfig = toml::from_str("[config]\n")?;
         config.config.project = Some(project_name_from_path(path));

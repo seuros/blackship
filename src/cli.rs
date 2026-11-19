@@ -9,9 +9,9 @@ use std::str::FromStr;
 #[derive(usage_rs::Cli)]
 #[usage(bin = "blackship", version, completion)]
 pub struct Cli {
-    /// Configuration file path
-    #[usage(short, long, default = "blackship.toml")]
-    pub config: PathBuf,
+    /// Configuration files (can be repeated; later files override earlier)
+    #[usage(short, long, var, default = "blackship.toml")]
+    pub config: Vec<PathBuf>,
 
     /// Enable verbose output
     #[usage(short, long)]

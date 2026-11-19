@@ -2,10 +2,10 @@
 
 use crate::error::Result;
 use crate::jail::jail_getid;
+use crate::manifest::ConfigSource;
 use crate::sickbay::{HealthStateRecord, HealthStateStore, HealthStatus};
 use serde::Serialize;
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use super::Bridge;
 
@@ -29,6 +29,7 @@ pub struct JailStatus {
 pub struct InventoryReport {
     pub project: String,
     pub config_path: String,
+    pub config_paths: Vec<String>,
     pub jails: Vec<InventoryJail>,
 }
 
@@ -270,7 +271,7 @@ impl Bridge {
     }
 
     /// Print configured Blackship jails and every other running host jail.
-    pub fn ps_host(&self, config_path: &Path, json: bool) {
+    pub fn ps_host(&self, config_path: &(impl ConfigSource + ?Sized), json: bool) {
         let report = self.inventory_data(config_path);
         if json {
             println!(
@@ -376,7 +377,7 @@ impl Bridge {
     ///
     /// Stopped unmanaged jails are intentionally absent: without a known
     /// manifest there is no authoritative host-wide registry for them.
-    pub fn inventory_data(&self, config_path: &Path) -> InventoryReport {
+    pub fn inventory_data(&self, config_path: &(impl ConfigSource + ?Sized)) -> InventoryReport {
         let statuses = self.ps_data();
         let health_store = HealthStateStore::from_config(Some(&self.config));
         let managed_names: BTreeSet<String> = self
@@ -453,7 +454,12 @@ impl Bridge {
 
         InventoryReport {
             project: self.config.config.project_name().to_string(),
-            config_path: config_path.display().to_string(),
+            config_path: config_path.primary_path().display().to_string(),
+            config_paths: config_path
+                .paths()
+                .into_iter()
+                .map(|path| path.display().to_string())
+                .collect(),
             jails,
         }
     }

@@ -720,7 +720,37 @@ blackship --format json armada -f blackship.toml up --dry-run
 
 #### Config File Merging
 
-Armada supports merging multiple config files (later files override earlier):
+Every manifest-aware command accepts repeated global `-c`/`--config` files.
+Later files override earlier files, tables merge recursively, and named
+`[[jails]]` and `[[networks]]` entries merge by `name`. This makes it possible
+to keep project settings and individual jails in separate files:
+
+```text
+blackship/
+├── project.toml
+└── jails/
+    ├── database.toml
+    └── web.toml
+```
+
+```sh
+blackship \
+  -c project.toml \
+  -c jails/database.toml \
+  -c jails/web.toml \
+  check
+
+blackship \
+  -c project.toml \
+  -c jails/database.toml \
+  -c jails/web.toml \
+  eva database --dry-run
+```
+
+The first path supplies the project name when `[config].project` is omitted.
+With one path, `-c blackship.toml` behaves exactly as before.
+
+Armada continues to support its command-local `-f`/`--file` spelling:
 
 ```sh
 # Merge base config with production overrides

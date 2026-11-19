@@ -1,7 +1,6 @@
 //! Warden supervisor command
 
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::Mutex;
@@ -11,7 +10,11 @@ use crate::{bridge, jail, manifest, sickbay, warden};
 
 type SharedPacer = Arc<std::sync::Mutex<sickbay::pacer::Pacer>>;
 
-pub fn handle(config_path: &Path, verbose: bool, autostart_only: bool) -> Result<()> {
+pub fn handle(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    verbose: bool,
+    autostart_only: bool,
+) -> Result<()> {
     let config = manifest::load(config_path)?;
     let project_prefix = format!("{}-", config.config.project_name());
     let configured_jails = config.jails.clone();

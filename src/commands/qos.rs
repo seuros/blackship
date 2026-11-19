@@ -1,7 +1,5 @@
 //! Manual `QoS` phase control for jails started outside `supervise`.
 
-use std::path::Path;
-
 use crate::bridge::{Bridge, ShiftOutcome};
 use crate::error::{Error, Result};
 use crate::manifest;
@@ -39,7 +37,7 @@ impl QosRequest {
 }
 
 pub fn handle_qos(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     verbose: bool,
     jail: &str,
     request: QosRequest,

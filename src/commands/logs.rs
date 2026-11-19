@@ -1,12 +1,15 @@
 //! Jail log inspection command.
 
-use std::path::Path;
-
 use crate::console;
 use crate::error::Result;
 use crate::{error, manifest};
 
-pub fn handle(config_path: &Path, jail: &str, follow: bool, lines: usize) -> Result<()> {
+pub fn handle(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+    follow: bool,
+    lines: usize,
+) -> Result<()> {
     let config = manifest::load(config_path)?;
 
     let (service_name, full_name) = config.require_jail_names(jail)?;

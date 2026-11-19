@@ -1,7 +1,5 @@
 //! Lifecycle post-mortem over the durable audit log.
 
-use std::path::Path;
-
 use crate::audit::{AuditEvent, AuditLog, AuditRecord};
 use crate::error::{Error, Result};
 use crate::manifest;
@@ -85,7 +83,10 @@ pub fn summarize(records: &[AuditRecord]) -> Summary {
     summary
 }
 
-fn report(config_path: &Path, jail: &str) -> Result<(String, Vec<AuditRecord>, Summary)> {
+fn report(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+) -> Result<(String, Vec<AuditRecord>, Summary)> {
     let config = manifest::load(config_path)?;
     let project = config.config.project_name();
     let log = AuditLog::from_config(Some(&config));
@@ -148,12 +149,19 @@ fn json_value(full_name: &str, records: &[AuditRecord], summary: &Summary) -> se
 }
 
 /// Return a jail's lifecycle history without writing terminal output.
-pub fn data(config_path: &Path, jail: &str) -> Result<serde_json::Value> {
+pub fn data(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+) -> Result<serde_json::Value> {
     let (full_name, records, summary) = report(config_path, jail)?;
     Ok(json_value(&full_name, &records, &summary))
 }
 
-pub fn handle_audit(config_path: &Path, jail: &str, json: bool) -> Result<()> {
+pub fn handle_audit(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+    json: bool,
+) -> Result<()> {
     let (full_name, records, summary) = report(config_path, jail)?;
 
     if json {

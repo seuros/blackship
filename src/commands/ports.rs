@@ -1,13 +1,11 @@
 //! Port forwarding commands: expose, ports, unexpose
 
-use std::path::Path;
-
 use crate::bulkhead::PortForward;
 use crate::error::Result;
 use crate::{bridge, error, manifest};
 
 pub fn handle_expose(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     verbose: bool,
     jail: &str,
     port: u16,
@@ -49,7 +47,10 @@ pub fn handle_expose(
     Ok(())
 }
 
-pub fn handle_ports(config_path: &Path, jail: Option<&str>) -> Result<()> {
+pub fn handle_ports(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: Option<&str>,
+) -> Result<()> {
     let forwards = list_ports(config_path, jail)?;
 
     println!("Port forwarding status:");
@@ -83,7 +84,10 @@ pub fn handle_ports(config_path: &Path, jail: Option<&str>) -> Result<()> {
 }
 
 /// Return configured port forwards without writing terminal output.
-pub fn list_ports(config_path: &Path, jail: Option<&str>) -> Result<Vec<PortForward>> {
+pub fn list_ports(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: Option<&str>,
+) -> Result<Vec<PortForward>> {
     let config = manifest::load(config_path)?;
     let bridge = bridge::Bridge::new(config)?;
 
@@ -98,7 +102,11 @@ pub fn list_ports(config_path: &Path, jail: Option<&str>) -> Result<Vec<PortForw
     })
 }
 
-pub fn handle_unexpose(config_path: &Path, verbose: bool, jail: &str) -> Result<()> {
+pub fn handle_unexpose(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    verbose: bool,
+    jail: &str,
+) -> Result<()> {
     let config = manifest::load(config_path)?;
     let (_service_name, full_name) = config.require_jail_names(jail)?;
     let mut bridge = bridge::Bridge::open(config, verbose)?;
