@@ -564,8 +564,9 @@ fn the_record_dir_is_private_and_a_second_holder_is_turned_away() {
     let message = bench.store.lock(JAIL).err().unwrap().to_string();
     assert!(message.contains("running right now"), "{message}");
     drop(held);
+    bench.store.delete(JAIL).unwrap();
     bench.store.lock(JAIL).unwrap().discard();
-    assert!(!bench.dir.path().join("migrations/mgs-web.lock").exists());
+    assert!(!bench.dir.path().join("migrations").exists());
 }
 
 #[test]

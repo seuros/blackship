@@ -149,9 +149,13 @@ pub struct Lock {
 }
 
 impl Lock {
-    /// Drop the lock file with the settled record, so nothing is left behind.
+    /// Drop the lock file with the settled record, and the directory once it is empty,
+    /// so nothing is left behind.
     pub fn discard(self) {
         let _ = fs::remove_file(&self.path);
+        if let Some(dir) = self.path.parent() {
+            let _ = fs::remove_dir(dir);
+        }
     }
 }
 

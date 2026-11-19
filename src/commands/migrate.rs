@@ -17,7 +17,7 @@ use saga_machines::Saga;
 use serde::Serialize;
 
 use self::host::Host;
-use self::record::{Record, RecordStore, refuse_second};
+use self::record::{Lock, Record, RecordStore, refuse_second};
 use self::saga::{Driver, STEPS, Settled, Step, saga_id};
 use crate::error::{Error, Result};
 use crate::manifest;
@@ -207,10 +207,16 @@ fn start(
     let source_path = zfs.jail_path(&full_name);
     let host = Host::new(&config, zfs, &record);
     let mut driver = Driver::restore(host, record, &store)?;
-    let settled = driver.drive()?;
-    conclude(settled, driver.record(), &source_path)?;
-    lock.discard();
-    Ok(())
+    let settled = driver.drive();
+    release(lock, &store, &full_name);
+    conclude(settled?, driver.record(), &source_path)
+}
+
+/// Let go of the migration lock, and remove its file when no record is left.
+fn release(lock: Lock, store: &RecordStore, jail: &str) {
+    if store.exists(jail).is_ok_and(|recorded| !recorded) {
+        lock.discard();
+    }
 }
 
 /// Report how a start or resume ended: the destination steps, or why it did not.
@@ -301,13 +307,13 @@ fn resume_inner(
         record.jail, record.target, record.remote_dataset
     );
     let source_path = zfs.jail_path(&record.jail);
+    let jail = record.jail.clone();
     let host = Host::new(&config, zfs, &record);
     let mut driver = Driver::restore(host, record, &store)?;
-    let settled = driver.drive()?;
-    conclude(settled, driver.record(), &source_path)?;
-    let destination = driver.record().fence.clone();
-    lock.discard();
-    Ok(destination)
+    let settled = driver.drive();
+    release(lock, &store, &jail);
+    conclude(settled?, driver.record(), &source_path)?;
+    Ok(driver.record().fence.clone())
 }
 
 fn abort(config_path: &(impl manifest::ConfigSource + ?Sized), jail: &str) -> Result<()> {
@@ -322,8 +328,9 @@ fn abort(config_path: &(impl manifest::ConfigSource + ?Sized), jail: &str) -> Re
     let target = record.target.clone();
     let host = Host::new(&config, zfs, &record);
     let mut driver = Driver::restore(host, record, &store)?;
-    driver.abort()?;
-    lock.discard();
+    let aborted = driver.abort();
+    release(lock, &store, &jail);
+    aborted?;
     println!(
         "Aborted the migration of '{jail}': nothing is left on {target}, and '{jail}' here is as it was."
     );
