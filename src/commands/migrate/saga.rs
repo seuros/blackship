@@ -70,6 +70,9 @@ pub trait Effects {
     fn transfer(&mut self) -> Result<()>;
     /// Destroy the destination dataset; `Err` unless it is verifiably gone.
     fn discard_destination(&mut self) -> Result<()>;
+    /// Whether the source took writes after the migration snapshot, which would make
+    /// the copy stale.
+    fn source_changed(&mut self) -> Result<bool>;
     fn fence_state(&mut self) -> Result<Option<String>>;
     fn fence(&mut self, destination: &str) -> Result<()>;
     fn clear_fence(&mut self) -> Result<()>;
@@ -277,6 +280,16 @@ impl<'a, E: Effects> Driver<'a, E> {
                 Error::JailOperation(format!(
                     "'{}' is already fenced for a different migration ({holder})",
                     self.record.jail
+                )),
+            ));
+            return Ok(Outcome::Failure);
+        }
+        if self.effects.source_changed()? {
+            self.failure = Some((
+                Step::Fence,
+                Error::JailOperation(format!(
+                    "'{}' changed after the migration snapshot, so the copy on {} is stale; nothing was fenced",
+                    self.record.jail, self.record.target
                 )),
             ));
             return Ok(Outcome::Failure);

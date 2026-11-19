@@ -113,3 +113,11 @@ fn a_bare_migrate_needs_a_jail_and_a_target() {
     let (jail, target) = args(Some("web"), None);
     assert!(mode(jail, target, None, false, None, None).is_err());
 }
+
+#[test]
+fn nothing_written_since_the_snapshot_reads_as_zero_bytes() {
+    assert!(host::is_unwritten("0B"));
+    assert!(host::is_unwritten("0\n"));
+    assert!(!host::is_unwritten("64K"));
+    assert!(!host::is_unwritten("-"));
+}

@@ -24,6 +24,7 @@ struct World {
     fail_delete_snapshot: bool,
     fail_discard: bool,
     unreachable: bool,
+    changed: bool,
 }
 
 #[derive(Clone, Default)]
@@ -104,6 +105,10 @@ impl Effects for Fake {
         }
         world.remote = Remote::Absent;
         Ok(())
+    }
+
+    fn source_changed(&mut self) -> Result<bool> {
+        Ok(self.0.borrow().changed)
     }
 
     fn fence_state(&mut self) -> Result<Option<String>> {
@@ -577,4 +582,27 @@ fn the_second_migration_is_refused_by_naming_the_record_and_both_ways_out() {
     assert!(message.contains(path.to_str().unwrap()), "{message}");
     assert!(message.contains("--resume mgs-web"), "{message}");
     assert!(message.contains("--abort mgs-web"), "{message}");
+}
+
+#[test]
+fn a_source_that_changed_since_the_snapshot_is_not_fenced_over_a_stale_copy() {
+    let bench = Bench::new();
+    let fake = Fake::default();
+    crash_at(fault::Point::BeforeFence, &bench, &fake);
+    fake.0.borrow_mut().changed = true;
+
+    let settled = bench.reopened(&fake).drive().unwrap();
+    let Settled::RolledBack {
+        failed: Some((Step::Fence, error)),
+    } = settled
+    else {
+        panic!("a stale copy must roll back");
+    };
+    assert!(error.to_string().contains("stale"), "{error}");
+    let world = fake.0.borrow();
+    assert_eq!(world.fence, None);
+    assert_eq!(world.remote, Remote::Absent);
+    assert!(!world.snapshot);
+    drop(world);
+    assert!(!bench.recorded());
 }

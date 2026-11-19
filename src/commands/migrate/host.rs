@@ -143,6 +143,12 @@ impl Effects for Host<'_> {
         Ok(())
     }
 
+    fn source_changed(&mut self) -> Result<bool> {
+        let written =
+            ZfsManager::get_property(&self.source_dataset, &format!("written@{}", self.snapshot))?;
+        Ok(!is_unwritten(&written))
+    }
+
     fn fence_state(&mut self) -> Result<Option<String>> {
         Ok(self.zfs.jail_migration_fence(&self.jail))
     }
@@ -162,4 +168,9 @@ impl Effects for Host<'_> {
     fn clear_fence(&mut self) -> Result<()> {
         self.zfs.clear_jail_migration_fence(&self.jail)
     }
+}
+
+/// `zfs get written@snap` prints a human size: zero is "0B", and "-" is no answer.
+pub fn is_unwritten(written: &str) -> bool {
+    matches!(written.trim(), "0" | "0B")
 }
