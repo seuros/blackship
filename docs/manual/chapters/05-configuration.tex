@@ -2,8 +2,28 @@
 \label{ch:configuration}
 
 Blackship reads TOML from \file{blackship.toml} by default. Select another file
-with the global \command{--config} option. Armada can merge several manifests in
-order; later files override earlier values.
+with the global \command{--config} option, and repeat it to merge several files
+in order: \command{blackship -c project.toml -c jails/web.toml check}.
+
+\section{Merging files}
+
+Every command that loads the manifest takes repeated \command{-c} files; Armada
+keeps its command-local \command{-f}. Files merge as TOML before anything is
+deserialized, so a later file overrides exactly the keys it writes. Tables merge
+recursively, \setting{[[jails]]} and \setting{[[networks]]} entries merge with
+the earlier entry of the same \setting{name} or are appended, and any other
+value, arrays included, replaces the earlier one. A \setting{depends\_on} list in a later
+file therefore replaces the earlier list rather than extending it.
+
+The first file names the project when \setting{[config].project} is omitted. At
+least one file must carry the \setting{[config]} table. A name may appear only
+once inside a single file; repeating it is an error that names the file, as is a
+parse error or an entry without a name. Relative paths such as \setting{build}
+are resolved against the working directory, not against the file that wrote
+them. With one file, behavior is unchanged, and a missing default file still
+falls back to built-in defaults for the system-level commands; with several
+files every one must exist. Only the first file reaches \command{mcp}, and
+\command{armada} reads its own \command{-f} list.
 
 \section{Global configuration}
 

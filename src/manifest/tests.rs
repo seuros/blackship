@@ -490,6 +490,58 @@ depends_on = ["database"]
 }
 
 #[test]
+fn test_merge_errors_name_the_offending_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = write(tmp.path(), "base.toml", "[config]\nproject = \"demo\"\n");
+    let broken = write(tmp.path(), "broken.toml", "[[jails]\nname = \"web\"\n");
+
+    let error = load_merged(&[base, broken.clone()]).unwrap_err();
+
+    assert!(error.to_string().contains("broken.toml"), "{error}");
+    assert_eq!(error.code(), "config_parse_failed");
+
+    let single = load(broken.as_path()).unwrap_err();
+    assert!(single.to_string().contains("broken.toml"), "{single}");
+    assert_eq!(single.code(), "config_parse_failed");
+}
+
+#[test]
+fn test_merge_refuses_repeated_or_missing_names_inside_one_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = write(tmp.path(), "base.toml", "[config]\nproject = \"demo\"\n");
+    let repeated = write(
+        tmp.path(),
+        "repeated.toml",
+        "[[jails]]\nname = \"web\"\n\n[[jails]]\nname = \"web\"\nhostname = \"second\"\n",
+    );
+    let nameless = write(tmp.path(), "nameless.toml", "[[networks]]\nsubnet = \"10.0.0.0/24\"\n");
+
+    let error = load_merged(&[base.clone(), repeated]).unwrap_err().to_string();
+    assert!(error.contains("repeated.toml"), "{error}");
+    assert!(error.contains("duplicate [[jails]] name 'web'"), "{error}");
+
+    let error = load_merged(&[base, nameless]).unwrap_err().to_string();
+    assert!(error.contains("nameless.toml"), "{error}");
+    assert!(error.contains("[[networks]] entry without a name"), "{error}");
+}
+
+#[test]
+fn test_one_config_path_keeps_the_single_file_diagnostics() {
+    let tmp = tempfile::tempdir().unwrap();
+    let typo = write(
+        tmp.path(),
+        "typo.toml",
+        "[config]\nproject = \"demo\"\nzfs_enabled = \"yes\"\n",
+    );
+    let source = ConfigPaths::new(vec![typo]).unwrap();
+
+    let error = load(&source).unwrap_err().to_string();
+
+    assert!(error.contains("typo.toml"), "{error}");
+    assert!(error.contains("line 3"), "{error}");
+}
+
+#[test]
 fn test_config_paths_reject_an_empty_source() {
     let error = ConfigPaths::new(Vec::new()).unwrap_err();
 

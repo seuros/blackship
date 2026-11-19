@@ -38,6 +38,12 @@ pub enum Error {
     #[error("Failed to parse config: {0}")]
     ConfigParse(#[from] toml::de::Error),
 
+    #[error("Failed to parse config file '{path}': {source}")]
+    ConfigFileParse {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
+
     #[error("Config validation failed: {0}")]
     ConfigValidation(String),
 
@@ -229,7 +235,7 @@ impl Error {
             Self::WithOutput { source, .. } => source.code(),
             Self::Io(_) => "io_error",
             Self::ConfigRead { .. } => "config_read_failed",
-            Self::ConfigParse(_) => "config_parse_failed",
+            Self::ConfigParse(_) | Self::ConfigFileParse { .. } => "config_parse_failed",
             Self::ConfigValidation(_) => "config_validation_failed",
             Self::UnknownDependency(_) => "unknown_dependency",
             Self::JailNotFound(_) => "jail_not_found",

@@ -415,7 +415,8 @@ whole profile.
 
 `blackship ps --host` adds running jails outside the selected manifest to the
 configured Blackship inventory. Its result identifies each row's manager and
-ownership, includes the selected project and config path, and includes a
+ownership, includes the selected project, the first config path
+(`config_path`) and every merged path (`config_paths`), and includes a
 passive, last-known health summary. `ps --host` never executes health checks or
 recovery actions: `health` and `supervise` atomically refresh the summary under
 `<data_dir>/health`. The summary reports why a result is unknown (for example,
@@ -754,7 +755,11 @@ blackship \
 ```
 
 The first path supplies the project name when `[config].project` is omitted.
-With one path, `-c blackship.toml` behaves exactly as before.
+With one path, `-c blackship.toml` behaves exactly as before. Arrays other than
+`[[jails]]` and `[[networks]]` replace the earlier value, a name may appear only
+once per file, and errors name the offending file. Relative paths (`build`,
+`jailfile`) resolve against the working directory, not the file that wrote them.
+`mcp` reads only the first file; `armada` uses its own `-f` list.
 
 Armada continues to support its command-local `-f`/`--file` spelling:
 

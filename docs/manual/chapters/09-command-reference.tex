@@ -12,7 +12,8 @@ option differs from this edition.
 Option & Effect \\
 \midrule
 \command{-c, --config <path>} & Select the manifest; default is
-\file{blackship.toml}. \\
+\file{blackship.toml}. Repeat it to merge files in order, later files winning
+(see Chapter~\ref{ch:configuration}). \\
 \command{-v, --verbose} & Emit additional operational diagnostics. \\
 \command{--no-escalate} & Fail privileged commands rather than re-executing
 through mdo, doas, or sudo. \\
@@ -180,8 +181,10 @@ release listing, stats, one-shot health, audit, snapshot listing, and Armada
 status. Lifecycle JSON is restricted to \command{--dry-run}. Streaming watch or
 follow modes cannot fit a single response envelope.
 
-\command{ps --host} returns the selected project and config path plus ownership
-metadata for each row. It includes every manifest jail and running unmanaged
+\command{ps --host} returns the selected project, the first config path as
+\setting{config\_path}, every path in merge order as \setting{config\_paths},
+plus ownership metadata for each row. \command{host} reports the same pair as
+\setting{config.path} and \setting{config.paths}. It includes every manifest jail and running unmanaged
 jails. Each row also has a passive, last-known health summary refreshed by
 \command{health} or \command{supervise}; inventory itself does not execute checks
 or recovery actions. The summary carries a timestamp and an explicit reason

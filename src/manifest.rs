@@ -63,7 +63,11 @@ impl ConfigSource for ConfigPaths {
     }
 
     fn load_config(&self) -> Result<BlackshipConfig> {
-        load_merged(&self.paths)
+        if self.paths.len() == 1 {
+            load_file(self.primary_path())
+        } else {
+            load_merged(&self.paths)
+        }
     }
 
     fn load_config_or_default(&self) -> Result<BlackshipConfig> {
@@ -217,7 +221,11 @@ pub fn load(source: &(impl ConfigSource + ?Sized)) -> Result<BlackshipConfig> {
 fn load_file(path: &Path) -> Result<BlackshipConfig> {
     let content = read_config_file(path)?;
 
-    let mut config: BlackshipConfig = toml::from_str(&content)?;
+    let mut config: BlackshipConfig =
+        toml::from_str(&content).map_err(|source| Error::ConfigFileParse {
+            path: path.to_path_buf(),
+            source,
+        })?;
 
     if config.config.project.is_none() {
         config.config.project = Some(project_name_from_path(path));
@@ -264,7 +272,7 @@ pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
 
     let mut merged = toml::Table::new();
     for path in paths {
-        let overlay: toml::Table = toml::from_str(&read_config_file(path)?)?;
+        let overlay = parse_fragment(path, &read_config_file(path)?)?;
         merge_tables(&mut merged, overlay);
     }
 
@@ -280,6 +288,38 @@ pub fn load_merged(paths: &[PathBuf]) -> Result<BlackshipConfig> {
 
 /// Arrays of tables merged entry by entry on their `name` key.
 const NAMED_ARRAYS: &[&str] = &["jails", "networks"];
+
+/// Parse one file of a merge, naming it in every error. A name repeated inside
+/// one file is refused: merging would silently fold the second entry into the
+/// first, while a duplicate in a single manifest has always been an error.
+fn parse_fragment(path: &Path, content: &str) -> Result<toml::Table> {
+    let table: toml::Table =
+        toml::from_str(content).map_err(|source| Error::ConfigFileParse {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    for key in NAMED_ARRAYS {
+        let Some(toml::Value::Array(entries)) = table.get(*key) else {
+            continue;
+        };
+        let mut seen = std::collections::HashSet::new();
+        for entry in entries {
+            let Some(name) = entry.get("name").and_then(toml::Value::as_str) else {
+                return Err(Error::ConfigValidation(format!(
+                    "{}: [[{key}]] entry without a name",
+                    path.display()
+                )));
+            };
+            if !seen.insert(name) {
+                return Err(Error::ConfigValidation(format!(
+                    "{}: duplicate [[{key}]] name '{name}' in one file",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(table)
+}
 
 fn merge_tables(base: &mut toml::Table, overlay: toml::Table) {
     for (key, value) in overlay {
