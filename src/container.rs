@@ -161,6 +161,29 @@ impl Mount {
         self.noexec
     }
 
+    /// Validate both sides of the mount before any privileged operation.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if !self.host.is_absolute() || !self.host.is_dir() {
+            return Err(Error::InvalidArgument(format!(
+                "mount source '{}' must be an existing absolute directory",
+                self.host.display()
+            )));
+        }
+        let clean = self.jail.components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        });
+        if !self.jail.is_absolute() || !clean || self.jail == Path::new("/") {
+            return Err(Error::InvalidArgument(format!(
+                "mount target '{}' must be an absolute path below / with no '..'",
+                self.jail.display()
+            )));
+        }
+        Ok(())
+    }
+
     /// The `mount_nullfs` options, one per `-o`: `mount_nullfs(8)` silently
     /// ignores a comma-joined list, read-only included.
     pub(crate) fn options(&self) -> Vec<&'static str> {
@@ -173,6 +196,45 @@ impl Mount {
         }
         options
     }
+}
+
+/// Nullfs-mount `mount` inside `root`, creating and confining the target.
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "bridge lifecycle is a sibling module; keep this helper crate-internal"
+)]
+pub(super) fn mount_nullfs(root: &Path, mount: &Mount) -> Result<PathBuf> {
+    mount.validate()?;
+    let (host, jail) = (&mount.host, &mount.jail);
+    let canonical_host = host.canonicalize()?;
+    let target = root.join(jail.strip_prefix("/").unwrap_or(jail));
+    crate::blueprint::context::reject_symlink_ancestors(root, &target)?;
+    std::fs::create_dir_all(&target)?;
+    let canonical_root = root.canonicalize()?;
+    let canonical_target: PathBuf = target.canonicalize()?;
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err(Error::InvalidArgument(format!(
+            "mount target '{}' escapes the container root",
+            jail.display()
+        )));
+    }
+    let mut command = std::process::Command::new("/sbin/mount_nullfs");
+    for option in mount.options() {
+        command.args(["-o", option]);
+    }
+    let output = command
+        .arg(&canonical_host)
+        .arg(&canonical_target)
+        .output()?;
+    if !output.status.success() {
+        return Err(Error::JailCreationFailed(format!(
+            "mount_nullfs {} {}: {}",
+            canonical_host.display(),
+            canonical_target.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(canonical_target)
 }
 
 /// Resource limits enforced by rctl(8) and cpuset(1).

@@ -219,6 +219,8 @@ struct StartClaims {
     allocated_ip: Option<(String, IpAddr)>,
     /// Epair or netgraph pair, with its state record on disk.
     vnet_setup: Option<VnetSetup>,
+    /// Read-only nullfs mountpoints created from the manifest.
+    mounts: Vec<PathBuf>,
     /// Set once jail(2) is attempted: devfs may be mounted and the jail is reported failed.
     jail_root: Option<PathBuf>,
     /// The live jail, once jail(2) succeeded.
@@ -680,6 +682,7 @@ impl Bridge {
 
         let path = self.claim_jail_root(jail_def, full_name, scope, claims)?;
         self.prepare_jail_root(jail_def, full_name, &path)?;
+        self.claim_jail_mounts(jail_def, full_name, &path, scope, claims)?;
 
         // Phase 3: the IP. Inline because `jail_def` borrows `self.config`.
         let effective_ip: Option<IpAddr> = if let Some(network) = &jail_def.network {
@@ -844,6 +847,42 @@ impl Bridge {
         crate::fault::trip(crate::fault::Point::AfterZfs)?;
 
         Ok(path)
+    }
+
+    /// Attach every manifest volume and persist each claim before continuing.
+    fn claim_jail_mounts(
+        &self,
+        jail_def: &crate::manifest::JailDef,
+        full_name: &str,
+        path: &Path,
+        scope: &mut ScopeRecord,
+        claims: &mut StartClaims,
+    ) -> Result<()> {
+        let Some(config) = &jail_def.mount else {
+            return Ok(());
+        };
+        for mount in config.parsed_volumes()? {
+            let target = crate::container::mount_nullfs(path, &mount)?;
+            claims.mounts.push(target.clone());
+            scope.mounts.push(target.clone());
+            self.persist_scope(scope);
+            self.audit.record(
+                &AuditRecord::new(full_name, AuditEvent::Provisioned)
+                    .with("step", "mount")
+                    .with("source", mount.host_path().display())
+                    .with("target", target.display())
+                    .with("mode", "ro,nosuid,noexec"),
+            );
+            if self.verbose {
+                println!(
+                    "  Mounted {} at {} (read-only, nosuid, noexec)",
+                    mount.host_path().display(),
+                    mount.jail_path().display()
+                );
+            }
+        }
+        crate::fault::trip(crate::fault::Point::AfterMount)?;
+        Ok(())
     }
 
     /// Phase 2: symlink checks, userland, DNS. Claims nothing.
@@ -1182,6 +1221,7 @@ impl Bridge {
             self.mark_jail_failed(full_name, root);
             return;
         }
+        self.release_jail_mounts(full_name, &claims.mounts, true);
         if let Some(root) = &claims.jail_root {
             crate::sys::unmount_jail_devfs(root);
         }
@@ -1399,15 +1439,24 @@ impl Bridge {
         }
 
         let mut stop_result = Ok(());
-        if let Some((hook_runner, path)) = post_stop_hook {
+        let leaked_mounts = if let Some((hook_runner, path)) = post_stop_hook {
             let hook_context = HookContext::new(&full_name, &path);
             if let Err(e) = hook_runner.execute_phase(HookPhase::PostStop, &hook_context) {
                 stop_result = Err(e);
             }
+            let leaked_mounts = self.release_scope_mounts(&full_name);
             crate::sys::unmount_jail_devfs(&path);
+            leaked_mounts
+        } else {
+            self.release_scope_mounts(&full_name)
+        };
+        if leaked_mounts {
+            stop_result = Err(Error::JailOperation(format!(
+                "one or more volume mounts for '{full_name}' could not be detached"
+            )));
         }
 
-        let leaked_resources = self.settle_stopped(&full_name);
+        let leaked_resources = self.settle_stopped(&full_name) || leaked_mounts;
 
         // The scope record is the GC work-list: a leak keeps it alive in `Failed`.
         let peaks = self.peak_details(&full_name);
@@ -1431,6 +1480,63 @@ impl Bridge {
         }
 
         stop_result
+    }
+
+    /// Detach known mountpoints deepest-first and retain only leaks in scope.
+    fn release_jail_mounts(
+        &self,
+        full_name: &str,
+        mountpoints: &[PathBuf],
+        audit_rollback: bool,
+    ) -> bool {
+        let mut ordered = mountpoints.to_vec();
+        ordered.sort_by_key(|path| std::cmp::Reverse(path.as_os_str().len()));
+        for mountpoint in &ordered {
+            crate::sys::unmount_quiet(mountpoint);
+        }
+
+        let retained = match crate::sys::mount_table() {
+            Ok(table) => ordered
+                .into_iter()
+                .filter(|mountpoint| {
+                    !crate::sys::mounted_paths_under(mountpoint, &table).is_empty()
+                })
+                .collect::<Vec<_>>(),
+            Err(error) => {
+                eprintln!("Warning: could not verify volume teardown for '{full_name}': {error}");
+                ordered
+            }
+        };
+        self.amend_scope(full_name, |scope| scope.mounts.clone_from(&retained));
+        if audit_rollback {
+            for mountpoint in mountpoints {
+                self.audit.record(
+                    &AuditRecord::new(full_name, AuditEvent::RollbackStep)
+                        .with("step", "mount")
+                        .with("target", mountpoint.display())
+                        .with(
+                            "outcome",
+                            if retained.contains(mountpoint) {
+                                "leaked"
+                            } else {
+                                "released"
+                            },
+                        ),
+                );
+            }
+        }
+        !retained.is_empty()
+    }
+
+    fn release_scope_mounts(&self, full_name: &str) -> bool {
+        let mountpoints = self
+            .scope_store
+            .get(full_name)
+            .ok()
+            .flatten()
+            .map(|scope| scope.mounts)
+            .unwrap_or_default();
+        self.release_jail_mounts(full_name, &mountpoints, false)
     }
 
     /// `pre_stop` hooks, drain, stop command and `rc.shutdown`; returns the
