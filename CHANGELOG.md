@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.1](https://github.com/seuros/blackship/compare/blackship-v0.5.0...blackship-v0.5.1) (2026-11-19)
+
+
+### Features
+
+* **armada:** activate read-only manifest volumes ([#41](https://github.com/seuros/blackship/issues/41)) ([c1496c3](https://github.com/seuros/blackship/commit/c1496c3d1e9b6af0192cd293b3bed435b2272db9))
+* merge repeated global config files ([#42](https://github.com/seuros/blackship/issues/42)) ([0734c46](https://github.com/seuros/blackship/commit/0734c46e617b523dbd05117168ae7b0151e0cc62))
+
+
+### Bug Fixes
+
+* **armada:** keep manifest volumes from blocking teardown and leaking on gc ([b66afa0](https://github.com/seuros/blackship/commit/b66afa0904179910e95a8661e115810381286efa))
+* **config:** name the offending file in merge errors ([82434c2](https://github.com/seuros/blackship/commit/82434c251a6e634556ccbaeaceabb722de924d37))
+
 ## [0.5.0](https://github.com/seuros/blackship/compare/blackship-v0.4.2...blackship-v0.5.0) (2026-11-15)
 
 
