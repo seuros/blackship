@@ -13,7 +13,7 @@ use crate::error::{Error, Result};
 use crate::manifest;
 
 pub fn handle_migrate(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     jail: &str,
     target: &str,
     remote_dataset: Option<String>,
@@ -170,7 +170,10 @@ fn fence_value(target: &str, remote_dataset: &str, at: i64) -> String {
 }
 
 /// Lift a migration fence.
-pub fn handle_unfence(config_path: &Path, jail: &str) -> Result<()> {
+pub fn handle_unfence(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+) -> Result<()> {
     let config = manifest::load(config_path)?;
     let zfs = super::snapshot::require_zfs(&config)?;
     let (_, full_name) = config.require_jail_names(jail)?;

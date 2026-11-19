@@ -392,6 +392,73 @@ fn test_merge_later_file_can_switch_settings_off() {
 }
 
 #[test]
+fn test_config_paths_use_the_shared_merge_engine() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = write(
+        tmp.path(),
+        "project.toml",
+        r#"
+[config]
+project = "tutorial"
+
+[[jails]]
+name = "database"
+release = "15.1-RELEASE"
+"#,
+    );
+    let database = write(
+        tmp.path(),
+        "database.toml",
+        r#"
+[[jails]]
+name = "database"
+
+[jails.params]
+sysvmsg = "new"
+sysvsem = "new"
+sysvshm = "new"
+"#,
+    );
+    let web = write(
+        tmp.path(),
+        "web.toml",
+        r#"
+[[jails]]
+name = "web"
+release = "15.1-RELEASE"
+depends_on = ["database"]
+"#,
+    );
+    let source = ConfigPaths::new(vec![project.clone(), database.clone(), web.clone()]).unwrap();
+
+    let config = load(&source).unwrap();
+
+    assert_eq!(source.primary_path(), project);
+    assert_eq!(
+        source.paths(),
+        vec![project.as_path(), database.as_path(), web.as_path()]
+    );
+    assert_eq!(config.config.project_name(), "tutorial");
+    assert_eq!(config.jails.len(), 2);
+    assert_eq!(
+        config.get_jail("database").unwrap().params["sysvshm"].as_str(),
+        Some("new")
+    );
+    assert_eq!(config.get_jail("web").unwrap().depends_on, ["database"]);
+}
+
+#[test]
+fn test_config_paths_reject_an_empty_source() {
+    let error = ConfigPaths::new(Vec::new()).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("At least one configuration file")
+    );
+}
+
+#[test]
 fn test_static_ip_reads_ip_cidr_and_ip() {
     let cidr: JailNetworkConfig = toml::from_str("ip_cidr = \"10.77.0.30/24\"").unwrap();
     assert_eq!(cidr.static_ip(), Some("10.77.0.30".parse().unwrap()));

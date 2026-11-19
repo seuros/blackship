@@ -1,7 +1,5 @@
 //! Bootstrap and release management commands
 
-use std::path::Path;
-
 use crate::cli::ReleasesAction;
 use crate::error::Result;
 use crate::host::Host;
@@ -9,13 +7,13 @@ use crate::release::Bootstrap;
 use crate::{manifest, provision};
 
 pub fn handle_bootstrap(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     release: &str,
     force: bool,
     archives: Option<Vec<String>>,
     pkgbase: bool,
 ) -> Result<()> {
-    let host = Host::from_manifest(config_path)?;
+    let host = Host::from_source(config_path)?;
 
     let mut plan = Bootstrap::release(release);
     if force {
@@ -52,7 +50,7 @@ pub fn release_zfs(config: &manifest::BlackshipConfig) -> Option<crate::zfs::Zfs
 }
 
 pub fn handle_releases(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     action: Option<ReleasesAction>,
     json: bool,
 ) -> Result<()> {
@@ -96,7 +94,7 @@ pub fn handle_releases(
         ReleasesAction::Delete { release } => {
             // The library call is ZFS-aware: a release dataset that clones
             // still depend on is refused whole, never emptied file by file.
-            let host = Host::from_manifest(config_path)?;
+            let host = Host::from_source(config_path)?;
             if !host.has_release(&release)? {
                 return Err(crate::error::Error::ReleaseNotFound(release));
             }
@@ -117,7 +115,9 @@ pub fn handle_releases(
 }
 
 /// Return bootstrapped releases without writing terminal output.
-pub fn releases_data(config_path: &Path) -> Result<Vec<serde_json::Value>> {
+pub fn releases_data(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+) -> Result<Vec<serde_json::Value>> {
     let config = manifest::load_or_default(config_path)?;
     let bs = provision::Provisioner::from_config(&config.config)?;
     Ok(bs

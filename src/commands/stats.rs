@@ -4,11 +4,9 @@
 //! JIDs to names, `ps --libxo json` provides per-process CPU and RSS,
 //! aggregated here per jail.
 
-use std::collections::HashMap;
-use std::path::Path;
-
 use crate::error::Result;
 use crate::manifest;
+use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 struct JailStats {
@@ -19,7 +17,10 @@ struct JailStats {
 
 type StatsRow = (String, String, JailStats);
 
-fn collect_rows(config_path: &Path, jail: Option<String>) -> Result<Vec<StatsRow>> {
+fn collect_rows(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: Option<String>,
+) -> Result<Vec<StatsRow>> {
     let config = manifest::load_or_default(config_path)?;
 
     // JID -> jail name
@@ -107,12 +108,19 @@ fn json_rows(rows: &[StatsRow]) -> Vec<serde_json::Value> {
 }
 
 /// Return per-jail statistics without writing terminal output.
-pub fn data(config_path: &Path, jail: Option<String>) -> Result<Vec<serde_json::Value>> {
+pub fn data(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: Option<String>,
+) -> Result<Vec<serde_json::Value>> {
     let rows = collect_rows(config_path, jail)?;
     Ok(json_rows(&rows))
 }
 
-pub fn handle(config_path: &Path, jail: Option<String>, json: bool) -> Result<()> {
+pub fn handle(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: Option<String>,
+    json: bool,
+) -> Result<()> {
     let rows = collect_rows(config_path, jail)?;
 
     if json {

@@ -6,6 +6,7 @@ use crate::cli::{
 };
 use crate::commands::lifecycle::Operation;
 use crate::error::{Error, Result};
+use crate::manifest::ConfigSource;
 use crate::output::CliError;
 use crate::{commands, console, manifest};
 use std::ffi::{OsStr, OsString};
@@ -69,7 +70,7 @@ fn run_cli(cli: Cli) -> Result<()> {
     }
 
     maybe_escalate_to_root(&cli.command, cli.no_escalate, cli.non_interactive)?;
-    let ctx = AppContext::new(cli.config, cli.verbose, cli.format);
+    let ctx = AppContext::new(cli.config, cli.verbose, cli.format)?;
     ctx.init_telemetry();
     let result = ctx.dispatch(cli.command);
     crate::telemetry::shutdown();
@@ -77,18 +78,18 @@ fn run_cli(cli: Cli) -> Result<()> {
 }
 
 struct AppContext {
-    config_path: PathBuf,
+    config: manifest::ConfigPaths,
     verbose: bool,
     format: OutputFormat,
 }
 
 impl AppContext {
-    const fn new(config_path: PathBuf, verbose: bool, format: OutputFormat) -> Self {
-        Self {
-            config_path,
+    fn new(config_paths: Vec<PathBuf>, verbose: bool, format: OutputFormat) -> Result<Self> {
+        Ok(Self {
+            config: manifest::ConfigPaths::new(config_paths)?,
             verbose,
             format,
-        }
+        })
     }
 
     #[allow(clippy::too_many_lines)] // flat one-arm-per-subcommand dispatch table
@@ -177,7 +178,7 @@ impl AppContext {
             } => commands::build::handle_init(&file, release, toml, force),
 
             Commands::Armada { files, action } => {
-                commands::armada::handle(&self.config_path, self.verbose, &files, action)
+                commands::armada::handle(self.config.primary_path(), self.verbose, &files, action)
             }
 
             Commands::Migrate {
@@ -186,33 +187,31 @@ impl AppContext {
                 remote_dataset,
                 keep,
             } => commands::migrate::handle_migrate(
-                &self.config_path,
+                &self.config,
                 &jail,
                 &target,
                 remote_dataset,
                 keep,
             ),
 
-            Commands::Unfence { jail } => {
-                commands::migrate::handle_unfence(&self.config_path, &jail)
-            }
+            Commands::Unfence { jail } => commands::migrate::handle_unfence(&self.config, &jail),
 
-            Commands::Stats { jail, json } => {
-                commands::stats::handle(&self.config_path, jail, json)
-            }
+            Commands::Stats { jail, json } => commands::stats::handle(&self.config, jail, json),
 
             Commands::Logs {
                 jail,
                 follow,
                 lines,
-            } => commands::logs::handle(&self.config_path, &jail, follow, lines),
+            } => commands::logs::handle(&self.config, &jail, follow, lines),
 
             Commands::Supervise { autostart } => {
-                commands::supervise::handle(&self.config_path, self.verbose, autostart)
+                commands::supervise::handle(&self.config, self.verbose, autostart)
             }
 
             #[cfg(feature = "mcp")]
-            Commands::Mcp { listen } => commands::mcp::handle(&self.config_path, listen.as_deref()),
+            Commands::Mcp { listen } => {
+                commands::mcp::handle(self.config.primary_path(), listen.as_deref())
+            }
 
             #[cfg(feature = "ui")]
             Commands::Ui { listen } => {
@@ -225,7 +224,7 @@ impl AppContext {
                 archives,
                 pkgbase,
             } => commands::bootstrap::handle_bootstrap(
-                &self.config_path,
+                &self.config,
                 &release,
                 force,
                 archives,
@@ -233,7 +232,7 @@ impl AppContext {
             ),
 
             Commands::Releases { action, json } => {
-                commands::bootstrap::handle_releases(&self.config_path, action, json)
+                commands::bootstrap::handle_releases(&self.config, action, json)
             }
 
             Commands::Network { action } => {
@@ -246,7 +245,7 @@ impl AppContext {
                 watch,
                 interval,
                 json,
-            } => commands::health::handle(&self.config_path, jail, watch, interval, json),
+            } => commands::health::handle(&self.config, jail, watch, interval, json),
 
             Commands::Build {
                 file,
@@ -255,7 +254,7 @@ impl AppContext {
                 context,
                 dry_run,
             } => commands::build::handle_build(
-                &self.config_path,
+                &self.config,
                 self.verbose,
                 &file,
                 name,
@@ -264,9 +263,7 @@ impl AppContext {
                 dry_run,
             ),
 
-            Commands::Template { action } => {
-                commands::build::handle_template(&self.config_path, action)
-            }
+            Commands::Template { action } => commands::build::handle_template(&self.config, action),
 
             Commands::Expose {
                 jail,
@@ -275,7 +272,7 @@ impl AppContext {
                 proto,
                 bind_ip,
             } => commands::ports::handle_expose(
-                &self.config_path,
+                &self.config,
                 self.verbose,
                 &jail,
                 port,
@@ -285,11 +282,11 @@ impl AppContext {
             ),
 
             Commands::Ports { jail } => {
-                commands::ports::handle_ports(&self.config_path, jail.as_deref())
+                commands::ports::handle_ports(&self.config, jail.as_deref())
             }
 
             Commands::Unexpose { jail } => {
-                commands::ports::handle_unexpose(&self.config_path, self.verbose, &jail)
+                commands::ports::handle_unexpose(&self.config, self.verbose, &jail)
             }
 
             Commands::Cleanup { jail, force } => {
@@ -306,10 +303,10 @@ impl AppContext {
                 show,
             } => {
                 let request = commands::qos::QosRequest::from_flags(steady, startup, show)?;
-                commands::qos::handle_qos(&self.config_path, self.verbose, &jail, request)
+                commands::qos::handle_qos(&self.config, self.verbose, &jail, request)
             }
             Commands::Audit { jail, json } => {
-                commands::audit::handle_audit(&self.config_path, &jail, json)
+                commands::audit::handle_audit(&self.config, &jail, json)
             }
             Commands::Gc {
                 jail,
@@ -318,7 +315,7 @@ impl AppContext {
                 prune_unreferenced,
                 json,
             } => commands::gc::handle_gc(
-                &self.config_path,
+                &self.config,
                 self.verbose,
                 jail.as_deref(),
                 &commands::gc::GcOptions {
@@ -333,7 +330,7 @@ impl AppContext {
                 jail,
                 output,
                 zfs_send,
-            } => commands::snapshot::handle_export(&self.config_path, &jail, output, zfs_send),
+            } => commands::snapshot::handle_export(&self.config, &jail, output, zfs_send),
 
             Commands::Import {
                 file,
@@ -341,30 +338,24 @@ impl AppContext {
                 force,
                 from,
             } => match from {
-                Some(from) => commands::foreign::handle_foreign_import(
-                    &self.config_path,
-                    &file,
-                    name,
-                    Some(&from),
-                ),
-                None => commands::snapshot::handle_import(
-                    &self.config_path,
-                    &file,
-                    name.as_deref(),
-                    force,
-                ),
+                Some(from) => {
+                    commands::foreign::handle_foreign_import(&self.config, &file, name, Some(&from))
+                }
+                None => {
+                    commands::snapshot::handle_import(&self.config, &file, name.as_deref(), force)
+                }
             },
 
             Commands::Snapshot { action } => {
-                commands::snapshot::handle_snapshot(&self.config_path, action)
+                commands::snapshot::handle_snapshot(&self.config, action)
             }
 
             Commands::Commit { jail, release } => {
-                commands::snapshot::handle_commit(&self.config_path, &jail, &release)
+                commands::snapshot::handle_commit(&self.config, &jail, &release)
             }
 
             Commands::Clone { source, name } => {
-                commands::snapshot::handle_clone(&self.config_path, &source, &name)
+                commands::snapshot::handle_clone(&self.config, &source, &name)
             }
 
             Commands::Up { jail, all, dry_run } => {
@@ -383,7 +374,7 @@ impl AppContext {
             Commands::Ps { host, json } => {
                 let bridge = self.verbose_bridge()?;
                 if host {
-                    bridge.ps_host(&self.config_path, json);
+                    bridge.ps_host(&self.config, json);
                 } else {
                     bridge.ps(json);
                 }
@@ -393,7 +384,7 @@ impl AppContext {
             Commands::Check => self.verbose_bridge()?.check(),
 
             Commands::Host => {
-                commands::host::handle(&self.config_path);
+                commands::host::handle(&self.config);
                 Ok(())
             }
 
@@ -408,12 +399,12 @@ impl AppContext {
     /// The `--format json` surface, gated by `Commands::supports_machine_output`.
     fn dispatch_json(&self, command: Commands) -> Result<()> {
         use crate::output::print_success as emit;
-        let config = self.config_path.as_path();
+        let config = &self.config;
         match command {
             Commands::Capabilities => emit(&commands::capabilities::data()?),
             Commands::Host => emit(&commands::host::data(config)),
             Commands::Ps { host: true, .. } => {
-                emit(&self.verbose_bridge()?.inventory_data(&self.config_path))
+                emit(&self.verbose_bridge()?.inventory_data(&self.config))
             }
             Commands::Ps { host: false, .. } => emit(&self.verbose_bridge()?.ps_data()),
             Commands::Check => emit(&self.verbose_bridge()?.check_data()?),
@@ -488,7 +479,7 @@ impl AppContext {
         if enable_pf {
             crate::bulkhead::enable_pf()?;
         }
-        let config = manifest::load_or_default(&self.config_path)?;
+        let config = manifest::load_or_default(&self.config)?;
 
         // Bridges and eifaces do not survive a reboot; their records do.
         let net_store = crate::network::NetworkStore::from_config(Some(&config));
@@ -536,7 +527,7 @@ impl AppContext {
     }
 
     fn load_config(&self) -> Result<manifest::BlackshipConfig> {
-        manifest::load(&self.config_path)
+        manifest::load(&self.config)
     }
 
     fn load_config_if_present(&self) -> Result<Option<manifest::BlackshipConfig>> {

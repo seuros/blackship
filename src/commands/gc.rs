@@ -1,7 +1,5 @@
 //! Orphan reclamation command
 
-use std::path::Path;
-
 use crate::error::Result;
 use crate::gc::{self, Orphan, Reaper};
 use crate::manifest;
@@ -20,7 +18,7 @@ pub struct GcOptions {
 }
 
 pub fn handle_gc(
-    config_path: &Path,
+    config_path: &(impl manifest::ConfigSource + ?Sized),
     verbose: bool,
     jail: Option<&str>,
     opts: &GcOptions,

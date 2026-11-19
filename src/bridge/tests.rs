@@ -190,6 +190,10 @@ fn test_inventory_identifies_manifest_owned_jails() {
         inventory["config_path"],
         "/usr/local/etc/blackship/blackship.toml"
     );
+    assert_eq!(
+        inventory["config_paths"],
+        serde_json::json!(["/usr/local/etc/blackship/blackship.toml"])
+    );
     assert_eq!(database["full_name"], "blackship-database");
     assert_eq!(database["manager"], "blackship");
     assert_eq!(database["managed"], true);
