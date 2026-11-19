@@ -594,7 +594,7 @@ impl ZfsManager {
     }
 }
 
-fn default_snapshot_name() -> String {
+pub fn default_snapshot_name() -> String {
     format!("snap-{}", Zoned::now().strftime("%Y%m%d-%H%M%S"))
 }
 

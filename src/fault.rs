@@ -1,6 +1,7 @@
 //! Test-only fault gate over rogue-machines; compiles to a no-op outside tests.
 
-/// Seams in the start path where a test can make the next step fail.
+/// Seams where a test can make the next step fail. The migrate seams stand in for a
+/// killed process: the effect happened, the outcome was never recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Point {
     AfterBridge,
@@ -9,6 +10,9 @@ pub enum Point {
     AfterMount,
     AfterJailCreate,
     BeforeRctl,
+    AfterSnapshot,
+    AfterSend,
+    BeforeFence,
 }
 
 #[cfg(not(test))]

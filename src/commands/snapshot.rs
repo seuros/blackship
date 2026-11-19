@@ -26,19 +26,23 @@ pub fn require_zfs(config: &BlackshipConfig) -> Result<zfs::ZfsManager> {
 
 /// Stage the jail's definition (and Jailfile, when known) inside the dataset
 /// at .blackship/ so snapshots, exports, and zfs send carry everything needed
-/// to reconstruct the jail elsewhere.
-pub fn stage_config_in_dataset(config: &BlackshipConfig, service_name: &str, full_name: &str) {
+/// to reconstruct the jail elsewhere. True when something was staged.
+pub fn stage_config_in_dataset(
+    config: &BlackshipConfig,
+    service_name: &str,
+    full_name: &str,
+) -> bool {
     let Some(jail_def) = config.get_jail(service_name) else {
-        return;
+        return false;
     };
     let root = config.config.jail_root(full_name);
     if !root.join("bin").exists() {
-        return;
+        return false;
     }
     let stage = root.join(".blackship");
     if let Err(e) = std::fs::create_dir_all(&stage) {
         eprintln!("Warning: failed to stage config in dataset: {e}");
-        return;
+        return false;
     }
     match toml::to_string_pretty(jail_def) {
         Ok(serialized) => {
@@ -58,6 +62,7 @@ pub fn stage_config_in_dataset(config: &BlackshipConfig, service_name: &str, ful
     {
         eprintln!("Warning: failed to stage Jailfile: {e}");
     }
+    true
 }
 
 /// Freeze a jail into a reusable release via snapshot + clone + promote.
