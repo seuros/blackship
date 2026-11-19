@@ -75,6 +75,13 @@ path. Put writable, user-reachable host directories on a dataset with
 \command{allow\_chflags()} as narrow exceptions for trusted build workloads,
 not general compatibility switches.
 
+Manifest volumes are narrower: always read-only, \command{nosuid}, and
+\command{noexec}. The source must still be trusted. It is canonicalized before
+mounting and the jail-side target is created below a root that is checked for
+symlink ancestors, but a user who can replace a component of the source path
+between that check and the mount can redirect the volume. Keep sources in
+directories only root can rename into.
+
 \section{Reliability model}
 
 Blackship records ownership before mutation and performs reverse-order rollback.

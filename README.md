@@ -482,6 +482,7 @@ stop = "service nginx stop"           # Run inside the jail before teardown (ove
 [jails.mount]
 # Host directory mounted below the jail root through nullfs. Manifest volumes
 # are always read-only, nosuid and noexec; they attach on start and detach on stop.
+# The source is checked at start, and targets cannot share or nest.
 volumes = ["/home/me/src/myapp:/workspace/myapp:ro"]
 
 [jails.resources]

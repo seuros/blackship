@@ -43,3 +43,34 @@ fn read_write_mounts_are_nosuid_unless_told_otherwise() {
     assert_eq!(ro.options(), ["ro"]);
     assert_eq!(ro.nosuid().noexec().options(), ["ro", "nosuid", "noexec"]);
 }
+
+#[test]
+fn a_source_holding_the_container_root_is_refused_before_any_mount() {
+    let host = tempfile::tempdir().unwrap();
+    let root = host.path().join("jails/web");
+    std::fs::create_dir_all(&root).unwrap();
+
+    let error = mount_nullfs(&root, &Mount::read_only(host.path(), "/workspace")).unwrap_err();
+
+    assert!(error.to_string().contains("contains the container root"));
+    assert!(!root.join("workspace").exists());
+}
+
+#[test]
+fn mount_shape_does_not_need_the_source_to_exist() {
+    assert!(
+        Mount::read_only("/no/such/source", "/workspace")
+            .validate_shape()
+            .is_ok()
+    );
+    assert!(
+        Mount::read_only("/no/such/source", "/workspace")
+            .validate()
+            .is_err()
+    );
+    assert!(
+        Mount::read_only("relative", "/workspace")
+            .validate_shape()
+            .is_err()
+    );
+}

@@ -242,3 +242,30 @@ fn a_stray_dataset_says_when_it_was_migrated() {
     );
     assert!(orphans.iter().all(|o| o.requires_force));
 }
+
+#[test]
+fn reap_detaches_claimed_mounts_outside_the_default_jail_root() {
+    let table = "\
+zroot/jails/web / zfs rw 0 0
+/src/a /srv/web/workspace nullfs ro 0 0
+/src/b /srv/web/workspace/src nullfs ro 0 0
+devfs /srv/web/dev devfs rw 0 0
+devfs /data/jails/web/dev devfs rw 0 0
+/src/c /srv/other nullfs ro 0 0
+";
+    let claimed = [
+        PathBuf::from("/srv/web/workspace"),
+        PathBuf::from("/srv/web/workspace/src"),
+    ];
+
+    let found = reapable_mounts(std::path::Path::new("/data/jails/web"), &claimed, table);
+
+    assert_eq!(
+        found,
+        [
+            PathBuf::from("/srv/web/workspace/src"),
+            PathBuf::from("/data/jails/web/dev"),
+            PathBuf::from("/srv/web/workspace"),
+        ]
+    );
+}

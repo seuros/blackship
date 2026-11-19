@@ -94,12 +94,24 @@ fn leaks(env: &Env) -> Vec<String> {
     {
         found.push("scope".to_string());
     }
+    if !volume_mounts(env).is_empty() {
+        found.push("mount".to_string());
+    }
     found
+}
+
+fn volume_mounts(env: &Env) -> Vec<PathBuf> {
+    let root = env.config.jails[0].effective_path(&env.config.config, &env.full_name);
+    let table = crate::sys::mount_table().unwrap();
+    crate::sys::mounted_paths_under(&root.join("workspace"), &table)
 }
 
 fn scrub(env: &Env) {
     if let Ok(jid) = jail_getid(&env.full_name) {
         let _ = jail_remove(jid);
+    }
+    for mountpoint in volume_mounts(env) {
+        crate::sys::unmount_quiet(&mountpoint);
     }
     let _ = zfs(env).destroy_jail_dataset(&env.full_name);
     let _ = NetworkLeaseStore::from_config(Some(&env.config)).release_owner(&env.full_name);
@@ -182,6 +194,7 @@ fn manifest_volume_mounts_on_start_and_detaches_on_stop() {
     let options = line.split_whitespace().nth(3).unwrap();
     assert_eq!(mounted, vec![target.clone()]);
     assert!(target.join("marker").exists());
+    assert!(std::fs::write(target.join("probe"), "x").is_err());
     assert!(options.split(',').any(|option| option == "ro"));
     assert!(options.split(',').any(|option| option == "nosuid"));
     assert!(options.split(',').any(|option| option == "noexec"));

@@ -395,14 +395,25 @@ impl BlackshipConfig {
                 }
             }
             if let Some(mount) = &jail.mount {
-                let mut targets = std::collections::HashSet::new();
-                for volume in mount.parsed_volumes()? {
-                    if !targets.insert(volume.jail_path().to_path_buf()) {
-                        return Err(Error::ConfigValidation(format!(
-                            "Jail '{}' mounts more than one volume at '{}'",
-                            jail.name,
-                            volume.jail_path().display()
-                        )));
+                let volumes = mount.parsed_volumes()?;
+                for (index, volume) in volumes.iter().enumerate() {
+                    for other in &volumes[index + 1..] {
+                        let (a, b) = (volume.jail_path(), other.jail_path());
+                        if a == b {
+                            return Err(Error::ConfigValidation(format!(
+                                "Jail '{}' mounts more than one volume at '{}'",
+                                jail.name,
+                                a.display()
+                            )));
+                        }
+                        if a.starts_with(b) || b.starts_with(a) {
+                            return Err(Error::ConfigValidation(format!(
+                                "Jail '{}' nests volume '{}' inside volume '{}'; a read-only volume cannot hold the child mountpoint",
+                                jail.name,
+                                if a.starts_with(b) { a } else { b }.display(),
+                                if a.starts_with(b) { b } else { a }.display()
+                            )));
+                        }
                     }
                 }
             }
@@ -1223,7 +1234,7 @@ impl JailMountConfig {
         let mount = crate::container::Mount::read_only(fields[0], fields[1])
             .nosuid()
             .noexec();
-        mount.validate().map_err(|error| {
+        mount.validate_shape().map_err(|error| {
             Error::ConfigValidation(format!("Invalid volume '{volume}': {error}"))
         })?;
         if mount.jail_path().starts_with("/dev") {

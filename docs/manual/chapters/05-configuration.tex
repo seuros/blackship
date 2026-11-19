@@ -134,6 +134,35 @@ isolation keys managed by Blackship---including name, path, VNET, securelevel,
 devfs, address, and related \command{allow.*} controls---cannot be overridden
 through an escape hatch. Use first-class configuration where provided.
 
+\section{Volumes}
+
+A jail can expose host directories below its root through nullfs:
+
+\begin{lstlisting}[language=TOML]
+[jails.mount]
+volumes = ["/home/me/src/app:/workspace/app:ro"]
+\end{lstlisting}
+
+Each entry is \setting{host:jail[:ro]}. Manifest volumes are always read-only,
+\command{nosuid}, and \command{noexec}; the optional third field only accepts
+those words, so a \setting{rw} request is a validation error. The host side
+must be an absolute path and the jail side an absolute path below \file{/}
+without \file{..}, whitespace, or a place under \file{/dev}. Two volumes may
+not share a target or nest inside each other, because a read-only volume
+cannot hold the child mountpoint.
+
+The host directory is checked when the volume attaches, not when the manifest
+loads, so a missing source stops that jail from starting but never blocks
+\command{down}, \command{gc}, or \command{ps}. A source that contains the jail
+root is refused. Volumes attach after the jail root is prepared and before
+\setting{pre\_start} hooks run, and every mountpoint is written to the scope
+record as soon as it is attached. Startup failure, \command{down}, and
+\command{gc} detach them deepest first; \command{gc} uses the scope record, so
+it also reclaims volumes of jails with a custom \setting{path}. A volume that
+stays busy fails the stop and keeps the scope record in \setting{Failed} until
+\command{gc} can detach it. \command{up --dry-run} and \command{down --dry-run}
+list the volumes.
+
 \section{Resource controls}
 
 \begin{lstlisting}[language=TOML]

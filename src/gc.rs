@@ -259,6 +259,26 @@ fn dead_scope_orphan(scope: &ScopeRecord) -> Orphan {
     }
 }
 
+/// Mountpoints a reap must detach, deepest first: everything under the default
+/// jail root, plus every mount the scope record claims. A jail with an explicit
+/// `path` lives outside the default root, so only the record knows its volumes.
+fn reapable_mounts(
+    jail_root: &std::path::Path,
+    claimed: &[PathBuf],
+    table: &str,
+) -> Vec<PathBuf> {
+    let mut mountpoints = crate::sys::mounted_paths_under(jail_root, table);
+    for mount in claimed {
+        for found in crate::sys::mounted_paths_under(mount, table) {
+            if !mountpoints.contains(&found) {
+                mountpoints.push(found);
+            }
+        }
+    }
+    mountpoints.sort_by_key(|path| std::cmp::Reverse(path.as_os_str().len()));
+    mountpoints
+}
+
 /// Owns the stores a reap needs, plus the lock that serializes it.
 pub struct Reaper {
     scope_store: ScopeStore,
@@ -424,11 +444,12 @@ impl Reaper {
 
         let jail_root = self.data_dir.join("jails").join(&scope.name);
         if let Ok(table) = crate::sys::mount_table() {
-            for mountpoint in crate::sys::mounted_paths_under(&jail_root, &table) {
-                crate::sys::unmount_quiet(&mountpoint);
+            let mountpoints = reapable_mounts(&jail_root, &scope.mounts, &table);
+            for mountpoint in &mountpoints {
+                crate::sys::unmount_quiet(mountpoint);
             }
             if let Ok(table) = crate::sys::mount_table() {
-                for mountpoint in crate::sys::mounted_paths_under(&jail_root, &table) {
+                for mountpoint in reapable_mounts(&jail_root, &scope.mounts, &table) {
                     residual.push(format!("mount {}", mountpoint.display()));
                 }
             }

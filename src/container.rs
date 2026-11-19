@@ -161,11 +161,13 @@ impl Mount {
         self.noexec
     }
 
-    /// Validate both sides of the mount before any privileged operation.
-    pub(crate) fn validate(&self) -> Result<()> {
-        if !self.host.is_absolute() || !self.host.is_dir() {
+    /// Validate the shape of both sides: absolute host path, clean absolute
+    /// jail path below `/`. Touches no file system, so it is safe to run when
+    /// a manifest loads.
+    pub(crate) fn validate_shape(&self) -> Result<()> {
+        if !self.host.is_absolute() {
             return Err(Error::InvalidArgument(format!(
-                "mount source '{}' must be an existing absolute directory",
+                "mount source '{}' must be an absolute path",
                 self.host.display()
             )));
         }
@@ -182,6 +184,17 @@ impl Mount {
             )));
         }
         Ok(())
+    }
+
+    /// Validate both sides of the mount before any privileged operation.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if !self.host.is_absolute() || !self.host.is_dir() {
+            return Err(Error::InvalidArgument(format!(
+                "mount source '{}' must be an existing absolute directory",
+                self.host.display()
+            )));
+        }
+        self.validate_shape()
     }
 
     /// The `mount_nullfs` options, one per `-o`: `mount_nullfs(8)` silently
@@ -207,10 +220,11 @@ pub(super) fn mount_nullfs(root: &Path, mount: &Mount) -> Result<PathBuf> {
     mount.validate()?;
     let (host, jail) = (&mount.host, &mount.jail);
     let canonical_host = host.canonicalize()?;
+    let canonical_root = root.canonicalize()?;
+    reject_self_mount(&canonical_host, &canonical_root, host)?;
     let target = root.join(jail.strip_prefix("/").unwrap_or(jail));
     crate::blueprint::context::reject_symlink_ancestors(root, &target)?;
     std::fs::create_dir_all(&target)?;
-    let canonical_root = root.canonicalize()?;
     let canonical_target: PathBuf = target.canonicalize()?;
     if !canonical_target.starts_with(&canonical_root) {
         return Err(Error::InvalidArgument(format!(
@@ -235,6 +249,19 @@ pub(super) fn mount_nullfs(root: &Path, mount: &Mount) -> Result<PathBuf> {
         )));
     }
     Ok(canonical_target)
+}
+
+/// A source that contains the container root would nullfs-mount the root into
+/// itself.
+fn reject_self_mount(canonical_host: &Path, canonical_root: &Path, host: &Path) -> Result<()> {
+    if canonical_root.starts_with(canonical_host) {
+        return Err(Error::InvalidArgument(format!(
+            "mount source '{}' contains the container root '{}'",
+            host.display(),
+            canonical_root.display()
+        )));
+    }
+    Ok(())
 }
 
 /// Resource limits enforced by rctl(8) and cpuset(1).

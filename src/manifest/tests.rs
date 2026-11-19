@@ -246,6 +246,48 @@ volumes = [
     assert!(error.contains("more than one volume"), "{error}");
 }
 
+fn volume_manifest(volumes: &[String]) -> BlackshipConfig {
+    let list = volumes
+        .iter()
+        .map(|volume| format!("\"{volume}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    toml::from_str(&format!(
+        "[config]\nproject = \"demo\"\n\n[[jails]]\nname = \"web\"\n\n[jails.mount]\nvolumes = [{list}]\n"
+    ))
+    .unwrap()
+}
+
+#[test]
+fn manifest_volumes_do_not_need_their_source_at_load_time() {
+    let config = volume_manifest(&["/no/such/source:/workspace/source:ro".to_string()]);
+
+    config.validate().unwrap();
+}
+
+#[test]
+fn manifest_volumes_reject_nested_targets() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    for (outer, inner) in [
+        ("/workspace", "/workspace/deep"),
+        ("/workspace/deep", "/workspace"),
+    ] {
+        let config = volume_manifest(&[
+            format!("{}:{outer}:ro", first.path().display()),
+            format!("{}:{inner}:ro", second.path().display()),
+        ]);
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("nests volume '/workspace/deep'"), "{error}");
+    }
+
+    let sibling = volume_manifest(&[
+        format!("{}:/workspace/src:ro", first.path().display()),
+        format!("{}:/workspace/srcx:ro", second.path().display()),
+    ]);
+    sibling.validate().unwrap();
+}
+
 #[test]
 fn test_jail_lookup_matches_prefixed_and_unprefixed_names() {
     let toml = r#"
