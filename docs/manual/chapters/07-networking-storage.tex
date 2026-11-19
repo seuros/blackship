@@ -207,6 +207,23 @@ arrives with the mountpoint it had on the source, so a target with a different
 data directory moves it with \command{zfs set mountpoint}; the command prints
 the actual source path.
 
+A migration is a recorded sequence: stage the definition, snapshot, send and
+receive, fence. The record lives at \file{<data\_dir>/migrations/<jail>.json} from
+before the first effect until the migration settles, so a killed process
+(\command{kill -9}, a crash, a power cut) between the receive and the fence leaves
+a trace instead of a jail that is runnable on both hosts. While a record exists,
+\command{migrate} refuses to start the same jail again and names the record.
+\command{migrate --resume <jail>} carries on where it stopped;
+\command{migrate --abort <jail>} removes the destination dataset and the snapshot
+and leaves the source as it was. Both re-check the real state first (does the
+destination dataset or the snapshot exist, is the source fenced) instead of
+trusting the record, and neither sends the stream twice. Resuming needs the jail
+stopped. If undoing a step fails twice, for example because the target is
+unreachable, the migration is parked: the record stays, the error lists what is
+left, and \command{migrate --abort} finishes after the leftovers are removed by
+hand. A record that does not read back as one Blackship wrote is refused and left
+untouched. Resume and abort accept \command{--format json}.
+
 \begin{shipwarning}[Know the dataset before forcing]
 Forced rollback destroys newer snapshots. Forced garbage collection or manual
 \command{zfs destroy -r} can remove data Blackship cannot reconstruct. List the

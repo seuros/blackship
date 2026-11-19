@@ -120,6 +120,10 @@ or foreign jail data. \\
 \command{migrate <jail> <user@host> [--remote-dataset D] [--keep]} & Send a
 stopped ZFS-backed jail over SSH and fence the source; the source is never
 removed. \\
+\command{migrate --resume <jail>} & Finish a migration that a kill or crash
+interrupted, after re-checking both hosts. \\
+\command{migrate --abort <jail>} & Roll an interrupted migration back: remove
+the partial destination dataset and the snapshot. \\
 \command{unfence <jail>} & Lift the migration fence so the jail can start on this
 host again. \\
 \bottomrule

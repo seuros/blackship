@@ -678,6 +678,8 @@ the dataset, so `zfs send` carries everything needed to rebuild the jail.
 | `blackship import <file> [-n name] [--force]` | Import from archive |
 | `blackship import <file> --from iocage\|ezjail\|rootfs\|auto [-n name]` | Import from another jail manager |
 | `blackship migrate <jail> user@host [--remote-dataset ds] [--keep]` | Move a jail to another host over ssh; fences the source |
+| `blackship migrate --resume <jail>` | Finish a migration a kill or crash interrupted |
+| `blackship migrate --abort <jail>` | Roll an interrupted migration back: remove the partial destination and the snapshot |
 | `blackship unfence <jail>` | Lift the fence a migration left on a jail, so it can start here again |
 
 ### Build System
@@ -1009,6 +1011,25 @@ arrives on the target with the mountpoint it had here; a target with a different
 command prints the real source path). `gc` follows its usual rules for a fenced
 dataset, so it is only reclaimed with `--force`, and its report says the dataset
 was migrated and to where.
+
+A migration is recorded at `<data_dir>/migrations/<jail>.json` from before its
+first effect until it settles, so a `kill -9` (or a power cut) between the
+receive and the fence leaves a trace instead of a jail that is runnable on both
+hosts. While a record exists, `migrate` refuses to start the same jail again and
+names the record. Then pick one:
+
+```bash
+blackship migrate --resume web   # re-check both hosts, then carry on where it stopped
+blackship migrate --abort web    # remove the destination dataset and the snapshot; the source is as it was
+```
+
+Both look at the real state first (does the destination dataset or the snapshot
+exist, is the source fenced) rather than trusting the record, and neither
+sends the stream twice. `--resume` also needs the jail stopped. If undoing a step
+fails twice (the target is down, a snapshot is busy), the migration is parked: the
+record stays, the error says what is left, and `--abort` finishes once you have
+removed the leftovers. A record that does not read back as one blackship wrote is
+refused and left alone. Both accept `--format json`.
 
 ## Networking
 
