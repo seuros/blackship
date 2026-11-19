@@ -233,6 +233,7 @@ dependencies = [
  "rama",
  "rand 0.10.3",
  "rogue-machines",
+ "saga-machines",
  "schemars",
  "serde",
  "serde_json",
@@ -670,6 +671,15 @@ name = "deadline-machines"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da2c41f4fe7e16b2ea82f392e628fa0f1a03de6b7cdb6b80f540e13f4eaaeabc"
+
+[[package]]
+name = "dedup-machines"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35d01faa83a25e18431ecec2a7d092ef355ae52de60069b7b8f9508f35bfbd62"
+dependencies = [
+ "periscope-machines",
+]
 
 [[package]]
 name = "defmt"
@@ -1992,6 +2002,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "periscope-machines"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1602a0bb66b4ba9529244868a2344cc39282c62c8ae4df357244adf49347bf51"
+
+[[package]]
 name = "petgraph"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3148,6 +3164,17 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "saga-machines"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95d1911eace1187395d4fb470900708031fbd1d525e326b7943da74cc06edf54"
+dependencies = [
+ "dedup-machines",
+ "periscope-machines",
+ "serde",
+]
 
 [[package]]
 name = "same-file"
