@@ -218,7 +218,8 @@ a trace instead of a jail that is runnable on both hosts. While a record exists,
 and leaves the source as it was. Both re-check the real state first (does the
 destination dataset or the snapshot exist, is the source fenced) instead of
 trusting the record, and neither sends the stream twice. Resuming needs the jail
-stopped. If undoing a step fails twice, for example because the target is
+stopped, and the source is fenced only if it was not written to after the snapshot;
+otherwise the stale copy is removed and the migration rolls back. If undoing a step fails twice, for example because the target is
 unreachable, the migration is parked: the record stays, the error lists what is
 left, and \command{migrate --abort} finishes after the leftovers are removed by
 hand. A record that does not read back as one Blackship wrote is refused and left
