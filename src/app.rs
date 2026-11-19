@@ -186,12 +186,11 @@ impl AppContext {
                 target,
                 remote_dataset,
                 keep,
+                resume,
+                abort,
             } => commands::migrate::handle_migrate(
                 &self.config,
-                &jail,
-                &target,
-                remote_dataset,
-                keep,
+                commands::migrate::mode(jail, target, remote_dataset, keep, resume, abort)?,
             ),
 
             Commands::Unfence { jail } => commands::migrate::handle_unfence(&self.config, &jail),
@@ -457,6 +456,12 @@ impl AppContext {
                 all,
                 dry_run: true,
             } => self.emit_plan(Operation::Eva, jail.as_deref(), all),
+            Commands::Migrate {
+                resume: Some(jail), ..
+            } => emit(&commands::migrate::resume_data(config, &jail)?),
+            Commands::Migrate {
+                abort: Some(jail), ..
+            } => emit(&commands::migrate::abort_data(config, &jail)?),
             Commands::Autostart { dry_run: true } => emit(&commands::lifecycle::autostart_plan(
                 &self.verbose_bridge()?,
             )?),

@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use rama::Layer as _;
 use rama::error::BoxError;
 use rama::futures::GracefulStream;
 use rama::futures::async_stream::stream_fn;
@@ -20,7 +21,6 @@ use rama::http::sse::server::KeepAlive;
 use rama::net::address::SocketAddress;
 use rama::rt::Executor;
 use rama::utils::str::NonEmptyStr;
-use rama::Layer as _;
 
 use crate::error::{Error, Result};
 use crate::jail::jail_getid;
@@ -115,15 +115,17 @@ async fn stream(State(ui): State<Arc<Ui>>) -> impl IntoResponse {
         let ui = ui.clone();
         move |mut yielder| async move {
             loop {
-                let html =
-                    fleet_fragment(env!("CARGO_PKG_VERSION"), ui.running(), ui.names.len());
+                let html = fleet_fragment(env!("CARGO_PKG_VERSION"), ui.running(), ui.names.len());
                 yielder.yield_item(patch(html)).await;
                 tokio::time::sleep(REFRESH).await;
             }
         }
     });
-    Sse::new(GracefulStream::new(ui.shutdown.clone().into_cancelled(), events))
-        .with_keep_alive(KeepAlive::new())
+    Sse::new(GracefulStream::new(
+        ui.shutdown.clone().into_cancelled(),
+        events,
+    ))
+    .with_keep_alive(KeepAlive::new())
 }
 
 /// Serve until interrupted.

@@ -96,6 +96,8 @@ const CANDIDATES: &[&[&str]] = &[
     &["gc", "--dry-run"],
     &["supervise"],
     &["migrate", "jail", "root@host"],
+    &["migrate", "--resume", "jail"],
+    &["migrate", "--abort", "jail"],
 ];
 
 #[test]

@@ -126,6 +126,16 @@ const OPERATION_SPECS: &[OperationSpec] = &[
         "autostart --dry-run",
         &["autostart", "--dry-run"],
     ),
+    spec(
+        "migrate.resume",
+        "migrate --resume <jail>",
+        &["migrate", "--resume", "jail"],
+    ),
+    spec(
+        "migrate.abort",
+        "migrate --abort <jail>",
+        &["migrate", "--abort", "jail"],
+    ),
     spec("armada.init", "armada init", &["armada", "init"]),
     spec("armada.config", "armada config", &["armada", "config"]),
     spec("armada.ps", "armada ps", &["armada", "ps"]),

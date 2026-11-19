@@ -291,10 +291,10 @@ pub enum Commands {
     /// Migrate a jail to another host (zfs send | ssh zfs receive)
     Migrate {
         /// Jail to migrate (must be stopped)
-        jail: String,
+        jail: Option<String>,
 
         /// Target host (user@host, ssh `BatchMode`)
-        target: String,
+        target: Option<String>,
 
         /// Remote dataset (default: zroot/blackship/jails/<jail>)
         #[usage(long)]
@@ -304,6 +304,15 @@ pub enum Commands {
         /// silences the removal hint
         #[usage(long)]
         keep: bool,
+
+        /// Finish the recorded migration of this jail after a kill or a crash
+        #[usage(long)]
+        resume: Option<String>,
+
+        /// Roll back the recorded migration of this jail: remove the partial
+        /// destination and the snapshot
+        #[usage(long)]
+        abort: Option<String>,
     },
 
     /// Lift the fence a migration left on a jail so it can start here again
@@ -839,7 +848,11 @@ impl Commands {
             | Self::Snapshot {
                 action: SnapshotAction::List { .. },
             }
-            | Self::Armada { .. } => true,
+            | Self::Armada { .. }
+            | Self::Migrate {
+                resume: Some(_), ..
+            }
+            | Self::Migrate { abort: Some(_), .. } => true,
             Self::Health { watch, .. } => !*watch,
             Self::Up { dry_run, .. }
             | Self::Down { dry_run, .. }

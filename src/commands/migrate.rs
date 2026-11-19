@@ -5,38 +5,138 @@
 //! fences the source: its dataset goes read-only and starts refuse, so the
 //! jail cannot silently run on two hosts. A failed transfer fences nothing and
 //! removes the partial destination dataset it created.
+//!
+//! The sequence is a saga (`saga.rs`) recorded under `<data_root>/migrations`, so a
+//! killed migrate can be resumed or aborted instead of leaving the jail runnable on
+//! both hosts with no trace of the transfer.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
+use saga_machines::Saga;
+use serde::Serialize;
+
+use self::host::Host;
+use self::record::{Record, RecordStore, refuse_second};
+use self::saga::{Driver, STEPS, Settled, Step, saga_id};
 use crate::error::{Error, Result};
 use crate::manifest;
 
-pub fn handle_migrate(
-    config_path: &(impl manifest::ConfigSource + ?Sized),
-    jail: &str,
-    target: &str,
+mod host;
+mod record;
+mod saga;
+
+/// What one invocation of `blackship migrate` asks for.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Mode {
+    Start {
+        jail: String,
+        target: String,
+        remote_dataset: Option<String>,
+        keep: bool,
+    },
+    Resume(String),
+    Abort(String),
+}
+
+/// Sort the arguments into one mode: `--resume` and `--abort` stand alone.
+pub fn mode(
+    jail: Option<String>,
+    target: Option<String>,
     remote_dataset: Option<String>,
     keep: bool,
-) -> Result<()> {
-    let config = manifest::load(config_path)?;
-    let zfs = super::snapshot::require_zfs(&config)?;
-    let (service_name, full_name) = config.require_jail_names(jail)?;
-
-    if crate::jail::jail_getid(&full_name).is_ok() {
-        return Err(Error::JailOperation(format!(
-            "Jail '{full_name}' is running; stop it before migrating"
-        )));
+    resume: Option<String>,
+    abort: Option<String>,
+) -> Result<Mode> {
+    let lone = |flag: &str| {
+        if jail.is_some() || target.is_some() || remote_dataset.is_some() || keep {
+            return Err(Error::InvalidArgument(format!(
+                "{flag} takes only the jail name"
+            )));
+        }
+        Ok(())
+    };
+    match (resume, abort) {
+        (Some(_), Some(_)) => Err(Error::InvalidArgument(
+            "--resume and --abort are exclusive".to_string(),
+        )),
+        (Some(jail), None) => lone("--resume").map(|()| Mode::Resume(jail)),
+        (None, Some(jail)) => lone("--abort").map(|()| Mode::Abort(jail)),
+        (None, None) => match (jail, target) {
+            (Some(jail), Some(target)) => Ok(Mode::Start {
+                jail,
+                target,
+                remote_dataset,
+                keep,
+            }),
+            _ => Err(Error::InvalidArgument(
+                "migrate needs <jail> <target>, or --resume <jail>, or --abort <jail>".to_string(),
+            )),
+        },
     }
+}
 
-    let local_dataset = zfs.jail_dataset_name(&full_name);
-    let remote_dataset =
-        remote_dataset.unwrap_or_else(|| format!("zroot/blackship/jails/{full_name}"));
+pub fn handle_migrate(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    mode: Mode,
+) -> Result<()> {
+    match mode {
+        Mode::Start {
+            jail,
+            target,
+            remote_dataset,
+            keep,
+        } => start(config_path, &jail, &target, remote_dataset, keep),
+        Mode::Resume(jail) => resume(config_path, &jail),
+        Mode::Abort(jail) => abort(config_path, &jail),
+    }
+}
 
-    // Preflight: target reachable, remote dataset absent.
+/// The `--format json` result of `migrate --resume` and `migrate --abort`.
+#[derive(Debug, Serialize)]
+pub struct MigrateReport {
+    pub jail: String,
+    pub action: &'static str,
+    pub outcome: &'static str,
+    /// Where the jail went, for a completed migration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    pub messages: Vec<String>,
+}
+
+pub fn resume_data(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+) -> Result<MigrateReport> {
+    let (destination, messages) =
+        crate::output::capture_stdout(|| resume_inner(config_path, jail))?;
+    Ok(MigrateReport {
+        jail: jail.to_string(),
+        action: "resume",
+        outcome: "completed",
+        destination,
+        messages,
+    })
+}
+
+pub fn abort_data(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+) -> Result<MigrateReport> {
+    let ((), messages) = crate::output::capture_stdout(|| abort(config_path, jail))?;
+    Ok(MigrateReport {
+        jail: jail.to_string(),
+        action: "abort",
+        outcome: "aborted",
+        destination: None,
+        messages,
+    })
+}
+
+fn preflight(target: &str, remote_dataset: &str) -> Result<()> {
     let probe = Command::new("/usr/bin/ssh")
         .args(["-o", "BatchMode=yes", target])
-        .args(["zfs", "list", "-H", "-o", "name", &remote_dataset])
+        .args(["zfs", "list", "-H", "-o", "name", remote_dataset])
         .output()
         .map_err(|e| Error::JailOperation(format!("Failed to run ssh: {e}")))?;
     if probe.status.success() {
@@ -53,86 +153,181 @@ pub fn handle_migrate(
             "Cannot reach '{target}' over ssh (BatchMode)"
         )));
     }
-
-    // Snapshot with the jail definition staged inside the dataset.
-    super::snapshot::stage_config_in_dataset(&config, &service_name, &full_name);
-    let snap_name = zfs.create_snapshot(&full_name, None)?;
-    let snapshot = format!("{local_dataset}@{snap_name}");
-
-    println!("Sending {snapshot} to {target}:{remote_dataset} ...");
-    let mut send = Command::new("/sbin/zfs")
-        .args(send_args(
-            &snapshot,
-            zfs.dataset_origin(&local_dataset).is_some(),
-        ))
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::JailOperation(format!("Failed to run zfs send: {e}")))?;
-    let send_out = send
-        .stdout
-        .take()
-        .ok_or_else(|| Error::JailOperation("Failed to capture zfs send output".to_string()))?;
-    let receive = Command::new("/usr/bin/ssh")
-        .args(["-o", "BatchMode=yes", target])
-        .args(["zfs", "receive", "-u", &remote_dataset])
-        .stdin(Stdio::from(send_out))
-        .status()
-        .map_err(|e| Error::JailOperation(format!("Failed to run remote receive: {e}")))?;
-    let send_status = send
-        .wait()
-        .map_err(|e| Error::JailOperation(format!("zfs send failed: {e}")))?;
-
-    if !send_status.success() || !receive.success() {
-        let cleaned = discard_partial_destination(target, &remote_dataset);
-        if let Err(e) = zfs.delete_snapshot(&full_name, &snap_name) {
-            eprintln!("Warning: could not remove the migration snapshot '{snap_name}': {e}");
-        }
-        return Err(Error::JailOperation(format!(
-            "Migration transfer failed; the source is untouched and {}",
-            if cleaned {
-                "the partial remote dataset was removed"
-            } else {
-                "the remote dataset may be partial"
-            }
-        )));
-    }
-
-    println!("Transfer complete.");
-    let destination = fence_value(target, &remote_dataset, crate::scope::now_unix());
-    zfs.fence_jail_dataset(&full_name, &destination)?;
-    println!("Source fenced: read-only, and 'up {service_name}' refuses here.");
-    for line in destination_steps(
-        target,
-        &remote_dataset,
-        &full_name,
-        &service_name,
-        &zfs.jail_path(&full_name),
-    ) {
-        println!("{line}");
-    }
-
-    if !keep {
-        println!("Remove the source for good with: blackship rm {service_name} --volumes");
-        println!("Undo the migration here with: blackship unfence {service_name}");
-    }
-
     Ok(())
 }
 
-/// Destroy the remote dataset a failed transfer may have left; true when none remains.
-fn discard_partial_destination(target: &str, remote_dataset: &str) -> bool {
-    let ssh = |args: &[&str]| {
-        Command::new("/usr/bin/ssh")
-            .args(["-o", "BatchMode=yes", target])
-            .args(args)
-            .output()
-    };
-    // The preflight proved the dataset absent, so whatever exists now is this run's.
-    if let Err(e) = ssh(&["zfs", "destroy", "-r", remote_dataset]) {
-        eprintln!("Warning: could not ask {target} to remove the partial dataset: {e}");
+fn require_stopped(full_name: &str) -> Result<()> {
+    if crate::jail::jail_getid(full_name).is_ok() {
+        return Err(Error::JailOperation(format!(
+            "Jail '{full_name}' is running; stop it before migrating"
+        )));
     }
-    ssh(&["zfs", "list", "-H", "-o", "name", remote_dataset])
-        .is_ok_and(|probe| !probe.status.success())
+    Ok(())
+}
+
+fn start(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+    target: &str,
+    remote_dataset: Option<String>,
+    keep: bool,
+) -> Result<()> {
+    let config = manifest::load(config_path)?;
+    let zfs = super::snapshot::require_zfs(&config)?;
+    let (service_name, full_name) = config.require_jail_names(jail)?;
+    require_stopped(&full_name)?;
+
+    let store = RecordStore::from_config(&config);
+    if store.exists(&full_name)? {
+        return Err(refuse_second(&full_name, &store.path(&full_name)?));
+    }
+    let local_dataset = zfs.jail_dataset_name(&full_name);
+    let remote_dataset =
+        remote_dataset.unwrap_or_else(|| format!("zroot/blackship/jails/{full_name}"));
+    preflight(target, &remote_dataset)?;
+
+    let lock = store.lock(&full_name)?;
+    if store.exists(&full_name)? {
+        return Err(refuse_second(&full_name, &store.path(&full_name)?));
+    }
+    let record = Record {
+        version: record::VERSION,
+        jail: full_name.clone(),
+        service: service_name,
+        target: target.to_string(),
+        remote_dataset,
+        source_dataset: local_dataset,
+        snapshot: crate::zfs::default_snapshot_name(),
+        keep,
+        started_at: crate::scope::now_unix(),
+        fence: None,
+        parked: None,
+        saga: Saga::<STEPS>::new(saga_id(&full_name)).snapshot(),
+    };
+    let source_path = zfs.jail_path(&full_name);
+    let host = Host::new(&config, zfs, &record);
+    let mut driver = Driver::restore(host, record, &store)?;
+    let settled = driver.drive()?;
+    conclude(settled, driver.record(), &source_path)?;
+    lock.discard();
+    Ok(())
+}
+
+/// Report how a start or resume ended: the destination steps, or why it did not.
+fn conclude(settled: Settled, record: &Record, source_path: &Path) -> Result<()> {
+    match settled {
+        Settled::Completed => {
+            for line in destination_steps(
+                &record.target,
+                &record.remote_dataset,
+                &record.jail,
+                &record.service,
+                source_path,
+            ) {
+                println!("{line}");
+            }
+            if !record.keep {
+                println!(
+                    "Remove the source for good with: blackship rm {} --volumes",
+                    record.service
+                );
+                println!(
+                    "Undo the migration here with: blackship unfence {}",
+                    record.service
+                );
+            }
+            Ok(())
+        }
+        Settled::RolledBack {
+            failed: Some((Step::Transfer, _)),
+        } => Err(Error::JailOperation(
+            "Migration transfer failed; the source is untouched and the partial remote dataset was removed"
+                .to_string(),
+        )),
+        Settled::RolledBack {
+            failed: Some((_, e)),
+        } => Err(e),
+        Settled::RolledBack { failed: None } => Err(Error::JailOperation(format!(
+            "Migration of '{}' was rolled back; the source is untouched and nothing is left on {}",
+            record.jail, record.target
+        ))),
+    }
+}
+
+/// A record to act on: the jail's name resolved, the record read and locked.
+struct Recorded {
+    config: manifest::BlackshipConfig,
+    store: RecordStore,
+    record: Record,
+}
+
+fn recorded(config_path: &(impl manifest::ConfigSource + ?Sized), jail: &str) -> Result<Recorded> {
+    let config = manifest::load(config_path)?;
+    let full_name = config
+        .resolve_jail_names(jail)
+        .map_or_else(|| jail.to_string(), |(_, full)| full);
+    let store = RecordStore::from_config(&config);
+    let Some(record) = store.load(&full_name)? else {
+        return Err(Error::JailOperation(format!(
+            "No migration is recorded for '{full_name}'"
+        )));
+    };
+    Ok(Recorded {
+        config,
+        store,
+        record,
+    })
+}
+
+fn resume(config_path: &(impl manifest::ConfigSource + ?Sized), jail: &str) -> Result<()> {
+    resume_inner(config_path, jail).map(drop)
+}
+
+/// The destination a resumed migration ended at.
+fn resume_inner(
+    config_path: &(impl manifest::ConfigSource + ?Sized),
+    jail: &str,
+) -> Result<Option<String>> {
+    let Recorded {
+        config,
+        store,
+        record,
+    } = recorded(config_path, jail)?;
+    let lock = store.lock(&record.jail)?;
+    let zfs = super::snapshot::require_zfs(&config)?;
+    require_stopped(&record.jail)?;
+    println!(
+        "Resuming the migration of '{}' to {}:{} ...",
+        record.jail, record.target, record.remote_dataset
+    );
+    let source_path = zfs.jail_path(&record.jail);
+    let host = Host::new(&config, zfs, &record);
+    let mut driver = Driver::restore(host, record, &store)?;
+    let settled = driver.drive()?;
+    conclude(settled, driver.record(), &source_path)?;
+    let destination = driver.record().fence.clone();
+    lock.discard();
+    Ok(destination)
+}
+
+fn abort(config_path: &(impl manifest::ConfigSource + ?Sized), jail: &str) -> Result<()> {
+    let Recorded {
+        config,
+        store,
+        record,
+    } = recorded(config_path, jail)?;
+    let lock = store.lock(&record.jail)?;
+    let zfs = super::snapshot::require_zfs(&config)?;
+    let jail = record.jail.clone();
+    let target = record.target.clone();
+    let host = Host::new(&config, zfs, &record);
+    let mut driver = Driver::restore(host, record, &store)?;
+    driver.abort()?;
+    lock.discard();
+    println!(
+        "Aborted the migration of '{jail}': nothing is left on {target}, and '{jail}' here is as it was."
+    );
+    Ok(())
 }
 
 /// `zfs send` arguments for the snapshot. A jail cloned from a release is sent as a full

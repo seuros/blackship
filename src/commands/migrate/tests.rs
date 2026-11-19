@@ -60,3 +60,56 @@ fn the_destination_hint_names_the_real_mountpoint_not_a_guessed_layout() {
     assert!(!steps.contains("/var/blackship"), "{steps}");
     assert!(steps.contains("blackship up web"), "{steps}");
 }
+
+fn args(jail: Option<&str>, target: Option<&str>) -> (Option<String>, Option<String>) {
+    (jail.map(String::from), target.map(String::from))
+}
+
+#[test]
+fn migrate_modes_are_told_apart() {
+    let (jail, target) = args(Some("web"), Some("root@bastion"));
+    assert_eq!(
+        mode(jail, target, None, true, None, None).unwrap(),
+        Mode::Start {
+            jail: "web".into(),
+            target: "root@bastion".into(),
+            remote_dataset: None,
+            keep: true,
+        }
+    );
+    assert_eq!(
+        mode(None, None, None, false, Some("web".into()), None).unwrap(),
+        Mode::Resume("web".into())
+    );
+    assert_eq!(
+        mode(None, None, None, false, None, Some("web".into())).unwrap(),
+        Mode::Abort("web".into())
+    );
+}
+
+#[test]
+fn resume_and_abort_stand_alone() {
+    let both = mode(None, None, None, false, Some("a".into()), Some("b".into()));
+    assert!(both.is_err());
+    let (jail, target) = args(Some("web"), None);
+    assert!(mode(jail, target, None, false, Some("web".into()), None).is_err());
+    assert!(
+        mode(
+            None,
+            None,
+            Some("ds".into()),
+            false,
+            None,
+            Some("web".into())
+        )
+        .is_err()
+    );
+    assert!(mode(None, None, None, true, Some("web".into()), None).is_err());
+}
+
+#[test]
+fn a_bare_migrate_needs_a_jail_and_a_target() {
+    assert!(mode(None, None, None, false, None, None).is_err());
+    let (jail, target) = args(Some("web"), None);
+    assert!(mode(jail, target, None, false, None, None).is_err());
+}

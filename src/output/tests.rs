@@ -94,8 +94,7 @@ fn a_failed_operation_keeps_what_it_printed() {
 #[test]
 fn a_silent_failure_adds_no_output_field() {
     let target = Private::new();
-    let error =
-        capture_fd::<()>(&target, || Err(Error::JailNotFound("web".into()))).unwrap_err();
+    let error = capture_fd::<()>(&target, || Err(Error::JailNotFound("web".into()))).unwrap_err();
     let rendered = CliError::new(OutputFormat::Json, error).to_string();
     let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
     assert!(value["error"].get("output").is_none());
