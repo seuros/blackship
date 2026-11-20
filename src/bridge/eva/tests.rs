@@ -65,13 +65,29 @@ fn test_diff_params_immutable_drift() {
 }
 
 #[test]
-fn test_diff_params_unreadable_applied_blind() {
+fn test_diff_params_sysv_namespaces_require_restart() {
     let mut desired = HashMap::new();
     desired.insert("sysvmsg".to_string(), ParamValue::Int(1));
+    desired.insert("sysvsem".to_string(), ParamValue::Int(1));
+    desired.insert("sysvshm".to_string(), ParamValue::Int(1));
 
-    let diff = diff_params(&desired, &HashMap::new(), &["sysvmsg".to_string()]);
-    assert_eq!(diff.changes.len(), 1);
-    assert_eq!(diff.display, vec!["sysvmsg: (unverified) -> 1"]);
+    let unreadable = vec![
+        "sysvmsg".to_string(),
+        "sysvsem".to_string(),
+        "sysvshm".to_string(),
+    ];
+    let diff = diff_params(&desired, &HashMap::new(), &unreadable);
+
+    assert!(diff.changes.is_empty());
+    assert!(diff.display.is_empty());
+    assert_eq!(
+        diff.immutable_diffs,
+        [
+            "sysvmsg: (unverified) -> 1",
+            "sysvsem: (unverified) -> 1",
+            "sysvshm: (unverified) -> 1",
+        ]
+    );
 }
 
 #[test]

@@ -35,7 +35,10 @@ fn classify_param(key: &str) -> ParamClass {
         | JAIL_PARAM_VNET
         | JAIL_PARAM_IP4_ADDR
         | JAIL_PARAM_IP6_ADDR
-        | JAIL_PARAM_DEVFS_RULESET => ParamClass::Immutable,
+        | JAIL_PARAM_DEVFS_RULESET
+        | "sysvmsg"
+        | "sysvsem"
+        | "sysvshm" => ParamClass::Immutable,
         _ => ParamClass::Updatable,
     }
 }
