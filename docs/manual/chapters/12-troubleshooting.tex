@@ -144,7 +144,8 @@ migration should be undone, make sure the copy there is not running and run
 exists, and the error names it. Run \command{migrate --resume <jail>} to finish
 the migration, or \command{migrate --abort <jail>} to remove the partial
 destination and the snapshot. A parked migration lists what is left on either
-host; remove it, then run \command{--abort} again. Do not delete the record
+host; fix the cause (release a held snapshot, bring the target back), then run
+\command{--resume} or \command{--abort} again: the parked step is retried. Do not delete the record
 before both hosts have been checked.
 
 \section{Automatic escalation fails}

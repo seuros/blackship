@@ -1019,16 +1019,18 @@ hosts. While a record exists, `migrate` refuses to start the same jail again and
 names the record. Then pick one:
 
 ```bash
-blackship migrate --resume web   # re-check both hosts, then carry on where it stopped
+blackship migrate --resume web   # re-check both hosts, then carry on where it stopped (or retry a parked step)
 blackship migrate --abort web    # remove the destination dataset and the snapshot; the source is as it was
 ```
 
 Both look at the real state first (does the destination dataset or the snapshot
 exist, is the source fenced) rather than trusting the record, and neither
 sends the stream twice. `--resume` also needs the jail stopped, and the source is only fenced if it has not been written to since the snapshot (otherwise the stale copy is removed and the migration rolls back). If undoing a step
-fails twice (the target is down, a snapshot is busy), the migration is parked: the
-record stays, the error says what is left, and `--abort` finishes once you have
-removed the leftovers. A record that does not read back as one blackship wrote is
+fails twice (the target is down, a snapshot is held), the migration is parked: the
+record stays, the error says what is left, and the attempt count is kept in the
+record. Fix the cause and run `--resume` (or `--abort`) again: the parked step is
+retried with a fresh run of attempts, after looking at what is really left, and the
+rollback carries on in reverse until the record settles. A record that does not read back as one blackship wrote is
 refused and left alone. Both accept `--format json`.
 
 ## Networking

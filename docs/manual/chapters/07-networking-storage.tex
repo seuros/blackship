@@ -220,9 +220,11 @@ destination dataset or the snapshot exist, is the source fenced) instead of
 trusting the record, and neither sends the stream twice. Resuming needs the jail
 stopped, and the source is fenced only if it was not written to after the snapshot;
 otherwise the stale copy is removed and the migration rolls back. If undoing a step fails twice, for example because the target is
-unreachable, the migration is parked: the record stays, the error lists what is
-left, and \command{migrate --abort} finishes after the leftovers are removed by
-hand. A record that does not read back as one Blackship wrote is refused and left
+unreachable or a snapshot is held, the migration is parked: the record stays, the
+error says what is left, and the failed-attempt count is kept in the record. After
+the cause is fixed, \command{migrate --resume} or \command{migrate --abort} retries
+the parked step with a fresh run of attempts, after looking at what is really left,
+and the rollback continues in reverse until the record settles. A record that does not read back as one Blackship wrote is refused and left
 untouched. Resume and abort accept \command{--format json}.
 
 \begin{shipwarning}[Know the dataset before forcing]
