@@ -224,7 +224,7 @@ unreachable or a snapshot is held, the migration is parked: the record stays, th
 error says what is left, and the failed-attempt count is kept in the record. After
 the cause is fixed, \command{migrate --resume} or \command{migrate --abort} retries
 the parked step with a fresh run of attempts, after looking at what is really left,
-and the rollback continues in reverse until the record settles. A record that does not read back as one Blackship wrote is refused and left
+and the rollback continues in reverse until the record settles. Both commands exit 0 when they settle the record, whether the migration completed or was rolled back with nothing left (the JSON \setting{outcome} is \setting{completed}, \setting{rolled\_back} or \setting{aborted}); they exit nonzero when the migration is still parked, refused, or failed again. A record that does not read back as one Blackship wrote is refused and left
 untouched. Resume and abort accept \command{--format json}.
 
 \begin{shipwarning}[Know the dataset before forcing]

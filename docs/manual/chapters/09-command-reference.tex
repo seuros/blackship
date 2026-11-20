@@ -121,9 +121,9 @@ or foreign jail data. \\
 stopped ZFS-backed jail over SSH and fence the source; the source is never
 removed. \\
 \command{migrate --resume <jail>} & Finish a migration that a kill or crash
-interrupted, or retry a parked rollback step, after re-checking both hosts. \\
+interrupted, or retry a parked rollback step, after re-checking both hosts; exits 0 once the record is settled. \\
 \command{migrate --abort <jail>} & Roll an interrupted migration back: remove
-the partial destination dataset and the snapshot; a parked step is retried. \\
+the partial destination dataset and the snapshot; a parked step is retried; exits 0 once the record is settled. \\
 \command{unfence <jail>} & Lift the migration fence so the jail can start on this
 host again. \\
 \bottomrule

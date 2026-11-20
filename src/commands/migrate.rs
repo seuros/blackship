@@ -108,13 +108,12 @@ pub fn resume_data(
     config_path: &(impl manifest::ConfigSource + ?Sized),
     jail: &str,
 ) -> Result<MigrateReport> {
-    let (destination, messages) =
-        crate::output::capture_stdout(|| resume_inner(config_path, jail))?;
+    let (ended, messages) = crate::output::capture_stdout(|| resume_inner(config_path, jail))?;
     Ok(MigrateReport {
         jail: jail.to_string(),
         action: "resume",
-        outcome: "completed",
-        destination,
+        outcome: ended.outcome,
+        destination: ended.destination,
         messages,
     })
 }
@@ -290,11 +289,24 @@ fn resume(config_path: &(impl manifest::ConfigSource + ?Sized), jail: &str) -> R
     resume_inner(config_path, jail).map(drop)
 }
 
-/// The destination a resumed migration ended at.
-fn resume_inner(
-    config_path: &(impl manifest::ConfigSource + ?Sized),
-    jail: &str,
-) -> Result<Option<String>> {
+/// The JSON `outcome` of a resume that settled the record without a new failure;
+/// `None` when the run failed, which is an error and a nonzero exit.
+const fn clean_ending(settled: &Settled) -> Option<&'static str> {
+    match settled {
+        Settled::Completed => Some("completed"),
+        Settled::RolledBack { failed: None } => Some("rolled_back"),
+        Settled::RolledBack { failed: Some(_) } => None,
+    }
+}
+
+/// How a resume that settled the record ended: it finished the migration, or it
+/// finished rolling one back. Anything unfinished is an `Err`.
+struct Ended {
+    outcome: &'static str,
+    destination: Option<String>,
+}
+
+fn resume_inner(config_path: &(impl manifest::ConfigSource + ?Sized), jail: &str) -> Result<Ended> {
     let Recorded {
         config,
         store,
@@ -313,8 +325,24 @@ fn resume_inner(
     let mut driver = Driver::restore(host, record, &store)?;
     let settled = driver.resume();
     release(lock, &store, &jail);
-    conclude(settled?, driver.record(), &source_path)?;
-    Ok(driver.record().fence.clone())
+    let settled = settled?;
+    let outcome = clean_ending(&settled);
+    if outcome == Some("rolled_back") {
+        println!(
+            "Rolled back the migration of '{jail}': nothing is left on {}, and '{jail}' here is as it was.",
+            driver.record().target
+        );
+    } else {
+        conclude(settled, driver.record(), &source_path)?;
+    }
+    Ok(Ended {
+        outcome: outcome.unwrap_or("completed"),
+        destination: driver
+            .record()
+            .fence
+            .clone()
+            .filter(|_| outcome == Some("completed")),
+    })
 }
 
 fn abort(config_path: &(impl manifest::ConfigSource + ?Sized), jail: &str) -> Result<()> {

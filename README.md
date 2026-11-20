@@ -1030,7 +1030,7 @@ fails twice (the target is down, a snapshot is held), the migration is parked: t
 record stays, the error says what is left, and the attempt count is kept in the
 record. Fix the cause and run `--resume` (or `--abort`) again: the parked step is
 retried with a fresh run of attempts, after looking at what is really left, and the
-rollback carries on in reverse until the record settles. A record that does not read back as one blackship wrote is
+rollback carries on in reverse until the record settles. `--resume` and `--abort` exit 0 when they settle the record (completed, or rolled back with nothing left; JSON `outcome` is `completed`, `rolled_back` or `aborted`) and nonzero when the migration is still parked, refused, or failed again. A record that does not read back as one blackship wrote is
 refused and left alone. Both accept `--format json`.
 
 ## Networking

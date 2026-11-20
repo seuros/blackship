@@ -121,3 +121,20 @@ fn nothing_written_since_the_snapshot_reads_as_zero_bytes() {
     assert!(!host::is_unwritten("64K"));
     assert!(!host::is_unwritten("-"));
 }
+
+#[test]
+fn a_resume_that_settles_without_a_new_failure_ends_cleanly() {
+    assert_eq!(clean_ending(&Settled::Completed), Some("completed"));
+    assert_eq!(
+        clean_ending(&Settled::RolledBack { failed: None }),
+        Some("rolled_back")
+    );
+}
+
+#[test]
+fn a_resume_that_failed_again_is_not_a_clean_ending() {
+    let failed = Settled::RolledBack {
+        failed: Some((Step::Transfer, Error::JailOperation("x".into()))),
+    };
+    assert_eq!(clean_ending(&failed), None);
+}
