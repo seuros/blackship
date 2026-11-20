@@ -69,6 +69,9 @@ fn run_cli(cli: Cli) -> Result<()> {
         return Err(Error::UnsupportedOutputFormat);
     }
 
+    if !cli.command.serves_sockets() {
+        crate::sys::restore_sigpipe();
+    }
     maybe_escalate_to_root(&cli.command, cli.no_escalate, cli.non_interactive)?;
     let ctx = AppContext::new(cli.config, cli.verbose, cli.format)?;
     ctx.init_telemetry();

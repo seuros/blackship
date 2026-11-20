@@ -531,3 +531,13 @@ pub fn c_buf_bytes(buf: &[libc::c_char]) -> Vec<u8> {
         .take_while(|&b| b != 0)
         .collect()
 }
+
+/// Restore the default SIGPIPE action so `blackship ... | head` ends quietly
+/// instead of panicking inside `println!`. Rust's runtime ignores it.
+pub fn restore_sigpipe() {
+    // SAFETY: installing SIG_DFL for SIGPIPE is async-signal-safe and runs
+    // once at startup before any thread exists.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
