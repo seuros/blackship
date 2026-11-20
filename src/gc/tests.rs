@@ -247,6 +247,7 @@ fn a_stray_dataset_says_when_it_was_migrated() {
 fn reap_detaches_claimed_mounts_outside_the_default_jail_root() {
     let table = "\
 zroot/jails/web / zfs rw 0 0
+zroot/blackship/jails/web /data/jails/web zfs rw 0 0
 /src/a /srv/web/workspace nullfs ro 0 0
 /src/b /srv/web/workspace/src nullfs ro 0 0
 devfs /srv/web/dev devfs rw 0 0
@@ -266,6 +267,25 @@ devfs /data/jails/web/dev devfs rw 0 0
             PathBuf::from("/srv/web/workspace/src"),
             PathBuf::from("/data/jails/web/dev"),
             PathBuf::from("/srv/web/workspace"),
+        ]
+    );
+}
+
+#[test]
+fn reap_retains_the_default_jail_root_mount() {
+    let table = "\
+zroot/blackship/jails/web /data/jails/web zfs rw 0 0
+devfs /data/jails/web/dev devfs rw 0 0
+/src /data/jails/web/workspace nullfs ro 0 0
+";
+
+    let found = reapable_mounts(std::path::Path::new("/data/jails/web"), &[], table);
+
+    assert_eq!(
+        found,
+        [
+            PathBuf::from("/data/jails/web/workspace"),
+            PathBuf::from("/data/jails/web/dev"),
         ]
     );
 }
