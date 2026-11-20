@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/seuros/blackship/compare/blackship-v0.6.0...blackship-v0.6.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **cli:** exit quietly when stdout closes early instead of panicking ([f9046df](https://github.com/seuros/blackship/commit/f9046df0519972e62fadf88f8229dd257fbf91bf))
+
 ## [0.6.0](https://github.com/seuros/blackship/compare/blackship-v0.5.1...blackship-v0.6.0) (2026-11-20)
 
 
