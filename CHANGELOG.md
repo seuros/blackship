@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.2](https://github.com/seuros/blackship/compare/blackship-v0.6.1...blackship-v0.6.2) (2026-11-20)
+
+
+### Bug Fixes
+
+* **eva:** require restart for SysV namespace changes ([#46](https://github.com/seuros/blackship/issues/46)) ([ea87eac](https://github.com/seuros/blackship/commit/ea87eace42d6c1ddbdac7d47a8b42c12c94387a5))
+* **gc:** retain the jail root storage mount ([#48](https://github.com/seuros/blackship/issues/48)) ([37d2b81](https://github.com/seuros/blackship/commit/37d2b81a619bae136c8c03287aa74e68ea1a1082))
+* **jail:** normalize symbolic SysV namespace values ([#47](https://github.com/seuros/blackship/issues/47)) ([6233965](https://github.com/seuros/blackship/commit/6233965ef839b0217faca11e031f9a05407a8f91))
+
 ## [0.6.1](https://github.com/seuros/blackship/compare/blackship-v0.6.0...blackship-v0.6.1) (2026-11-20)
 
 
