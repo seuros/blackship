@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.0](https://github.com/seuros/blackship/compare/blackship-v0.5.1...blackship-v0.6.0) (2026-11-20)
+
+
+### Features
+
+* **migrate:** refuse to fence over a copy the source outgrew since the snapshot ([09a0081](https://github.com/seuros/blackship/commit/09a008193b8f79bd8756a0433e4a6fc5d8fcf0c9))
+* **migrate:** retry a parked rollback and record in-flight steps with reconcile ([d57c96f](https://github.com/seuros/blackship/commit/d57c96f7c447998fe784c8061c7d62b108590519))
+* **migrate:** run the transfer as a recorded saga with --resume and --abort ([1fe6bf7](https://github.com/seuros/blackship/commit/1fe6bf71e8b69a8dfddfe81686b246dd204e517f))
+
+
+### Bug Fixes
+
+* **migrate:** drop the lock file with a settled record, rolled back or not ([24f5f80](https://github.com/seuros/blackship/commit/24f5f80e102574e892b1b02846fe49076e5043da))
+* **migrate:** exit 0 when a resume or abort settles the record ([81a7f5e](https://github.com/seuros/blackship/commit/81a7f5e3b89ddca02bb8c1daba582a1220069bca))
+
+
+### Miscellaneous Chores
+
+* release 0.6.0 ([09ba7f8](https://github.com/seuros/blackship/commit/09ba7f8f437872bc90b022119a0f46b364c4e81c))
+
 ## [0.5.1](https://github.com/seuros/blackship/compare/blackship-v0.5.0...blackship-v0.5.1) (2026-11-19)
 
 
