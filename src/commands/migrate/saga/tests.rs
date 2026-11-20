@@ -148,6 +148,7 @@ fn fresh_record() -> Record {
         started_at: 1,
         fence: None,
         parked: None,
+        compensation_failures: 0,
         saga: Saga::<STEPS>::new(saga_id(JAIL)).snapshot(),
     }
 }
@@ -332,28 +333,142 @@ fn a_compensation_that_cannot_finish_parks_the_migration() {
     assert_eq!(fake.0.borrow().remote, Remote::Absent);
 }
 
-#[test]
-fn a_parked_migration_reloads_and_refuses_while_leftovers_remain() {
-    let bench = Bench::new();
+fn parked_on_a_held_snapshot(bench: &Bench) -> Fake {
     let fake = Fake::with(|w| {
         w.fail_fence = true;
         w.fail_delete_snapshot = true;
     });
     assert!(bench.fresh(&fake).drive().is_err());
+    fake
+}
 
-    let Err(error) = bench.reopened(&fake).abort() else {
-        panic!("the snapshot is still there");
-    };
-    assert!(error.to_string().contains("snapshot"), "{error}");
-    assert!(bench.recorded());
-    let Err(resumed) = bench.reopened(&fake).drive() else {
-        panic!("a parked saga cannot go on");
-    };
-    assert!(resumed.to_string().contains("PARKED"), "{resumed}");
+#[test]
+fn a_parked_migration_stays_parked_while_the_cause_remains() {
+    let bench = Bench::new();
+    let fake = parked_on_a_held_snapshot(&bench);
+    assert_eq!(
+        bench
+            .store
+            .load(JAIL)
+            .unwrap()
+            .unwrap()
+            .compensation_failures,
+        COMPENSATION_ATTEMPTS
+    );
 
-    fake.0.borrow_mut().snapshot = false;
+    for retry in [true, false] {
+        let mut driver = bench.reopened(&fake);
+        let Err(error) = (if retry {
+            driver.abort()
+        } else {
+            driver.resume()
+        }) else {
+            panic!("the snapshot is still held");
+        };
+        assert!(error.to_string().contains("PARKED"), "{error}");
+        let record = bench.store.load(JAIL).unwrap().unwrap();
+        assert_eq!(record.saga.progress(), Progress::Stuck(1));
+        assert_eq!(record.compensation_failures, COMPENSATION_ATTEMPTS);
+    }
+}
+
+#[test]
+fn fixing_the_cause_then_resume_completes_the_compensation_and_settles() {
+    let bench = Bench::new();
+    let fake = parked_on_a_held_snapshot(&bench);
+    fake.0.borrow_mut().fail_delete_snapshot = false;
+
+    let settled = bench.reopened(&fake).resume().unwrap();
+    assert!(matches!(settled, Settled::RolledBack { failed: None }));
+    let world = fake.0.borrow();
+    assert!(!world.snapshot);
+    assert_eq!(world.remote, Remote::Absent);
+    assert_eq!(world.fence, None);
+    drop(world);
+    assert!(!bench.recorded());
+}
+
+#[test]
+fn fixing_the_cause_then_abort_retries_the_compensation_too() {
+    let bench = Bench::new();
+    let fake = parked_on_a_held_snapshot(&bench);
+    fake.0.borrow_mut().fail_delete_snapshot = false;
+
     let settled = bench.reopened(&fake).abort().unwrap();
     assert!(matches!(settled, Settled::RolledBack { failed: None }));
+    assert!(!fake.0.borrow().snapshot);
+    assert!(!bench.recorded());
+}
+
+#[test]
+fn a_retry_gets_a_fresh_run_of_attempts_and_the_park_note_is_cleared() {
+    let bench = Bench::new();
+    let fake = parked_on_a_held_snapshot(&bench);
+    let before = fake
+        .log()
+        .iter()
+        .filter(|l| **l == "delete_snapshot")
+        .count();
+
+    assert!(bench.reopened(&fake).resume().is_err());
+    let attempts = fake
+        .log()
+        .iter()
+        .filter(|l| **l == "delete_snapshot")
+        .count()
+        - before;
+    assert_eq!(attempts, COMPENSATION_ATTEMPTS as usize);
+}
+
+#[test]
+fn the_attempt_count_survives_a_restart() {
+    let bench = Bench::new();
+    let mut saga = Saga::<STEPS>::new(saga_id(JAIL));
+    for outcome in [
+        saga_machines::Outcome::Skipped,
+        saga_machines::Outcome::Success,
+        saga_machines::Outcome::Failure,
+    ] {
+        let action = saga.next_action().unwrap().unwrap();
+        saga.resolve(action, outcome).unwrap();
+    }
+    let mut record = fresh_record();
+    record.saga = saga.snapshot();
+    record.compensation_failures = COMPENSATION_ATTEMPTS - 1;
+    bench.store.save(&record).unwrap();
+    let fake = Fake::with(|w| {
+        w.snapshot = true;
+        w.fail_delete_snapshot = true;
+    });
+
+    assert!(bench.reopened(&fake).resume().is_err());
+    assert_eq!(fake.log(), ["delete_snapshot"]);
+    let record = bench.store.load(JAIL).unwrap().unwrap();
+    assert_eq!(record.saga.progress(), Progress::Stuck(1));
+}
+
+#[test]
+fn only_a_parked_migration_can_be_unstuck() {
+    let bench = Bench::new();
+    let mut driver = bench.fresh(&Fake::default());
+    let error = driver.unstick().unwrap_err().to_string();
+    assert!(error.contains("not parked"), "{error}");
+}
+
+#[test]
+fn a_kill_mid_compensation_resumes_and_finishes_the_unwind() {
+    let bench = Bench::new();
+    let fake = Fake::default();
+    crash_at(fault::Point::AfterSend, &bench, &fake);
+    let mut driver = bench.reopened(&fake);
+    driver.saga.cancel().unwrap();
+    driver.persist().unwrap();
+    drop(driver);
+    fake.0.borrow_mut().remote = Remote::Absent;
+
+    let settled = bench.reopened(&fake).resume().unwrap();
+    assert!(matches!(settled, Settled::RolledBack { failed: None }));
+    assert!(!fake.0.borrow().snapshot);
     assert!(!bench.recorded());
 }
 

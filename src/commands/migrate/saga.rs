@@ -92,7 +92,6 @@ pub struct Driver<'a, E: Effects> {
     store: &'a RecordStore,
     saga: Saga<STEPS>,
     failure: Option<(Step, Error)>,
-    refused: u32,
 }
 
 fn refused(r: Refusal) -> Error {
@@ -120,7 +119,6 @@ impl<'a, E: Effects> Driver<'a, E> {
             store,
             saga,
             failure: None,
-            refused: 0,
         })
     }
 
@@ -311,21 +309,95 @@ impl<'a, E: Effects> Driver<'a, E> {
             Step::Fence => self.effects.clear_fence(),
         };
         let Err(e) = undone else {
-            self.refused = 0;
+            self.record.compensation_failures = 0;
             return Outcome::Success;
         };
         eprintln!("Warning: could not undo the {step} step: {e}");
-        self.refused += 1;
-        if self.refused < COMPENSATION_ATTEMPTS {
+        self.record.compensation_failures += 1;
+        if self.record.compensation_failures < COMPENSATION_ATTEMPTS {
             return Outcome::Failure;
         }
-        self.refused = 0;
         self.record.parked = Some(e.to_string());
         Outcome::Stuck
     }
 
-    /// Roll the migration back: settle what the real world shows the in-flight step
-    /// already did, stop going forward, and compensate in reverse.
+    /// What the real world shows of the step the saga is on.
+    fn seen(&mut self, step: usize) -> Result<Seen> {
+        Ok(match Step::of(step) {
+            Some(Step::Snapshot) if self.effects.snapshot_exists()? => Seen::Whole,
+            Some(Step::Transfer) => match self.effects.remote()? {
+                Remote::Absent => Seen::Nothing,
+                Remote::Partial => Seen::Partial,
+                Remote::Complete => Seen::Whole,
+            },
+            Some(Step::Fence) => {
+                let held = self.effects.fence_state()?;
+                if held.is_some() && held == self.record.fence {
+                    Seen::Whole
+                } else {
+                    Seen::Nothing
+                }
+            }
+            Some(Step::Stage | Step::Snapshot) | None => Seen::Nothing,
+        })
+    }
+
+    /// Record what the in-flight step did before the kill, as the real world shows it,
+    /// so the saga neither repeats it nor forgets it. `partial_counts` says whether a
+    /// half-done step is recorded as done, to be compensated, or left to be redone.
+    fn reconcile_in_flight(&mut self, partial_counts: bool) -> Result<()> {
+        let (step, kind) = match self.saga.progress() {
+            Progress::Forward(step) => (step, Kind::Forward),
+            Progress::Compensating(step) => (step, Kind::Compensate),
+            _ => return Ok(()),
+        };
+        let settled = match kind {
+            Kind::Forward => match self.seen(step)? {
+                Seen::Whole => true,
+                Seen::Partial => partial_counts,
+                Seen::Nothing => false,
+            },
+            Kind::Compensate => match Step::of(step) {
+                Some(Step::Stage) => true,
+                _ => self.seen(step)? == Seen::Nothing,
+            },
+        };
+        if settled {
+            self.saga
+                .reconcile(step, kind, Outcome::Success)
+                .map_err(refused)?;
+            self.persist()?;
+        }
+        Ok(())
+    }
+
+    /// Retry a parked compensation: the cause was fixed, so it gets a fresh run of
+    /// attempts. The compensation itself looks at the real state first.
+    fn unstick(&mut self) -> Result<()> {
+        self.saga.unstick().map_err(|r| match r {
+            Refusal::NotStuck => Error::State(format!(
+                "The migration of '{}' is not parked",
+                self.record.jail
+            )),
+            other => refused(other),
+        })?;
+        self.record.parked = None;
+        self.record.compensation_failures = 0;
+        self.persist()
+    }
+
+    /// Carry on after a kill, a crash or a park.
+    pub fn resume(&mut self) -> Result<Settled> {
+        if matches!(self.saga.progress(), Progress::Stuck(_)) {
+            self.unstick()?;
+        } else {
+            self.reconcile_in_flight(false)?;
+        }
+        self.drive()
+    }
+
+    /// Roll the migration back: record what the in-flight step already did, stop
+    /// going forward, and compensate in reverse.
     pub fn abort(&mut self) -> Result<Settled> {
         match self.saga.progress() {
             Progress::Complete => {
@@ -337,10 +409,16 @@ impl<'a, E: Effects> Driver<'a, E> {
                 )))
             }
             Progress::Aborted => self.conclude(),
-            Progress::Stuck(step) => self.abort_parked(step),
-            Progress::Compensating(_) => self.drive(),
-            Progress::Forward(step) => {
-                self.reconcile_in_flight(step)?;
+            Progress::Stuck(_) => {
+                self.unstick()?;
+                self.drive()
+            }
+            Progress::Compensating(_) => {
+                self.reconcile_in_flight(true)?;
+                self.drive()
+            }
+            Progress::Forward(_) => {
+                self.reconcile_in_flight(true)?;
                 if matches!(self.saga.progress(), Progress::Complete) {
                     return self.abort();
                 }
@@ -350,57 +428,13 @@ impl<'a, E: Effects> Driver<'a, E> {
             }
         }
     }
+}
 
-    /// The in-flight step may have taken effect before the kill: if the real state
-    /// shows it did, record it as done so it is compensated rather than forgotten.
-    fn reconcile_in_flight(&mut self, step: usize) -> Result<()> {
-        let done = match Step::of(step) {
-            Some(Step::Snapshot) => self.effects.snapshot_exists()?,
-            Some(Step::Transfer) => self.effects.remote()? != Remote::Absent,
-            Some(Step::Fence) => {
-                let held = self.effects.fence_state()?;
-                held.is_some() && held == self.record.fence
-            }
-            Some(Step::Stage) | None => false,
-        };
-        if !done {
-            return Ok(());
-        }
-        let Some(action) = self.saga.next_action().map_err(refused)? else {
-            return Ok(());
-        };
-        self.saga
-            .resolve(action, Outcome::Success)
-            .map_err(refused)?;
-        self.persist()
-    }
-
-    /// A parked saga cannot issue another compensation. When the real world shows
-    /// nothing is left to undo, the record has nothing left to say.
-    fn abort_parked(&mut self, stuck: usize) -> Result<Settled> {
-        let skipped = self.saga.skipped();
-        let ran = |step: usize| stuck >= step && skipped & (1 << step) == 0;
-        let mut left = Vec::new();
-        if ran(1) && self.effects.snapshot_exists()? {
-            left.push(format!("snapshot {}", self.record.snapshot_ref()));
-        }
-        if ran(2) && self.effects.remote()? != Remote::Absent {
-            left.push(format!(
-                "dataset {} on {}",
-                self.record.remote_dataset, self.record.target
-            ));
-        }
-        if !left.is_empty() {
-            return Err(Error::JailOperation(format!(
-                "Migration of '{}' is parked and still holds: {}. Remove them by hand, then run 'blackship migrate --abort {}' again",
-                self.record.jail,
-                left.join(", "),
-                self.record.jail
-            )));
-        }
-        self.settle();
-        Ok(Settled::RolledBack { failed: None })
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Seen {
+    Nothing,
+    Partial,
+    Whole,
 }
 
 #[cfg(test)]

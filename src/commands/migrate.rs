@@ -202,6 +202,7 @@ fn start(
         started_at: crate::scope::now_unix(),
         fence: None,
         parked: None,
+        compensation_failures: 0,
         saga: Saga::<STEPS>::new(saga_id(&full_name)).snapshot(),
     };
     let source_path = zfs.jail_path(&full_name);
@@ -310,7 +311,7 @@ fn resume_inner(
     let jail = record.jail.clone();
     let host = Host::new(&config, zfs, &record);
     let mut driver = Driver::restore(host, record, &store)?;
-    let settled = driver.drive();
+    let settled = driver.resume();
     release(lock, &store, &jail);
     conclude(settled?, driver.record(), &source_path)?;
     Ok(driver.record().fence.clone())

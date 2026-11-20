@@ -35,13 +35,10 @@ pub struct Record {
     /// Why a compensation parked the migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked: Option<String>,
+    /// Compensation attempts that failed since the last success or retry.
+    #[serde(default)]
+    pub compensation_failures: u32,
     pub saga: Snapshot,
-}
-
-impl Record {
-    pub fn snapshot_ref(&self) -> String {
-        format!("{}@{}", self.source_dataset, self.snapshot)
-    }
 }
 
 pub struct RecordStore {
