@@ -97,7 +97,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = tr
 harel-machines = { version = "0.3.0", default-features = false }
 suspect-machines = "0.7.0"
 shed-machines = "0.5.0"
-saga-machines = { version = "0.8.0", features = ["serde"] }
+saga-machines = { version = "0.9", features = ["serde"] }
 
 [dev-dependencies]
 rogue-machines = "0.5.0"

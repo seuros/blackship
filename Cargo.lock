@@ -3167,9 +3167,9 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "saga-machines"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95d1911eace1187395d4fb470900708031fbd1d525e326b7943da74cc06edf54"
+checksum = "c20b100e655926ce6dcd933eec491d1990db722b3b673ba6514b0f6c3c081dea"
 dependencies = [
  "dedup-machines",
  "periscope-machines",
