@@ -7,6 +7,31 @@ use crate::zfs::ZfsManager;
 
 const NETWORK: &str = "rgnet";
 
+#[test]
+fn symbolic_sysv_namespace_values_use_kernel_integers() {
+    for key in ["sysvmsg", "sysvsem", "sysvshm"] {
+        for (symbol, expected) in [
+            ("disable", libc::JAIL_SYS_DISABLE),
+            ("new", libc::JAIL_SYS_NEW),
+            ("inherit", libc::JAIL_SYS_INHERIT),
+        ] {
+            let value = toml::Value::String(symbol.to_string());
+            assert_eq!(
+                manifest_param_value(key, &value).unwrap(),
+                ParamValue::Int(expected)
+            );
+        }
+    }
+}
+
+#[test]
+fn invalid_symbolic_sysv_namespace_value_is_rejected() {
+    let value = toml::Value::String("shared".to_string());
+    let error = manifest_param_value("sysvmsg", &value).unwrap_err();
+
+    assert!(error.to_string().contains("Jail parameter 'sysvmsg'"));
+}
+
 struct Env {
     config: crate::manifest::BlackshipConfig,
     full_name: String,

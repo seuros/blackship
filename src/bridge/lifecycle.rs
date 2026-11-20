@@ -49,6 +49,27 @@ pub fn is_reserved_param(key: &str) -> bool {
         )
 }
 
+/// Convert jail.conf-style symbolic values for integer namespace parameters
+/// before passing them to the jail_set(2) ABI.
+fn manifest_param_value(key: &str, value: &toml::Value) -> Result<ParamValue> {
+    let value = ParamValue::try_from(value)?;
+    if !matches!(key, "sysvmsg" | "sysvsem" | "sysvshm") {
+        return Ok(value);
+    }
+
+    match value {
+        ParamValue::String(value) => match value.as_str() {
+            "disable" => Ok(ParamValue::Int(libc::JAIL_SYS_DISABLE)),
+            "new" => Ok(ParamValue::Int(libc::JAIL_SYS_NEW)),
+            "inherit" => Ok(ParamValue::Int(libc::JAIL_SYS_INHERIT)),
+            _ => Err(Error::ConfigValidation(format!(
+                "Jail parameter '{key}' must be 'disable', 'new', 'inherit', or an integer"
+            ))),
+        },
+        value => Ok(value),
+    }
+}
+
 /// Build the `jail_set` parameter map shared by creation and eva.
 pub(super) fn build_jail_params(
     jail_def: &crate::manifest::JailDef,
@@ -63,7 +84,7 @@ pub(super) fn build_jail_params(
             eprintln!("Warning: ignoring reserved jail parameter '{key}' in manifest");
             continue;
         }
-        let param_value = ParamValue::try_from(value)?;
+        let param_value = manifest_param_value(key, value)?;
         params.insert(key.clone(), param_value);
     }
 
