@@ -708,9 +708,9 @@ the dataset, so `zfs send` carries everything needed to rebuild the jail.
 | Command | Description |
 |---------|-------------|
 | `blackship armada init [-f file]` | Create a new blackship.toml |
-| `blackship armada up [-d] [jails...]` | Start all jails |
+| `blackship armada up [-d] [jails...]` | Start all jails (builds a missing root through the same ZFS-aware path as `blackship build`) |
 | `blackship armada down [jails...]` | Stop all jails |
-| `blackship armada build [jails...]` | Build jails from Jailfiles |
+| `blackship armada build [jails...]` | Build jails from Jailfiles, through the same ZFS-aware path and layer cache as `blackship build` |
 | `blackship armada ps [--json]` | Show status of all jails |
 | `blackship armada config [--show]` | Validate and show configuration |
 
@@ -1753,6 +1753,22 @@ blackship snapshot list myjail
 
 # Manual cleanup
 zfs destroy -r zroot/blackship/jails/myjail
+```
+
+### Built files are missing after `armada up`
+
+On ZFS, 0.4.2 and earlier built a manifest jail's `build=` Jailfile into a
+plain directory at the jail root, without creating the dataset. Starting the
+jail mounted the dataset over it, hiding the build. 0.5.0 and later build
+through the dataset but do not repair an old root. Remove the jail twice (the
+first `rm` destroys the dataset, the second clears the directory left under
+it, `schg` files included), then rebuild:
+
+```sh
+blackship down <project>-myjail
+blackship rm <project>-myjail --volumes
+blackship rm <project>-myjail
+blackship armada up --build myjail
 ```
 
 ### `blackship up` aborts where it used to warn

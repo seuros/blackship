@@ -79,8 +79,10 @@ sudo install -m 0555 target/release/blackship /usr/local/bin/blackship
 \end{lstlisting}
 
 The default build includes the CLI, telemetry support, and MCP server. Library
-consumers can omit them with \command{default-features = false}; Chapter
-\ref{ch:automation} covers feature selection.
+consumers can omit them with \command{default-features = false}. The
+\command{ui} feature (\command{blackship ui}, a loopback-only placeholder page)
+is off by default and implies the CLI. Chapter \ref{ch:automation} covers
+feature selection.
 
 \section{Checking host capabilities}
 

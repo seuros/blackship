@@ -112,6 +112,33 @@ layers. Confirm that generated files in a \command{COPY} source are stable and
 that the same build arguments are supplied. Check available ZFS snapshots; the
 layer cache is a ZFS feature.
 
+\section{Built files are missing after \command{armada up}}
+
+Symptom: on ZFS, a jail built by \command{armada up} or \command{armada
+build} with Blackship 0.4.2 or earlier starts without the files its Jailfile
+installed. Those versions built into a plain directory at the jail root
+without creating the jail dataset. Starting the jail then created the dataset
+over that directory, which hid the build output, and filled the dataset from
+the pristine release. The hidden directory holds a full copy of the release,
+including files with the \setting{schg} flag. Version 0.5.0 and later build
+through the dataset, but do not repair a root an older version left behind.
+
+Remove the jail twice, then rebuild. The name is the full, project-prefixed
+name shown by \command{ps}:
+
+\begin{lstlisting}[language=bash]
+blackship down <full-name>
+blackship rm <full-name> --volumes
+blackship rm <full-name>
+blackship armada up --build <jail>
+\end{lstlisting}
+
+The first \command{rm} destroys the dataset and leaves the old directory,
+which is no longer masked. The second finds no dataset, clears the flags
+and removes the directory; \command{chflags} by hand is not needed.
+\command{gc} reports nothing to reclaim for it. Both removals discard the
+jail's current root, so keep anything in it you still need.
+
 \section{Snapshot rollback is refused}
 
 Stop the jail before rollback. If newer snapshots exist, a non-forced rollback

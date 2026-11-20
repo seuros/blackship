@@ -167,6 +167,12 @@ jailfile = "./worker/Worker.jailfile"
 roots by default, \command{--build} forces a rebuild, and
 \command{--no-build} fails when a required root does not already exist.
 
+\command{armada build} and \command{armada up} build through the same path as
+\command{blackship build}. With ZFS, the jail dataset is created (or cloned
+from the release) before the first step runs, the layer cache applies, and the
+Jailfile means what it means everywhere else. Rebuilding a manifest jail
+reuses the cached layers up to the first changed step.
+
 \begin{shipnote}[Builds are not runtime configuration]
 Put packages, files, and service enablement in a Jailfile. Put host attachment,
 resource policy, addresses, dependencies, and operational hooks in the

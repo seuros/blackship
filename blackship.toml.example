@@ -14,8 +14,17 @@ dataset = "blackship"
 # 0 disables sampling.
 usage_sample_secs = 30
 
+# Optional: token buckets for jail starts and health checks. Buckets hold whole
+# tokens (a fractional capacity rounds down). Capacity must be at least 1 and
+# the refill rate above 0, or the manifest is rejected. Jail starts always
+# refill one per second; health checks refill at health_refill_rate per second.
+# [config.rate_limit]
+# jail_start_capacity = 3.0    # default
+# health_capacity = 5.0        # default
+# health_refill_rate = 0.5     # default: one token every 2s
+
 # Optional: cap concurrent health-check runs under `supervise`. The limit
-# moves by AIMD; a cycle over the limit is shed, not queued. Unset = unbounded.
+# moves by AIMD; a cycle over the limit is shed, not queued. Needs 1 <= min <= max. Unset = unbounded.
 # [config.rate_limit.health_concurrency]
 # initial = 4
 # min = 1
