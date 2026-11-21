@@ -31,13 +31,27 @@ pub fn ensure_network(record: &mut NetworkRecord) -> Result<bool> {
 }
 
 fn ensure_epair(record: &NetworkRecord, gateway_with_prefix: &str) -> Result<bool> {
-    if Bridge::exists(&record.bridge)? {
-        return Ok(false);
+    let (bridge, created) = Bridge::ensure(&record.bridge)?;
+    if let Err(e) = ioctl::set_interface_up(&record.bridge, true) {
+        if created {
+            let _ = bridge.destroy();
+        }
+        return Err(e);
     }
-    let bridge = Bridge::create(&record.bridge)?;
-    if let Err(e) = bridge.set_address(gateway_with_prefix) {
-        // Rollback; keep the original error.
-        let _ = bridge.destroy();
+    let has_gateway = match ioctl::has_ipv4_address(&record.bridge, gateway_with_prefix) {
+        Ok(has_gateway) => has_gateway,
+        Err(e) => {
+            if created {
+                let _ = bridge.destroy();
+            }
+            return Err(e);
+        }
+    };
+    if !has_gateway && let Err(e) = bridge.set_address(gateway_with_prefix) {
+        if created {
+            // Roll back only the bridge created by this reconciliation attempt.
+            let _ = bridge.destroy();
+        }
         return Err(e);
     }
     if let Err(e) = crate::sys::tag_interface(&record.bridge) {
@@ -46,6 +60,9 @@ fn ensure_epair(record: &NetworkRecord, gateway_with_prefix: &str) -> Result<boo
     crate::sys::set_sysctl_int("net.inet.ip.forwarding", 1)?;
     Ok(false)
 }
+
+#[cfg(test)]
+mod tests;
 
 fn ensure_netgraph(record: &mut NetworkRecord, gateway_with_prefix: &str) -> Result<bool> {
     let host_iface_alive = record

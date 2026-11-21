@@ -4,8 +4,8 @@
 #![allow(unsafe_code)]
 
 use crate::error::{Error, Result};
-use std::ffi::CString;
-use std::net::UdpSocket;
+use std::ffi::{CStr, CString};
+use std::net::{Ipv4Addr, UdpSocket};
 use std::os::unix::io::AsRawFd;
 
 // Request codes come from the system headers via build/sys_consts.c.
@@ -467,24 +467,9 @@ pub fn interface_exists(name: &str) -> Result<bool> {
     Ok(result >= 0)
 }
 
-/// Set IPv4 address on an interface
-///
-/// Supports CIDR notation like "10.0.0.1/24" or plain IP like "10.0.0.1".
-/// When no prefix is specified, /32 is used.
-pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
-    const fn fill_sockaddr_in(dest: &mut libc::sockaddr_in, ip: Ipv4Addr) {
-        dest.sin_len = SOCKADDR_IN_LEN;
-        dest.sin_family = AF_INET_FAMILY;
-        dest.sin_addr.s_addr = u32::from_ne_bytes(ip.octets());
-    }
-
-    use std::net::Ipv4Addr;
-
-    let sock = create_socket()?;
-
-    let (ip_str, prefix_len) = if let Some(slash_pos) = addr.find('/') {
-        let ip = &addr[..slash_pos];
-        let prefix: u8 = addr[slash_pos + 1..]
+fn parse_ipv4_address(addr: &str) -> Result<(Ipv4Addr, u8)> {
+    let (ip_str, prefix_len) = if let Some((ip, prefix)) = addr.split_once('/') {
+        let prefix = prefix
             .parse()
             .map_err(|_| Error::Network(format!("Invalid prefix length in: {addr}")))?;
         (ip, prefix)
@@ -496,20 +481,86 @@ pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
         return Err(Error::Network(format!("Invalid prefix length in: {addr}")));
     }
 
-    let ip: Ipv4Addr = ip_str
+    let ip = ip_str
         .parse()
         .map_err(|_| Error::Network(format!("Invalid IPv4 address: {ip_str}")))?;
+    Ok((ip, prefix_len))
+}
+
+const fn prefix_netmask(prefix_len: u8) -> u32 {
+    if prefix_len == 0 {
+        0
+    } else {
+        !0u32 << (32 - prefix_len)
+    }
+}
+
+/// Check whether an interface has an exact IPv4 address and prefix.
+pub fn has_ipv4_address(name: &str, addr: &str) -> Result<bool> {
+    let (expected_ip, prefix_len) = parse_ipv4_address(addr)?;
+    let expected_mask = prefix_netmask(prefix_len).to_be_bytes();
+    let mut addresses = std::ptr::null_mut();
+
+    // SAFETY: getifaddrs initializes `addresses` on success; the list is released below.
+    if unsafe { libc::getifaddrs(&raw mut addresses) } < 0 {
+        return Err(Error::Network(format!(
+            "Failed to list interface addresses: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    let mut current = addresses;
+    let mut found = false;
+    while !current.is_null() {
+        // SAFETY: `current` belongs to the live getifaddrs list.
+        let entry = unsafe { &*current };
+        if !entry.ifa_name.is_null() && !entry.ifa_addr.is_null() && !entry.ifa_netmask.is_null() {
+            // SAFETY: ifa_name is a NUL-terminated string owned by the live list.
+            let entry_name = unsafe { CStr::from_ptr(entry.ifa_name) };
+            // SAFETY: ifa_addr points to a live sockaddr in the list.
+            let family = unsafe { (*entry.ifa_addr).sa_family };
+            let name_matches = entry_name.to_bytes() == name.as_bytes();
+            let is_ipv4 = family == AF_INET_FAMILY;
+            if name_matches && is_ipv4 {
+                // SAFETY: AF_INET entries use sockaddr_in for address and netmask.
+                let ip = unsafe { &*entry.ifa_addr.cast::<libc::sockaddr_in>() };
+                // SAFETY: same as above; FreeBSD supplies a sockaddr_in netmask for AF_INET.
+                let mask = unsafe { &*entry.ifa_netmask.cast::<libc::sockaddr_in>() };
+                let actual_ip = Ipv4Addr::from(ip.sin_addr.s_addr.to_ne_bytes());
+                if actual_ip == expected_ip && mask.sin_addr.s_addr.to_ne_bytes() == expected_mask {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        current = entry.ifa_next;
+    }
+
+    // SAFETY: `addresses` is the list returned by successful getifaddrs.
+    unsafe { libc::freeifaddrs(addresses) };
+    Ok(found)
+}
+
+/// Set IPv4 address on an interface
+///
+/// Supports CIDR notation like "10.0.0.1/24" or plain IP like "10.0.0.1".
+/// When no prefix is specified, /32 is used.
+pub fn set_ipv4_address(name: &str, addr: &str) -> Result<()> {
+    const fn fill_sockaddr_in(dest: &mut libc::sockaddr_in, ip: Ipv4Addr) {
+        dest.sin_len = SOCKADDR_IN_LEN;
+        dest.sin_family = AF_INET_FAMILY;
+        dest.sin_addr.s_addr = u32::from_ne_bytes(ip.octets());
+    }
+
+    let sock = create_socket()?;
+    let (ip, prefix_len) = parse_ipv4_address(addr)?;
 
     // SAFETY: plain-data struct; all-zero is valid.
     let mut req: IfAliasReq = unsafe { std::mem::zeroed() };
     copy_ifname(&mut req.ifra_name, name)?;
     fill_sockaddr_in(&mut req.ifra_addr, ip);
 
-    let netmask = if prefix_len == 0 {
-        0u32
-    } else {
-        !0u32 << (32 - prefix_len)
-    };
+    let netmask = prefix_netmask(prefix_len);
     let netmask_ip = Ipv4Addr::from(netmask.to_be_bytes());
     fill_sockaddr_in(&mut req.ifra_mask, netmask_ip);
 
