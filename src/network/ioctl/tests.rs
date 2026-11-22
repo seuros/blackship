@@ -14,6 +14,33 @@ impl Drop for Interfaces {
 }
 
 #[test]
+fn parse_ipv4_address_accepts_cidr_and_plain_addresses() {
+    assert_eq!(
+        parse_ipv4_address("10.17.89.1/24").unwrap(),
+        ("10.17.89.1".parse().unwrap(), 24)
+    );
+    assert_eq!(
+        parse_ipv4_address("192.0.2.1").unwrap(),
+        ("192.0.2.1".parse().unwrap(), 32)
+    );
+    assert!(parse_ipv4_address("192.0.2.1/33").is_err());
+    assert!(parse_ipv4_address("not-an-address/24").is_err());
+}
+
+#[test]
+#[ignore = "needs root"]
+fn has_ipv4_address_matches_the_address_and_prefix() {
+    let created = Interfaces(vec![create_interface("bridge", None).unwrap()]);
+    let bridge = &created.0[0];
+
+    assert!(!has_ipv4_address(bridge, "192.0.2.1/24").unwrap());
+    set_ipv4_address(bridge, "192.0.2.1/24").unwrap();
+    assert!(has_ipv4_address(bridge, "192.0.2.1/24").unwrap());
+    assert!(!has_ipv4_address(bridge, "192.0.2.1/25").unwrap());
+    assert!(!has_ipv4_address(bridge, "192.0.2.2/24").unwrap());
+}
+
+#[test]
 #[ignore = "needs root, if_bridge and if_epair"]
 fn bridge_list_members_sees_every_member() {
     crate::sys::load_modules(&["if_bridge", "bridgestp", "if_epair"]).unwrap();
