@@ -272,6 +272,7 @@ fn zfs_facts(config: Option<&crate::manifest::GlobalConfig>) -> Value {
         "base_dataset": base,
         "base_dataset_exists": available.is_some(),
         "base_dataset_available_bytes": available,
+        "storage_preflight": crate::preflight::assess(config),
         "jails_dir": config.jails_dir().display().to_string(),
         "note": match (config.zfs_enabled, config.zpool.is_some()) {
             (true, true) => "jail roots are clones of the release: near-zero cost until written",
