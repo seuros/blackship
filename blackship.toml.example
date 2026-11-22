@@ -10,6 +10,10 @@ zfs_enabled = true
 zpool = "zroot"
 dataset = "blackship"
 
+# Refuse space-consuming work (bootstrap, build, provision, migrate) when the
+# pool has less than this percent free. Default 5; warns below 15. `gc` only warns.
+# zpool_min_free_percent = 5
+
 # How often `supervise` samples racct usage into scope peaks and OTLP gauges.
 # 0 disables sampling.
 usage_sample_secs = 30

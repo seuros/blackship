@@ -140,6 +140,25 @@ Advantages include:
   \item native send/receive for backup and migration.
 \end{itemize}
 
+\section{Storage preflight}
+
+Before spending pool space, Blackship observes the configured
+\setting{zpool} and refuses when it is not \command{ONLINE}, is read-only, or
+has less free space than \setting{zpool\_min\_free\_percent} (default 5).
+The refusal names the pool, its health, the free percentage and the threshold.
+The check runs before release bootstrap, image builds, jail provisioning and
+cloning, container creation, and \command{migrate}; the migration check reads
+the local pool only, since the remote one is not observable from here.
+
+Below 15 percent free (or the configured floor, if higher) the same check only
+warns on standard error, which keeps JSON output on standard output intact.
+\command{gc} never refuses, whatever the pool says: reclaiming space is how a
+full pool recovers, so it warns and proceeds. A pool that cannot be observed
+(not imported, no \command{zpool}, probe timeout) warns and never blocks, and a
+manifest without \setting{zfs\_enabled} is not checked at all. The verdict is
+also reported under \texttt{zfs.storage\_preflight} in the
+\file{blackship:///host} resource and in the output of \command{host}.
+
 \section{Snapshot workflow}
 
 \begin{lstlisting}[language=bash]

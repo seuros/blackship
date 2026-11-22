@@ -451,6 +451,7 @@ cache_dir = "~/.cache/blackship"           # Download cache (default)
 mirror_url = "https://download.freebsd.org"  # FreeBSD mirror
 zfs_enabled = true                         # Enable ZFS features
 zpool = "zroot"                            # ZFS pool name
+zpool_min_free_percent = 5                 # Refuse space-consuming work below this % free (default 5)
 dataset = "blackship"                      # Base dataset name
 monitor_ping_url = "https://hc-ping.com/…"  # Dead-man ping from the supervisor (optional)
 ```
@@ -460,6 +461,17 @@ roots live at the same paths whether or not they are datasets. Blackship sets
 that mountpoint only when it creates the dataset; every jail dataset carries
 its own mountpoint, so a run with a different `data_dir` no longer drags the
 shared parent along with it.
+
+With ZFS enabled, Blackship checks the pool before it spends space on it. It
+refuses to bootstrap a release, build an image, provision or clone a jail root,
+create a container, or start a `migrate` when the pool is not `ONLINE`, is
+read-only, or has less than `zpool_min_free_percent` free (default 5). The error
+names the pool, its health, the free percentage and the threshold. Below 15% free
+(or the configured value, if higher) it only warns on stderr. `gc` never refuses:
+reclaiming is how a full pool gets room back, so it warns and carries on. A pool
+that cannot be observed (not imported, no `zpool`, probe timeout) warns and never
+blocks, and configs without ZFS are not checked. `blackship:///host` reports the
+verdict under `zfs.storage_preflight`.
 
 Running jails are named `<project>-<name>`: jail `web` in project `orbital`
 runs as `orbital-web`, which is what `jls` and `ps` show. Commands take
@@ -1700,7 +1712,7 @@ what order, rather than leaving it to infer that.
 
 | URI | Contents |
 |-----|----------|
-| `blackship:///host` | The live host: FreeBSD version and kernel features, CPU, memory (physical, free, ARC, swap) and what manifest jails claim, ZFS pools and free space, networks with used and free addresses, PF state and the NAT egress interface, releases, manifest and unmanaged jails |
+| `blackship:///host` | The live host: FreeBSD version and kernel features, CPU, memory (physical, free, ARC, swap) and what manifest jails claim, ZFS pools and free space (plus the storage preflight verdict), networks with used and free addresses, PF state and the NAT egress interface, releases, manifest and unmanaged jails |
 | `blackship:///man` | The CLI manual, generated from the live command spec (stdio only) |
 | `blackship:///man.kdl` | The full command tree as KDL (stdio only) |
 | `blackship:///schema/manifest` | JSON Schema for what `manifest_create` accepts |

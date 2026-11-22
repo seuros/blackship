@@ -64,6 +64,8 @@ Key & Typical value & Meaning \\
 \midrule
 \setting{zfs\_enabled} & boolean & Enable dataset-backed provisioning and ZFS features. \\
 \setting{zpool} & string & Pool containing the Blackship dataset tree. \\
+\setting{zpool\_min\_free\_percent} & integer & Free-space floor for the storage
+preflight, 0 to 100; default 5. See the ZFS chapter section on preflight. \\
 \setting{dataset} & string & Dataset path below the pool. \\
 \setting{bootstrap\_archives} & array & Release components to acquire; the
 default is \setting{["base"]}. \\
