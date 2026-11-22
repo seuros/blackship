@@ -175,6 +175,8 @@ fn start(
     let zfs = super::snapshot::require_zfs(&config)?;
     let (service_name, full_name) = config.require_jail_names(jail)?;
     require_stopped(&full_name)?;
+    // The source snapshot lands on the local pool; the remote pool is not ours to read.
+    crate::preflight::check(&config.config, crate::preflight::Stance::Refuse)?;
 
     let store = RecordStore::from_config(&config);
     if store.exists(&full_name)? {

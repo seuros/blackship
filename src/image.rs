@@ -182,6 +182,10 @@ pub fn build_root(
     let dry_run = mode == BuildMode::DryRun;
     let target_path = config.jail_root(name);
 
+    if !dry_run {
+        crate::preflight::check(config, crate::preflight::Stance::Refuse)?;
+    }
+
     let zfs = layout.zfs();
     if !dry_run && let Some(zfs) = &zfs {
         zfs.init()?;

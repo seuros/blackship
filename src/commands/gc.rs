@@ -3,6 +3,7 @@
 use crate::error::Result;
 use crate::gc::{self, Orphan, Reaper};
 use crate::manifest;
+use crate::preflight::{self, Stance};
 
 /// Flags for `blackship gc`.
 #[allow(clippy::struct_excessive_bools)] // independent CLI switches, not a state machine
@@ -30,6 +31,8 @@ pub fn handle_gc(
         json,
     } = *opts;
     let config = manifest::load(config_path)?;
+    // Reclaiming is how a full pool gets room back: report it, never refuse.
+    preflight::check(&config.config, Stance::WarnOnly)?;
     let reaper = Reaper::new(&config, verbose)?;
     let survey = reaper.survey()?;
 

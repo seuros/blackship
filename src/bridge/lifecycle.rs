@@ -801,19 +801,24 @@ impl Bridge {
             if jail_def.path.is_none() {
                 if zfs.jail_dataset_exists(full_name)? {
                     zfs.jail_path(full_name)
-                } else if let Some(release) = jail_def
-                    .release
-                    .as_ref()
-                    .filter(|release| zfs.release_is_cloneable(release))
-                {
-                    println!("Provisioning jail '{full_name}' by cloning release '{release}'...");
-                    let path = zfs.clone_jail_from_release(release, full_name)?;
-                    claims.zfs_dataset = true;
-                    path
                 } else {
-                    let path = zfs.create_jail_dataset(full_name)?;
-                    claims.zfs_dataset = true;
-                    path
+                    crate::preflight::check(&self.config.config, crate::preflight::Stance::Refuse)?;
+                    if let Some(release) = jail_def
+                        .release
+                        .as_ref()
+                        .filter(|release| zfs.release_is_cloneable(release))
+                    {
+                        println!(
+                            "Provisioning jail '{full_name}' by cloning release '{release}'..."
+                        );
+                        let path = zfs.clone_jail_from_release(release, full_name)?;
+                        claims.zfs_dataset = true;
+                        path
+                    } else {
+                        let path = zfs.create_jail_dataset(full_name)?;
+                        claims.zfs_dataset = true;
+                        path
+                    }
                 }
             } else {
                 jail_def.effective_path(&self.config.config, full_name)

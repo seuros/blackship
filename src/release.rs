@@ -133,6 +133,7 @@ impl Host {
         let layout = self.layout();
         let release = plan.release.as_str();
         validate_name("release", release)?;
+        crate::preflight::check(&layout.config().config, crate::preflight::Stance::Refuse)?;
         let _lock = bootstrap_lock(layout, release)?;
 
         let provisioner = provisioner(layout, plan.archives.clone())?;

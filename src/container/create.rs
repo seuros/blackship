@@ -26,6 +26,7 @@ pub fn create(layout: &Arc<Layout>, spec: &ContainerSpec) -> Result<Container> {
 
     let root = layout.container_root(name);
     crate::blueprint::context::reject_symlink_ancestors(layout.data_dir(), &root)?;
+    crate::preflight::check(&layout.config().config, crate::preflight::Stance::Refuse)?;
 
     let zfs = layout.zfs();
     let dataset = zfs
