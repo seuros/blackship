@@ -99,6 +99,9 @@ pub enum Error {
     #[error("ZFS not enabled but required for operation")]
     ZfsNotEnabled,
 
+    #[error("Storage preflight refused: {0}")]
+    StoragePreflight(String),
+
     // Bootstrap errors
     #[error("Failed to download: {0}")]
     DownloadFailed(String),
@@ -253,6 +256,7 @@ impl Error {
             Self::CString(_) => "invalid_c_string",
             Self::Zfs(_) => "zfs_operation_failed",
             Self::ZfsNotEnabled => "zfs_not_enabled",
+            Self::StoragePreflight(_) => "storage_preflight_refused",
             Self::DownloadFailed(_) => "download_failed",
             Self::ChecksumMismatch { .. } => "checksum_mismatch",
             Self::ReleaseNotFound(_) => "release_not_found",

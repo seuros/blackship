@@ -488,6 +488,7 @@ impl BlackshipConfig {
             }
             validate_zfs_component("dataset", &self.config.dataset)?;
         }
+        self.config.validate_zpool_floor()?;
 
         Ok(())
     }
@@ -624,6 +625,10 @@ pub struct GlobalConfig {
     /// ZFS pool name (required if `zfs_enabled` is true)
     pub zpool: Option<String>,
 
+    /// Refuse space-consuming operations when the pool has less than this
+    /// percent free (default 5). The pool must also be ONLINE and writable.
+    pub zpool_min_free_percent: Option<u8>,
+
     /// Base dataset name under the pool
     #[serde(default = "default_dataset")]
     pub dataset: String,
@@ -669,6 +674,15 @@ pub struct GlobalConfig {
 }
 
 impl GlobalConfig {
+    fn validate_zpool_floor(&self) -> Result<()> {
+        if self.zpool_min_free_percent.is_some_and(|p| p > 100) {
+            return Err(Error::ConfigValidation(
+                "zpool_min_free_percent must be between 0 and 100".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Root directory holding every jail's filesystem
     pub fn jails_dir(&self) -> PathBuf {
         self.data_dir.join("jails")
@@ -694,6 +708,7 @@ impl Default for GlobalConfig {
             data_dir: default_data_dir(),
             zfs_enabled: false,
             zpool: None,
+            zpool_min_free_percent: None,
             dataset: default_dataset(),
             releases_dir: default_releases_dir(),
             cache_dir: default_cache_dir(),

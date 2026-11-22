@@ -593,3 +593,17 @@ fn rate_limits_that_cannot_hold_a_token_are_refused() {
     assert!(config.health_policy().is_err());
     assert!(RateLimitConfig::default().jail_start_policy().is_ok());
 }
+
+#[test]
+fn test_zpool_min_free_percent_is_optional_and_bounded() {
+    let config: BlackshipConfig = toml::from_str("[config]\nzpool = \"zroot\"\n").unwrap();
+    assert_eq!(config.config.zpool_min_free_percent, None);
+
+    let mut config: BlackshipConfig =
+        toml::from_str("[config]\nzpool = \"zroot\"\nzpool_min_free_percent = 10\n").unwrap();
+    assert_eq!(config.config.zpool_min_free_percent, Some(10));
+    assert!(config.validate().is_ok());
+
+    config.config.zpool_min_free_percent = Some(101);
+    std::assert_matches!(config.validate(), Err(Error::ConfigValidation(_)));
+}

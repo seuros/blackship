@@ -73,6 +73,7 @@ mod mcp;
 mod network;
 #[cfg(feature = "cli")]
 mod output;
+mod preflight;
 mod proc;
 mod provision;
 mod rctl;
