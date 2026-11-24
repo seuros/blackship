@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.3](https://github.com/seuros/blackship/compare/blackship-v0.6.2...blackship-v0.6.3) (2026-11-22)
+
+
+### Features
+
+* **host:** report the storage preflight verdict under zfs.storage_preflight ([960fb9f](https://github.com/seuros/blackship/commit/960fb9f6ff36bedbbdd08fd8ff95d534a5f6d56d))
+* **preflight:** judge the configured zpool before space-consuming work ([17f5bbc](https://github.com/seuros/blackship/commit/17f5bbcefb9b00262bc202532ac2c35fe9f408d5))
+* **preflight:** refuse to spend a bad pool on bootstrap, build, provision and migrate ([b0b7303](https://github.com/seuros/blackship/commit/b0b7303c7a98935cd9eda6212872bd71b1577b12))
+
+
+### Bug Fixes
+
+* **network:** reconcile existing bridge gateways ([#50](https://github.com/seuros/blackship/issues/50)) ([ac88952](https://github.com/seuros/blackship/commit/ac889522969d10bb3519b20130c76e244673390c))
+
 ## [0.6.2](https://github.com/seuros/blackship/compare/blackship-v0.6.1...blackship-v0.6.2) (2026-11-20)
 
 
