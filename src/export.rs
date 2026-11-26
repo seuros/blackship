@@ -6,7 +6,7 @@
 //! - ZFS send/receive for efficient transfers
 
 use crate::error::{Error, Result};
-use jiff::{Unit, Zoned};
+use jiff::{Unit, ZonedDateTime};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -532,9 +532,9 @@ fn import_jail_zfs(
 
 /// Human-readable export timestamp in the system's local time zone.
 fn export_timestamp() -> String {
-    Zoned::now()
+    ZonedDateTime::now()
         .round(Unit::Second)
-        .map_or_else(|_| Zoned::now().to_string(), |zdt| zdt.to_string())
+        .map_or_else(|_| ZonedDateTime::now().to_string(), |zdt| zdt.to_string())
 }
 
 #[cfg(test)]

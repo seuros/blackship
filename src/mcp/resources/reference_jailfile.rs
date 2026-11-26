@@ -143,10 +143,10 @@ const fn keyword(instruction: &Instruction) -> &'static str {
 
 pub fn mount(
     router: McpResourceRouter<McpState>,
-) -> Result<McpResourceRouter<McpState>, AppsError> {
-    Ok(router.with_resource(
-        McpState::reference_jailfile_resource_info()?,
+) -> McpResourceRouter<McpState> {
+    router.with_resource(
+        McpState::reference_jailfile_resource_info(),
         McpState::reference_jailfile_handler,
         None,
-    ))
+    )
 }

@@ -32,10 +32,10 @@ impl McpState {
 
 pub fn mount(
     router: McpResourceRouter<McpState>,
-) -> Result<McpResourceRouter<McpState>, AppsError> {
-    Ok(router.with_resource(
-        McpState::schema_manifest_resource_info()?,
+) -> McpResourceRouter<McpState> {
+    router.with_resource(
+        McpState::schema_manifest_resource_info(),
         McpState::schema_manifest_handler,
         None,
-    ))
+    )
 }

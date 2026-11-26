@@ -25,6 +25,6 @@ impl McpState {
 
 pub fn mount(
     router: McpResourceRouter<McpState>,
-) -> Result<McpResourceRouter<McpState>, AppsError> {
-    Ok(router.with_resource(McpState::host_resource_info()?, McpState::host_handler, None))
+) -> McpResourceRouter<McpState> {
+    router.with_resource(McpState::host_resource_info(), McpState::host_handler, None)
 }

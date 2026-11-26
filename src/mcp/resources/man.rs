@@ -66,8 +66,8 @@ fn append_command(page: &mut String, cmd: &Command<'_>, ancestors: &[&str]) {
 
 pub fn mount(
     router: McpResourceRouter<McpState>,
-) -> Result<McpResourceRouter<McpState>, AppsError> {
-    Ok(router.with_resource(McpState::man_resource_info()?, McpState::man_handler, None))
+) -> McpResourceRouter<McpState> {
+    router.with_resource(McpState::man_resource_info(), McpState::man_handler, None)
 }
 
 #[cfg(test)]

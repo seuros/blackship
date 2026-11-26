@@ -30,10 +30,10 @@ impl McpState {
 
 pub fn mount(
     router: McpResourceRouter<McpState>,
-) -> Result<McpResourceRouter<McpState>, AppsError> {
-    Ok(router.with_resource(
-        McpState::man_kdl_resource_info()?,
+) -> McpResourceRouter<McpState> {
+    router.with_resource(
+        McpState::man_kdl_resource_info(),
         McpState::man_kdl_handler,
         None,
-    ))
+    )
 }

@@ -115,10 +115,10 @@ fn render() -> String {
 
 pub fn mount(
     router: McpResourceRouter<McpState>,
-) -> Result<McpResourceRouter<McpState>, AppsError> {
-    Ok(router.with_resource(
-        McpState::reference_jail_params_resource_info()?,
+) -> McpResourceRouter<McpState> {
+    router.with_resource(
+        McpState::reference_jail_params_resource_info(),
         McpState::reference_jail_params_handler,
         None,
-    ))
+    )
 }
