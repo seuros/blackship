@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.4](https://github.com/seuros/blackship/compare/blackship-v0.6.3...blackship-v0.6.4) (2026-11-26)
+
+
+### Bug Fixes
+
+* **deps:** the machines family, jiff 1.0, nix 0.32 and mcp-host 0.28 ([36b7ffa](https://github.com/seuros/blackship/commit/36b7ffa1665bbe6f36876a5b25506884d55d50b0))
+
 ## [0.6.3](https://github.com/seuros/blackship/compare/blackship-v0.6.2...blackship-v0.6.3) (2026-11-22)
 
 
