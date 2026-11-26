@@ -514,15 +514,24 @@ fn test_merge_refuses_repeated_or_missing_names_inside_one_file() {
         "repeated.toml",
         "[[jails]]\nname = \"web\"\n\n[[jails]]\nname = \"web\"\nhostname = \"second\"\n",
     );
-    let nameless = write(tmp.path(), "nameless.toml", "[[networks]]\nsubnet = \"10.0.0.0/24\"\n");
+    let nameless = write(
+        tmp.path(),
+        "nameless.toml",
+        "[[networks]]\nsubnet = \"10.0.0.0/24\"\n",
+    );
 
-    let error = load_merged(&[base.clone(), repeated]).unwrap_err().to_string();
+    let error = load_merged(&[base.clone(), repeated])
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("repeated.toml"), "{error}");
     assert!(error.contains("duplicate [[jails]] name 'web'"), "{error}");
 
     let error = load_merged(&[base, nameless]).unwrap_err().to_string();
     assert!(error.contains("nameless.toml"), "{error}");
-    assert!(error.contains("[[networks]] entry without a name"), "{error}");
+    assert!(
+        error.contains("[[networks]] entry without a name"),
+        "{error}"
+    );
 }
 
 #[test]

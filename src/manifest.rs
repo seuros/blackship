@@ -295,11 +295,10 @@ const NAMED_ARRAYS: &[&str] = &["jails", "networks"];
 /// one file is refused: merging would silently fold the second entry into the
 /// first, while a duplicate in a single manifest has always been an error.
 fn parse_fragment(path: &Path, content: &str) -> Result<toml::Table> {
-    let table: toml::Table =
-        toml::from_str(content).map_err(|source| Error::ConfigFileParse {
-            path: path.to_path_buf(),
-            source,
-        })?;
+    let table: toml::Table = toml::from_str(content).map_err(|source| Error::ConfigFileParse {
+        path: path.to_path_buf(),
+        source,
+    })?;
     for key in NAMED_ARRAYS {
         let Some(toml::Value::Array(entries)) = table.get(*key) else {
             continue;

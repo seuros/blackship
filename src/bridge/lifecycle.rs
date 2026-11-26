@@ -50,7 +50,7 @@ pub fn is_reserved_param(key: &str) -> bool {
 }
 
 /// Convert jail.conf-style symbolic values for integer namespace parameters
-/// before passing them to the jail_set(2) ABI.
+/// before passing them to the `jail_set(2)` ABI.
 fn manifest_param_value(key: &str, value: &toml::Value) -> Result<ParamValue> {
     let value = ParamValue::try_from(value)?;
     if !matches!(key, "sysvmsg" | "sysvsem" | "sysvshm") {

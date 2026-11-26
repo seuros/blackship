@@ -916,7 +916,7 @@ impl Commands {
     }
 
     /// Servers keep SIGPIPE ignored: a dropped client must not kill them.
-    pub fn serves_sockets(&self) -> bool {
+    pub const fn serves_sockets(&self) -> bool {
         match self {
             #[cfg(feature = "mcp")]
             Self::Mcp { .. } => true,

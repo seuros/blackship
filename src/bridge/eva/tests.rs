@@ -79,7 +79,7 @@ fn test_diff_params_sysv_namespaces_require_restart() {
     let diff = diff_params(&desired, &HashMap::new(), &unreadable);
 
     assert!(diff.changes.is_empty());
-    assert!(diff.display.is_empty());
+    assert_eq!(diff.display, Vec::<String>::new());
     assert_eq!(
         diff.immutable_diffs,
         [
